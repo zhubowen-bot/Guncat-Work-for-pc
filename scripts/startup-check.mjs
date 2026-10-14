@@ -435,6 +435,28 @@ check(
   '撤销脚本删除同一路径的值（必须能还原）',
   disableAdmin.includes('reg delete') && disableAdmin.includes('%~dp0Guncat Work.exe')
 )
+
+// --- 桌面快捷方式脚本 ---
+// 使用说明.txt 一直让用户双击 create-desktop-shortcut.cmd，但产物里从来没有这个文件。
+// 这几条断言把「说明里提到的文件必须真的被生成」钉住。
+const shortcutCmd = launch.buildDesktopShortcutCmd('Guncat Work')
+check('create-desktop-shortcut.cmd 是纯 ASCII', launch.asciiViolations(shortcutCmd).length === 0)
+check(
+  '快捷方式用 WScript.Shell 创建（Windows 上唯一稳定的方式）',
+  shortcutCmd.includes('WScript.Shell') && shortcutCmd.includes('CreateShortcut')
+)
+check(
+  '快捷方式指向本目录的 exe 并用本目录当工作目录',
+  shortcutCmd.includes('%~dp0Guncat Work.exe') && shortcutCmd.includes('WorkingDirectory')
+)
+check(
+  '快捷方式带上随包图标（资源的相对路径必须与产物结构一致）',
+  shortcutCmd.includes('resources\\resources\\app-icon.ico')
+)
+check(
+  '找不到 exe 时明确报错并退出，不静默成功',
+  shortcutCmd.includes(':noexe') && shortcutCmd.includes('exit /b 1')
+)
 const asciiProbe = path.join(dataRoot, 'ascii-probe.cmd')
 launch.writeAsciiFile(asciiProbe, compatCmd)
 const probeBytes = fs.readFileSync(asciiProbe)

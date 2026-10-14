@@ -200,6 +200,56 @@ export function buildDisableAdminCmd(appName) {
 }
 
 /**
+ * 生成桌面快捷方式。
+ *
+ * 为什么补这个：release 里的「使用说明.txt」一直让用户双击
+ * create-desktop-shortcut.cmd，但**产物里从来没有这个文件** ——
+ * 说明让人去找一个不存在的脚本，用户只会以为打包坏了。
+ *
+ * 实现用 PowerShell 的 WScript.Shell COM（Windows 上唯一稳定的建快捷方式方式），
+ * 图标指向随包资源里的 app-icon.ico（与主进程给窗口设的图标同源）。
+ * 仍然只写 ASCII：cmd.exe 在中文 Windows 上按 GBK 解析批处理，中文提示会把控制流拆坏。
+ */
+export function buildDesktopShortcutCmd(appName) {
+  return (
+    [
+      '@echo off',
+      'setlocal',
+      'cd /d "%~dp0"',
+      'rem Create a desktop shortcut for this portable folder.',
+      'rem The shortcut target must be the absolute path of the exe here.',
+      'rem ASCII only - see scripts/launch-scripts.mjs for why.',
+      'set "EXE=%~dp0' + appName + '.exe"',
+      'set "ICO=%~dp0resources\\resources\\app-icon.ico"',
+      'if not exist "%EXE%" goto noexe',
+      'rem One single PowerShell line on purpose: no caret line-continuation, because',
+      'rem that is exactly the kind of batch parsing the ASCII/quoting rules guard against.',
+      'powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath(\'Desktop\'),\'' +
+        appName +
+        '.lnk\')); $s.TargetPath=\'%EXE%\'; $s.WorkingDirectory=\'%~dp0\'; if (Test-Path \'%ICO%\') { $s.IconLocation=\'%ICO%\' }; $s.Save()"',
+      'if errorlevel 1 goto failed',
+      'echo.',
+      'echo Done. A "' + appName + '" shortcut is now on your desktop.',
+      'echo It points at: "%EXE%"',
+      'echo Note: if you move this folder, run this script again.',
+      'pause',
+      'exit /b 0',
+      ':noexe',
+      'echo.',
+      'echo Cannot find "%EXE%". Keep this script next to the exe.',
+      'pause',
+      'exit /b 1',
+      ':failed',
+      'echo.',
+      'echo Could not create the shortcut. Nothing was changed.',
+      'pause',
+      'exit /b 1',
+      ''
+    ].join('\r\n')
+  )
+}
+
+/**
  * 诊断阶梯：一轮一档，每轮独立用户数据目录，一次跑完就能回答两个问题 ——
  * 「哪一档才真的可用」以及「这一档究竟卡在哪一步」。
  *

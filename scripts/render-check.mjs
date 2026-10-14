@@ -369,6 +369,17 @@ check(
   )
 )
 
+// --- Markdown：第三方默认的脚注回跳符号必须被换掉 ---
+console.log('\n19. Markdown（脚注文案）')
+const mdHtml = mod.renderMarkdown()
+check('脚注区标题是中文「脚注」', mdHtml.includes('脚注'))
+check('脚注回跳用中文「返回」而不是第三方默认的箭头符号', mdHtml.includes('返回'))
+check(
+  'Markdown 产物里没有箭头 / 装饰符号',
+  !/[\u2190-\u21ff\u2300-\u23ff\u2460-\u24ff\u25a0-\u25ff\u2600-\u27bf\u2b00-\u2bff\ufe0f]/.test(mdHtml),
+  mdHtml.slice(0, 100)
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

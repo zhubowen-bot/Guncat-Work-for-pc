@@ -42,6 +42,7 @@ import {
 } from '@renderer/icons'
 import { AgentItem, ConvItem } from '@renderer/components/Sidebar'
 import { TurnBlock } from '@renderer/components/Timeline'
+import { Markdown } from '@renderer/components/Markdown'
 import type { MessageDto } from '@ipc/contract'
 
 /** 导出文件名推导 —— 纯函数，可直接断言 */
@@ -75,6 +76,13 @@ export {
 }
 
 export { renderIcons }
+
+/** Markdown 渲染：断言脚注回跳不是第三方默认的「↩」符号 */
+export function renderMarkdown(): string {
+  return renderToStaticMarkup(
+    createElement(Markdown, { text: '正文有一处脚注[^1]。\n\n[^1]: 这是脚注内容。\n' })
+  )
+}
 
 /**
  * 侧栏条目 + 工作模式单个回合的 SSR 渲染。

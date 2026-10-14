@@ -23,6 +23,7 @@ import {
   buildRunAsAdminCmd,
   buildEnableAdminCmd,
   buildDisableAdminCmd,
+  buildDesktopShortcutCmd,
   buildDiagnosePs1,
   writeAsciiFile,
   DIAG_MODES
@@ -162,6 +163,9 @@ writeAsciiFile(path.join(outDir, 'run-as-admin.cmd'), buildRunAsAdminCmd(appName
 writeAsciiFile(path.join(outDir, 'enable-admin-mode.cmd'), buildEnableAdminCmd(appName))
 writeAsciiFile(path.join(outDir, 'disable-admin-mode.cmd'), buildDisableAdminCmd(appName))
 
+// 桌面快捷方式：使用说明里一直提到它，但之前根本没有生成过 —— 补上
+writeAsciiFile(path.join(outDir, 'create-desktop-shortcut.cmd'), buildDesktopShortcutCmd(appName))
+
 /**
  * 诊断脚本：逐级降级 + 「走到了哪一步」的判定，见 launch-scripts.mjs 的说明。
  * 关键改进除了阶梯本身，还有：
@@ -186,7 +190,7 @@ writeAsciiFile(
   ].join('\r\n')
 )
 
-step('写入 run-compat.cmd / run-as-admin.cmd / diagnose.cmd / diagnose.ps1（纯 ASCII，字节级校验）')
+step('写入 run-compat.cmd / run-as-admin.cmd / create-desktop-shortcut.cmd / diagnose.cmd / diagnose.ps1（纯 ASCII，字节级校验）')
 // ===== 7. 简短说明（UTF-8 带 BOM，记事本直接可读） =====
 fs.writeFileSync(
   path.join(outDir, '使用说明.txt'),
@@ -208,13 +212,14 @@ fs.writeFileSync(
       '  应用只用这一份数据目录（早期版本降级时会切到 -compat 目录，已取消：',
       '  崩溃与数据目录无关，两套目录只会让用户以为数据丢了）。',
       '',
-      '左侧栏自下而上是三块：',
+      '左侧栏从上到下是这几块：',
+      '  · 品牌行 —— Guncat Work、当前形态，最右侧的按钮把侧栏折叠成一条图标栏。',
+      '  · 「新建会话」按钮。',
       '  · 「引擎」区 —— 选智能体。最上面是交互模式与工作模式，其下是各聊天智能体；',
       '    点一下即切到该引擎的最近会话（没有就新建一个）。',
       '  · 「会话」区 —— 每条会话显示标题，第二行是「引擎 · 时间 · 消息条数」；',
       '    鼠标移上去右侧出现删除按钮。',
       '  · 底部四个入口 —— 聊天 / 交互 / 工作 / 设置。',
-      '    品牌行右侧的按钮可以把侧栏折叠成一条图标栏。',
       '',
       '三种形态：',
       '  聊天模式   纯对话',
@@ -222,6 +227,7 @@ fs.writeFileSync(
       '  工作模式   多轮工具循环 + 沙箱工作区，可直出 PPT / Word / Excel',
       '',
       '回答下方的按钮：复制文本 / 复制 Markdown / 朗读 / 导出 Word / 重新生成。',
+      '工作模式下，一个任务里的多轮工具调用会收进可折叠的「过程」区，最终答复单独成块。',
       '',
       '把文件拖进窗口即可导入当前会话的工作区。',
       '',
