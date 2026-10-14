@@ -8,7 +8,11 @@
 // UI 状态与循环驱动；桌面端把循环驱动留在主进程，UI 状态由渲染进程的 store 负责，
 // 因此这里只保留「业务」那一半。
 import { appContext } from '@core/platform/kit/AbilityKit'
+import fs from 'node:fs'
+import path from 'node:path'
 import { StorageManager } from '@core/data/StorageManager'
+import { FileService, type PickedFile } from '@core/service/FileService'
+import { DocxBuilder } from '@core/export/DocxBuilder'
 import { AgentLoader } from '@core/service/AgentLoader'
 import { ChatService } from '@core/service/ChatService'
 import { AgentLoopService, LoopMessage, LoopTurnResult, LoopTurnCallbacks } from '@core/service/AgentLoopService'
@@ -119,7 +123,8 @@ export class SessionManager {
         multimodalConfig: SessionManager.toMultimodalDto(p.multimodalConfig)
       })),
       multimodalConfig: SessionManager.toMultimodalDto(multimodalConfig),
-      flags: {}
+      flags: {},
+      prefs: await this.loadStringPrefs()
     }
   }
 
@@ -145,6 +150,32 @@ export class SessionManager {
 
   async saveFlag(key: string, value: boolean): Promise<void> {
     await StorageManager.saveBoolean(this.ctx(), key, value)
+  }
+
+  async saveString(key: string, value: string): Promise<void> {
+    await StorageManager.saveString(this.ctx(), key, value)
+  }
+
+  /** 字符串型偏好：朗读音色/语速等（鸿蒙侧存在 Preferences，桌面端同构） */
+  private static readonly STRING_PREF_KEYS: string[] = [
+    'reader_voice',
+    'reader_rate',
+    'reader_enabled'
+  ]
+
+  private async loadStringPrefs(): Promise<Record<string, string>> {
+    const out: Record<string, string> = {}
+    for (const key of SessionManager.STRING_PREF_KEYS) {
+      try {
+        const value: string = await StorageManager.loadString(this.ctx(), key, '')
+        if (value !== '') {
+          out[key] = value
+        }
+      } catch {
+        // 单个偏好读取失败不影响其它设置
+      }
+    }
+    return out
   }
 
   // ===== 对话 =====
@@ -581,6 +612,79 @@ export class SessionManager {
 
   workspaceRoot(conversationId: string): string {
     return WorkFileService.workspaceRoot(this.ctx(), conversationId)
+  }
+
+  /**
+   * 文件收件：把外部文件（拖拽 / 命令行 / 系统「打开方式」）导入会话沙箱工作区。
+   * 这是鸿蒙版「接收系统分享」在桌面端的等价入口 —— 收进来的文件进工作区，
+   * 由模型通过文件工具读取，而不是自动当附件发出去。
+   */
+  async intakePaths(
+    conversationId: string,
+    paths: string[]
+  ): Promise<{ names: string[]; imported: number; failed: string[] }> {
+    const conv: Conversation | undefined = this.find(conversationId)
+    if (conv === undefined) {
+      throw new Error(`会话不存在: ${conversationId}`)
+    }
+    const ctx: Context = this.ctx()
+    WorkFileService.ensureWorkspace(ctx, conversationId)
+
+    const files: PickedFile[] = []
+    const failed: string[] = []
+    for (const p of paths) {
+      try {
+        if (!fs.existsSync(p) || fs.statSync(p).isDirectory()) {
+          failed.push(p)
+          continue
+        }
+        const stat = fs.statSync(p)
+        // 与上游单文件上限保持一致，避免把超大文件塞进工作区
+        if (stat.size > Constants.WORK_WRITE_MAX_BYTES * 4) {
+          failed.push(`${path.basename(p)}（超过体积上限）`)
+          continue
+        }
+        const buf: Buffer = fs.readFileSync(p)
+        files.push({
+          name: path.basename(p),
+          uri: p,
+          fileType: FileService.guessTypeByName(path.basename(p)),
+          size: stat.size,
+          buffer: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
+        })
+      } catch {
+        failed.push(p)
+      }
+    }
+
+    const names: string[] = WorkFileService.savePickedFiles(ctx, conversationId, files)
+    this.emit({ type: 'workspace:changed', conversationId })
+    this.emit({
+      type: 'files:intaken',
+      conversationId,
+      names,
+      imported: names.length,
+      failed
+    })
+    return { names, imported: names.length, failed }
+  }
+
+  /**
+   * 把某条回答导出为 Word（复用移植过来的 DocxBuilder，含 LaTeX → OMML 公式转换）。
+   * 返回字节，由调用方决定落盘位置。
+   */
+  async exportMessageDocx(conversationId: string, messageId: string): Promise<Uint8Array> {
+    const conv: Conversation = this.mustFind(conversationId)
+    const msg: Message | undefined = conv.messages.find((m) => m.id === messageId)
+    if (msg === undefined) {
+      throw new Error('消息不存在')
+    }
+    // 交互模式的界面程序不适合直接进 Word，这里只导出文本部分
+    const body: string = GuncatUiParts.build(msg.content, true).textOnly || msg.content
+    const title: string = conv.title !== '' ? conv.title : 'Guncat 回答'
+    return await DocxBuilder.buildFromMarkdown(body, title, {
+      resolve: async (): Promise<null> => null
+    } as never)
   }
 
   // ===== 内部工具 =====

@@ -9,6 +9,8 @@ export const INVOKE = {
   settingsSaveApiProfiles: 'settings:saveApiProfiles',
   settingsSaveMultimodalConfig: 'settings:saveMultimodalConfig',
   settingsSaveFlag: 'settings:saveFlag',
+  /** 字符串型偏好（朗读音色/语速等） */
+  settingsSaveString: 'settings:saveString',
 
   /** 智能体 */
   agentsList: 'agents:list',
@@ -42,7 +44,12 @@ export const INVOKE = {
   workspaceOpenInFolder: 'workspace:openInFolder',
 
   /** 应用信息 */
-  appInfo: 'app:info'
+  appInfo: 'app:info',
+
+  /** 端侧增强：文件收件（拖拽 / 系统「打开方式」/ 命令行参数） */
+  intakeImport: 'intake:import',
+  /** 端侧增强：把一条回答导出为 Word */
+  messageExportDocx: 'message:exportDocx'
 } as const
 
 export const EVENT = 'guncat:event'
@@ -79,6 +86,8 @@ export interface AppSettingsDto {
   apiProfiles: ApiProfileDto[]
   multimodalConfig: MultimodalConfigDto
   flags: Record<string, boolean>
+  /** 字符串型偏好（朗读音色/语速等） */
+  prefs: Record<string, string>
 }
 
 // ===== 智能体 =====
@@ -209,6 +218,9 @@ export type GuncatEvent =
   | { type: 'turn:started'; conversationId: string; messageId: string }
   | { type: 'turn:finished'; conversationId: string; messageId: string; status: 'ok' | 'error' | 'aborted'; error?: string }
   | { type: 'workspace:changed'; conversationId: string }
+  | { type: 'files:intaken'; conversationId: string; names: string[]; imported: number; failed: string[] }
+  /** 外部文件到达（命令行 / 系统「打开方式」/ 第二实例），等渲染进程决定导入哪个会话 */
+  | { type: 'files:pending'; paths: string[] }
   | { type: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
   | { type: 'ask:user'; conversationId: string; requestId: string; question: string; options: string[] }
 

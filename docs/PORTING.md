@@ -12,10 +12,19 @@
 | 一 | 三协议流式对话 + 工作模式 Agent Loop + 沙箱工作区 + 核心工具 | ✅ 已完成 |
 | 二 | 交互模式：guncat-ui lang 渲染（76 个组件 + `$绑定` + 动作回传） | ✅ 已完成，见 [交互模式实现说明](INTERACTIVE-MODE.md) |
 | 三 | Office 生成器接入工具链 + 技能系统 | ✅ 已完成（生成→读回→算子编辑端到端验证） |
-| 四 | 语音 / 分享等端侧增强 | ⏳ 未开始（相关服务已移入 `porting/deferred/`） |
+| 四 | 端侧增强：朗读 / 文件收件 / 导出 Word | 🚧 已完成主体；语音**输入**待定方案（见下） |
 
 验证方式见 [README 的验证矩阵](../README.md#验证)：`pnpm typecheck` / `pnpm build` /
-`pnpm smoke`（内核 105 项 + 渲染 26 项）。
+`pnpm smoke`（内核 105 项 + 渲染 26 项 + 契约 43 项）。
+
+### 阶段四：哪些照搬、哪些必须换思路
+
+| 鸿蒙能力 | 桌面端做法 | 说明 |
+| --- | --- | --- |
+| CoreSpeechKit 朗读 | ✅ 渲染进程 Web Speech API（`speechSynthesis`） | 音色取自系统 voice 列表；不再需要 AVSession 与后台长时任务（桌面端没有这些概念）；进度用 `onboundary` 逐词近似 |
+| 系统分享接收 | ✅ 命令行参数 / 第二实例 / 窗口拖拽 | 桌面端的「分享」等价入口。文件进**沙箱工作区**（由模型用文件工具读取），不自动当附件送出 —— 与鸿蒙版行为一致 |
+| 导出回答为 Word | ✅ 复用移植的 `DocxBuilder` | 含 LaTeX → OMML 原生公式；交互模式的界面程序会被剥离，只导出文本 |
+| 语音**输入**（ASR） | ⏳ 待定 | Chromium 的 `SpeechRecognition` 在 Electron 里依赖 Google 语音服务凭据，默认不可用。可行路径是「录音 + 调用所配置服务商的转写接口」，但那是产品决策（引入新的接口约定），不宜擅自定；`VoiceInputService` 仍留在 `porting/deferred/` |
 
 ### 阶段三说明：Office 工具链为何无需改动
 

@@ -1,5 +1,5 @@
 // Preload：只暴露窄接口，渲染进程拿不到 Node 能力。
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { INVOKE, EVENT } from '../ipc/contract'
 import type {
   AgentDto,
@@ -26,7 +26,9 @@ const api = {
     saveMultimodalConfig: (dto: MultimodalConfigDto): Promise<void> =>
       ipcRenderer.invoke(INVOKE.settingsSaveMultimodalConfig, dto),
     saveFlag: (key: string, value: boolean): Promise<void> =>
-      ipcRenderer.invoke(INVOKE.settingsSaveFlag, key, value)
+      ipcRenderer.invoke(INVOKE.settingsSaveFlag, key, value),
+    saveString: (key: string, value: string): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.settingsSaveString, key, value)
   },
 
   agents: {
@@ -81,6 +83,35 @@ const api = {
 
   app: {
     info: (): Promise<AppInfoDto> => ipcRenderer.invoke(INVOKE.appInfo)
+  },
+
+  /** 端侧增强 */
+  intake: {
+    /** 把外部文件导入指定会话的工作区 */
+    importPaths: (
+      conversationId: string,
+      paths: string[]
+    ): Promise<{ names: string[]; imported: number; failed: string[] }> =>
+      ipcRenderer.invoke(INVOKE.intakeImport, conversationId, paths)
+  },
+
+  messages: {
+    /** 把一条回答导出为 Word */
+    exportDocx: (
+      conversationId: string,
+      messageId: string,
+      suggestedName?: string
+    ): Promise<{ saved: boolean; path?: string }> =>
+      ipcRenderer.invoke(INVOKE.messageExportDocx, conversationId, messageId, suggestedName)
+  },
+
+  /**
+   * 拖拽进来的 File 对象在开启 contextIsolation 后拿不到真实路径，
+   * 必须经 webUtils.getPathForFile 换算。这里只暴露这一个转换函数，
+   * 不把整个 webUtils 交给渲染进程。
+   */
+  files: {
+    pathForFile: (file: File): string => webUtils.getPathForFile(file)
   },
 
   /** 订阅主进程事件；返回取消订阅函数 */

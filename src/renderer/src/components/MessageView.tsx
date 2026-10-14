@@ -5,6 +5,7 @@ import { GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
 import { Markdown } from './Markdown'
 import { Disclosure, ToolCallRow } from './Disclosure'
 import { GuncatUiBlock } from '../guncat-ui/GuncatUiBlock'
+import { useSpeech, speechTextOf } from '../speech/speechStore'
 import { useStore } from '../store'
 
 interface Props {
@@ -26,8 +27,13 @@ function formatStats(message: MessageDto): string {
 
 export function MessageView({ message, interactive }: Props) {
   const isUser = message.role === 'user'
+  const isAssistant = !isUser
   const send = useStore((s) => s.send)
   const patchMessageContent = useStore((s) => s.patchMessageContent)
+  const conversationId = useStore((s) => s.activeId)
+  const pushNotice = useStore((s) => s.pushNotice)
+  const speak = useSpeech((s) => s.speak)
+  const speechSupported = useSpeech((s) => s.supported)
   const body = message.displayContent !== '' ? message.displayContent : message.content
   const stats = formatStats(message)
 
@@ -87,7 +93,41 @@ export function MessageView({ message, interactive }: Props) {
         />
       ) : null}
 
-      {stats !== '' ? <div className="msg__stats">{stats}</div> : null}
+      {stats !== '' || isAssistant ? (
+        <div className="msg__actions">
+          {stats !== '' ? <span className="msg__stats">{stats}</span> : null}
+
+          <button
+            className="btn btn--ghost btn--sm"
+            title="朗读这条回答"
+            disabled={speechSupported === false}
+            onClick={() => speak(message.id, speechTextOf(textToRender || body))}
+          >
+            🔊 朗读
+          </button>
+
+          <button
+            className="btn btn--ghost btn--sm"
+            title="导出为 Word（含 LaTeX → 原生公式）"
+            onClick={() => {
+              void window.guncat.messages
+                .exportDocx(
+                  conversationId ?? '',
+                  message.id,
+                  `${(textToRender || body).slice(0, 20).replace(/[\\/:*?"<>|]/g, '') || 'Guncat 回答'}.docx`
+                )
+                .then((r) => {
+                  if (r.saved) {
+                    pushNotice('info', `已导出到 ${r.path ?? ''}`)
+                  }
+                })
+                .catch((e: unknown) => pushNotice('error', `导出失败：${String(e)}`))
+            }}
+          >
+            ⤓ Word
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -4,6 +4,7 @@
 // 会话摘要列表、当前会话的完整消息、运行态标志与工作区清单。
 // 所有变更都来自 (a) 用户操作的 invoke 返回，或 (b) 主进程推来的事件。
 import { create } from 'zustand'
+import { useSpeech } from './speech/speechStore'
 import type {
   AgentDto,
   AgentMode,
@@ -57,6 +58,8 @@ interface State {
   openWorkspaceFolder(): Promise<void>
   pushNotice(level: Notice['level'], text: string): void
   dismissNotice(): void
+  /** 端侧增强：把外部文件导入当前会话工作区 */
+  intakeFiles(paths: string[]): Promise<void>
 }
 
 function applyEvent(state: State, event: GuncatEvent): Partial<State> {
@@ -199,7 +202,12 @@ export const useStore = create<State>((set, get) => {
         if (event.type === 'workspace:changed' && get().activeId === event.conversationId) {
           void get().loadWorkspace()
         }
+        // 外部文件到达（拖拽 / 命令行 / 系统「打开方式」）→ 导入当前会话工作区
+        if (event.type === 'files:pending') {
+          void get().intakeFiles(event.paths)
+        }
       })
+      await Promise.all([useSpeech.getState().init()])
       const [agents, summaries, settings] = await Promise.all([
         window.guncat.agents.list(),
         window.guncat.conversations.list(),
@@ -371,6 +379,35 @@ export const useStore = create<State>((set, get) => {
 
     dismissNotice() {
       set({ notice: null })
+    },
+
+    async intakeFiles(paths) {
+      if (paths.length === 0) {
+        return
+      }
+      let activeId = get().activeId
+      // 还没有会话时先建一个（同时切到工作模式，工作区才是模型的文件入口）
+      if (activeId === null) {
+        const conv = await get().createConversation()
+        activeId = conv.id
+      }
+      try {
+        const result = await window.guncat.intake.importPaths(activeId, paths)
+        await get().loadWorkspace()
+        const parts: string[] = []
+        if (result.imported > 0) {
+          parts.push(`已导入 ${result.imported} 个文件到工作区：${result.names.join('、')}`)
+        }
+        if (result.failed.length > 0) {
+          parts.push(`${result.failed.length} 个未导入`)
+        }
+        get().pushNotice(
+          result.imported > 0 ? 'info' : 'warn',
+          parts.join('；') || '没有可导入的文件'
+        )
+      } catch (e) {
+        get().pushNotice('error', `导入失败：${String(e)}`)
+      }
     }
   }
 })

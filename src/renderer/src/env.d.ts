@@ -22,6 +22,7 @@ export interface GuncatApi {
     saveApiProfiles(profiles: ApiProfileDto[]): Promise<void>
     saveMultimodalConfig(dto: MultimodalConfigDto): Promise<void>
     saveFlag(key: string, value: boolean): Promise<void>
+    saveString(key: string, value: string): Promise<void>
   }
   agents: {
     list(): Promise<AgentDto[]>
@@ -53,6 +54,22 @@ export interface GuncatApi {
   }
   app: {
     info(): Promise<AppInfoDto>
+  }
+  intake: {
+    importPaths(
+      conversationId: string,
+      paths: string[]
+    ): Promise<{ names: string[]; imported: number; failed: string[] }>
+  }
+  messages: {
+    exportDocx(
+      conversationId: string,
+      messageId: string,
+      suggestedName?: string
+    ): Promise<{ saved: boolean; path?: string }>
+  }
+  files: {
+    pathForFile(file: File): string
   }
   onEvent(listener: (event: GuncatEvent) => void): () => void
 }

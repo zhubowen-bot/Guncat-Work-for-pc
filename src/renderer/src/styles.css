@@ -716,6 +716,108 @@ select {
   margin-top: 4px;
 }
 
+/* ===== 消息操作条 ===== */
+
+.msg__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.msg__actions .msg__stats {
+  margin-top: 0;
+  flex: 1;
+}
+
+/* ===== 朗读控制条 ===== */
+
+.speech-bar {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  z-index: 45;
+  max-width: min(880px, 92vw);
+}
+
+.speech-bar__icon {
+  font-size: 15px;
+}
+
+.speech-bar__progress {
+  width: 120px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+  flex: none;
+}
+
+.speech-bar__progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+.speech-bar__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.speech-bar__field input[type='range'] {
+  width: 84px;
+  accent-color: var(--accent);
+}
+
+.speech-bar__value {
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+}
+
+.speech-bar__select {
+  max-width: 190px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12px;
+}
+
+/* ===== 拖拽收件层 ===== */
+
+.dropzone {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.28);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.dropzone__box {
+  padding: 22px 34px;
+  border-radius: 14px;
+  border: 2px dashed var(--accent);
+  background: var(--bg-elevated);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 500;
+}
+
 /* ===== 滚动条 ===== */
 
 ::-webkit-scrollbar {

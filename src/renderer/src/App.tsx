@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
 import { Sidebar } from './components/Sidebar'
 import { Composer } from './components/Composer'
 import { MessageView } from './components/MessageView'
 import { WorkspacePanel } from './components/WorkspacePanel'
 import { SettingsDialog } from './components/SettingsDialog'
+import { SpeechBar } from './components/SpeechBar'
 
 function Notice() {
   const notice = useStore((s) => s.notice)
@@ -44,6 +45,8 @@ export default function App() {
   const showWorkspace = mode !== 'chat'
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const intakeFiles = useStore((s) => s.intakeFiles)
 
   // 最新一条 assistant 消息才是「可交互的那一轮」
   const lastAssistantIndex = (() => {
@@ -93,7 +96,38 @@ export default function App() {
   }
 
   return (
-    <div className={showWorkspace ? 'app with-workspace' : 'app'}>
+    <div
+      className={showWorkspace ? 'app with-workspace' : 'app'}
+      onDragOver={(e) => {
+        // 只有真的拖了文件才提示；拖文本不拦截
+        if (Array.from(e.dataTransfer.types).includes('Files')) {
+          e.preventDefault()
+          setDragging(true)
+        }
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) {
+          setDragging(false)
+        }
+      }}
+      onDrop={(e) => {
+        if (!Array.from(e.dataTransfer.types).includes('Files')) {
+          return
+        }
+        e.preventDefault()
+        setDragging(false)
+        // contextIsolation 下 File 没有 path，必须经 preload 的 webUtils 换算
+        const paths: string[] = Array.from(e.dataTransfer.files)
+          .map((f) => window.guncat.files.pathForFile(f))
+          .filter((p) => p !== '')
+        void intakeFiles(paths)
+      }}
+    >
+      {dragging ? (
+        <div className="dropzone">
+          <div className="dropzone__box">松开即可把文件导入当前会话工作区</div>
+        </div>
+      ) : null}
       <Sidebar />
 
       <main className="main">
@@ -165,6 +199,7 @@ export default function App() {
       {showWorkspace ? <WorkspacePanel /> : null}
 
       <SettingsDialog />
+      <SpeechBar />
       <Notice />
     </div>
   )

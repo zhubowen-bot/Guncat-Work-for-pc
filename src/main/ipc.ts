@@ -40,6 +40,9 @@ export function registerIpcHandlers(session: SessionManager): void {
   ipcMain.handle(INVOKE.settingsSaveFlag, async (_e, key: string, value: boolean) => {
     await session.saveFlag(key, value)
   })
+  ipcMain.handle(INVOKE.settingsSaveString, async (_e, key: string, value: string) => {
+    await session.saveString(key, value)
+  })
 
   // ===== 智能体 =====
   ipcMain.handle(INVOKE.agentsList, async () => session.listAgents())
@@ -90,7 +93,9 @@ export function registerIpcHandlers(session: SessionManager): void {
     session.workspaceTreeText(conversationId)
   )
   ipcMain.handle(INVOKE.workspaceRead, async (_e, conversationId: string, relPath: string) => {
-    const root: string = session.workspaceRoot(conversationId)
+    // 注意：workspaceRoot 是用 '/' 拼出来的（与鸿蒙侧一致），
+    // 必须先 path.resolve 归一化再比较，否则 Windows 上 '\' 与 '/' 的差异会让合法路径被误判越界。
+    const root: string = path.resolve(session.workspaceRoot(conversationId))
     const full: string = path.resolve(root, relPath)
     if (full !== root && !full.startsWith(root + path.sep)) {
       throw new Error('路径越界')
@@ -99,13 +104,16 @@ export function registerIpcHandlers(session: SessionManager): void {
       throw new Error('文件不存在')
     }
     const stat = fs.statSync(full)
+    if (stat.isDirectory()) {
+      throw new Error('该路径是目录')
+    }
     if (stat.size > 2 * 1024 * 1024) {
       return { text: '(文件超过 2MB，未在预览面板加载，请在外部编辑器中打开)', truncated: true }
     }
     return { text: fs.readFileSync(full, 'utf8'), truncated: false }
   })
   ipcMain.handle(INVOKE.workspaceDelete, async (_e, conversationId: string, relPath: string) => {
-    const root: string = session.workspaceRoot(conversationId)
+    const root: string = path.resolve(session.workspaceRoot(conversationId))
     const full: string = path.resolve(root, relPath)
     if (full === root || !full.startsWith(root + path.sep)) {
       throw new Error('路径越界')
@@ -140,6 +148,32 @@ export function registerIpcHandlers(session: SessionManager): void {
     fs.writeFileSync(result.filePath, bytes)
     return { saved: true, path: result.filePath }
   })
+
+  // ===== 端侧增强 =====
+
+  /** 文件收件：拖拽 / 命令行 / 系统「打开方式」进来的文件导入当前会话工作区 */
+  ipcMain.handle(INVOKE.intakeImport, async (_e, conversationId: string, paths: string[]) => {
+    return await session.intakePaths(conversationId, paths)
+  })
+
+  /** 把一条回答导出为 Word（复用移植的 DocxBuilder，含 LaTeX → OMML） */
+  ipcMain.handle(
+    INVOKE.messageExportDocx,
+    async (_e, conversationId: string, messageId: string, suggestedName?: string) => {
+      const window = getMainWindow()
+      const result = await dialog.showSaveDialog(window ?? undefined!, {
+        title: '导出为 Word',
+        defaultPath: suggestedName !== undefined && suggestedName !== '' ? suggestedName : 'Guncat 回答.docx',
+        filters: [{ name: 'Word 文档', extensions: ['docx'] }]
+      })
+      if (result.canceled || result.filePath === undefined) {
+        return { saved: false }
+      }
+      const bytes: Uint8Array = await session.exportMessageDocx(conversationId, messageId)
+      fs.writeFileSync(result.filePath, bytes)
+      return { saved: true, path: result.filePath }
+    }
+  )
 
   // ===== 应用信息 =====
   ipcMain.handle(INVOKE.appInfo, async (): Promise<AppInfoDto> => {

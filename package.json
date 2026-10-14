@@ -14,9 +14,10 @@
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "smoke": "node scripts/run-smoke.mjs && node scripts/render-check.mjs",
+    "smoke": "node scripts/run-smoke.mjs && node scripts/render-check.mjs && node scripts/ipc-check.mjs",
     "smoke:core": "node scripts/run-smoke.mjs",
     "smoke:render": "node scripts/render-check.mjs",
+    "smoke:ipc": "node scripts/ipc-check.mjs",
     "dump:components": "node scripts/dump-components.mjs",
     "package": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder"
