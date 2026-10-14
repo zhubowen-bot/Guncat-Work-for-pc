@@ -1,4 +1,4 @@
-// 无头冒烟验证：在纯 Node 下跑通移植过来的业务内核。
+﻿// 无头冒烟验证：在纯 Node 下跑通移植过来的业务内核。
 //
 // 为什么需要它：Electron 的 GUI 在本机沙箱里无法启动（进程被宿主作业对象拒绝），
 // 但应用真正有风险的部分是「从鸿蒙移植过来的 3.5 万行业务逻辑」，
@@ -26,6 +26,7 @@ import { ToolRegistry } from '../src/core/common/ToolRegistry'
 import { GuncatUiLang } from '../src/core/common/GuncatUiLang'
 import { DataPipeline } from '../src/core/common/DataPipeline'
 import { runJs } from '../src/core/platform/native/libguncatjs'
+import { http as guncatHttp } from '../src/core/platform/kit/NetworkKit'
 import {
   installPdfJsBackend,
   renderPdfPageToPng,
@@ -727,6 +728,106 @@ async function main(): Promise<void> {
     ? fs.readFileSync(path.join(wsRoot, 'out/图形报告.docx'))
     : Buffer.alloc(0)
   check('docx 里确实嵌入了图片（zip 内含 word/media）', docxSvgBytes.includes(Buffer.from('word/media/')))
+
+  // ===== 19. HTTP 读空闲超时 =====
+  //
+  // 回归防线：平台层的 buildSignal 曾经把鸿蒙的「读空闲超时」当成一次性整段超时
+  // （请求开始后 N 毫秒无条件 abort）。而端口代码传的正是读空闲语义 ——
+  // 工作模式 300000、聊天 180000，于是**只要一轮流式超过 5 分钟就必然以网络错误中断**，
+  // 哪怕数据一直在流。这一节用本地服务把两种情形分别钉住。
+  section('19. HTTP 读空闲超时（长流式不该被掐断）')
+  const nodeHttp = await import('node:http')
+
+  async function startStreamServer(
+    gapMs: number,
+    blocks: number,
+    stall: boolean
+  ): Promise<{ server: import('node:http').Server; url: string }> {
+    const server = nodeHttp.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      if (stall) {
+        // 先给一块再静止：证明「有没有数据」才是判据，而不是「有没有开始」
+        res.write('first')
+        return
+      }
+      let sent = 0
+      const timer = setInterval(() => {
+        res.write('chunk' + String(sent))
+        sent++
+        if (sent >= blocks) {
+          clearInterval(timer)
+          res.end()
+        }
+      }, gapMs)
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    const port = typeof address === 'object' && address !== null ? address.port : 0
+    return { server, url: 'http://127.0.0.1:' + String(port) + '/' }
+  }
+
+  function stopServer(server: import('node:http').Server): void {
+    // 停滞那条的 socket 还挂着，先掐连接再关，避免冒烟脚本卡在 close 上
+    server.closeAllConnections?.()
+    server.close()
+  }
+
+  // A) 总时长（约 720ms）远超读超时（300ms），但块与块之间只隔 60ms —— 读空闲语义下这是正常长流式
+  const streamed = await startStreamServer(60, 12, false)
+  const httpA = guncatHttp.createHttp()
+  const chunksA: string[] = []
+  let endedA = false
+  httpA.on('dataReceive', (data: ArrayBuffer) => {
+    chunksA.push(Buffer.from(data).toString('utf8'))
+  })
+  httpA.on('dataEnd', () => {
+    endedA = true
+  })
+  let errorA = ''
+  try {
+    await httpA.requestInStream(streamed.url, {
+      method: guncatHttp.RequestMethod.GET,
+      readTimeout: 300,
+      connectTimeout: 3000
+    })
+  } catch (e) {
+    errorA = String((e as Error)?.message ?? e)
+  }
+  check(
+    '长流式：总时长超过读超时、但一直在读 —— 不该被中断',
+    errorA === '' && endedA,
+    `${chunksA.length} 块 / 错误=${errorA === '' ? '无' : errorA.slice(0, 60)}`
+  )
+  const expectedA = Array.from({ length: 12 }, (_v, i) => 'chunk' + String(i)).join('')
+  check('长流式：数据一块不落', chunksA.join('') === expectedA, `${chunksA.join('').length} 字节`)
+  stopServer(streamed.server)
+
+  // B) 拿到响应头后不再发数据 —— 这才应该由读空闲超时掐断
+  const stalled = await startStreamServer(0, 0, true)
+  const httpB = guncatHttp.createHttp()
+  let endedB = false
+  httpB.on('dataEnd', () => {
+    endedB = true
+  })
+  let errorB = ''
+  const beganAt = Date.now()
+  try {
+    await httpB.requestInStream(stalled.url, {
+      method: guncatHttp.RequestMethod.GET,
+      readTimeout: 300,
+      connectTimeout: 3000
+    })
+  } catch (e) {
+    errorB = String((e as Error)?.message ?? e)
+  }
+  const waitedB = Date.now() - beganAt
+  check(
+    '停滞的连接：读空闲超时会掐断它（不能一直挂着）',
+    errorB !== '' && waitedB < 5000,
+    `${waitedB}ms / 错误=${errorB.slice(0, 50)}`
+  )
+  check('掐断时仍然派发 dataEnd，端口代码不会停在半途', endedB)
+  stopServer(stalled.server)
 
   // ===== 结果 =====
   console.log(`\n${'─'.repeat(58)}`)

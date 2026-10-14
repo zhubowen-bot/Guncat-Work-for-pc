@@ -108,6 +108,11 @@ export namespace http {
     private handlers: Map<StreamEvent, Array<(...args: never[]) => void>> = new Map()
     private controller: AbortController | null = null
     private destroyed: boolean = false
+    /** 读空闲超时的预算（毫秒，0 = 不限）与当前计时器 */
+    private readTimeoutMs: number = 0
+    private readTimer: ReturnType<typeof setTimeout> | null = null
+    /** 连接超时计时器（拿到响应头即撤） */
+    private connectTimer: ReturnType<typeof setTimeout> | null = null
 
     on(event: StreamEvent, callback: (...args: never[]) => void): void {
       const list: Array<(...args: never[]) => void> = this.handlers.get(event) ?? []
@@ -130,6 +135,7 @@ export namespace http {
 
     destroy(): void {
       this.destroyed = true
+      this.clearTimers()
       if (this.controller !== null) {
         this.controller.abort()
         this.controller = null
@@ -151,13 +157,49 @@ export namespace http {
     private buildSignal(options: HttpRequestOptions | undefined): AbortSignal {
       const controller: AbortController = new AbortController()
       this.controller = controller
-      const timeout: number = options?.readTimeout ?? 0
-      if (timeout > 0) {
-        const timer: NodeJS.Timeout = setTimeout(() => controller.abort(), timeout)
-        timer.unref?.()
-        controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true })
+      const readTimeout: number = options?.readTimeout ?? 0
+      const connectTimeout: number = options?.connectTimeout ?? 0
+      this.readTimeoutMs = readTimeout
+      // 连接超时只覆盖「还没拿到响应头」这一段，拿到头就撤掉
+      if (connectTimeout > 0) {
+        this.connectTimer = setTimeout(() => controller.abort(), connectTimeout)
+        this.connectTimer.unref?.()
       }
+      // 读超时是**读空闲**超时，不是整段超时：每收到一块数据都会重置（见 refreshReadTimer）。
+      //
+      // 这里曾经是一个一次性 setTimeout：只要请求开始后 N 毫秒就无条件掐断。
+      // 而端口代码传的是鸿蒙的读空闲语义（工作模式 AgentLoopService 传 300000、
+      // 聊天 ChatService 传 180000），于是**只要一轮流式超过 5 分钟就必然以网络错误中断** ——
+      // 哪怕数据一直在流。长程工具任务最容易撞上，用户看到的是「回答跑到一半突然报错」。
+      this.refreshReadTimer()
+      controller.signal.addEventListener('abort', () => this.clearTimers(), { once: true })
       return controller.signal
+    }
+
+    /** 重新起表（读到数据 / 请求开始）。没设读超时就是空操作。 */
+    private refreshReadTimer(): void {
+      if (this.readTimeoutMs <= 0 || this.controller === null) {
+        return
+      }
+      if (this.readTimer !== null) {
+        clearTimeout(this.readTimer)
+      }
+      this.readTimer = setTimeout(() => {
+        this.readTimer = null
+        this.controller?.abort()
+      }, this.readTimeoutMs)
+      this.readTimer.unref?.()
+    }
+
+    private clearTimers(): void {
+      if (this.readTimer !== null) {
+        clearTimeout(this.readTimer)
+        this.readTimer = null
+      }
+      if (this.connectTimer !== null) {
+        clearTimeout(this.connectTimer)
+        this.connectTimer = null
+      }
     }
 
     private buildInit(options: HttpRequestOptions | undefined): RequestInit {
@@ -230,6 +272,11 @@ export namespace http {
         response.headers.forEach((value: string, key: string) => {
           header[key] = value
         })
+        // 拿到响应头说明连接早已建立，连接超时这一档可以撤了
+        if (this.connectTimer !== null) {
+          clearTimeout(this.connectTimer)
+          this.connectTimer = null
+        }
         this.emit('headersReceive', header)
 
         if (response.body !== null) {
@@ -250,6 +297,8 @@ export namespace http {
                 value.byteOffset + value.byteLength
               ) as ArrayBuffer
               this.emit('dataReceive', ab)
+              // 收到数据即重置读空闲计时（见 buildSignal 里对这次改动的说明）
+              this.refreshReadTimer()
             }
           } finally {
             reader.releaseLock()
