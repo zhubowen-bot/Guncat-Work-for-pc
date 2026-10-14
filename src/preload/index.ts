@@ -147,6 +147,17 @@ const api = {
   artifacts: (conversationId: string): Promise<import('../ipc/contract').WorkArtifactsDto> =>
     ipcRenderer.invoke(INVOKE.conversationArtifacts, conversationId),
 
+  /** 表格提取：选图 → 识别 → 返回清洗过的 <table> 片段 */
+  tableOcr: {
+    pickImage: (): Promise<import('../ipc/contract').TableOcrImageDto | null> =>
+      ipcRenderer.invoke(INVOKE.tableOcrPickImage),
+    run: (
+      imagePath: string,
+      model: string
+    ): Promise<import('../ipc/contract').TableOcrResultDto> =>
+      ipcRenderer.invoke(INVOKE.tableOcrRun, imagePath, model)
+  },
+
   messages: {
     /** 把一条回答导出为 Word */
     exportDocx: (

@@ -25,6 +25,7 @@ export { resolveTranscriptionUrl, loadAsrConfig, transcribeAudio } from '@main/a
 export { __invoke, __channels, __events, __calls, __setOpenDialog, __reset } from 'electron'
 export { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 export { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
+export { sanitizeTableHtml } from '@main/sanitizeHtml'
 `
 )
 
@@ -119,6 +120,8 @@ const required = [
   'work:steer',
   'conversation:stats',
   'conversation:artifacts',
+  'tableOcr:pickImage',
+  'tableOcr:run',
   'message:exportDocx',
   'asr:transcribe'
 ]
@@ -855,6 +858,75 @@ check(
   JSON.stringify(statsGoal.goal)
 )
 check('没有目标时不编造（返回 null）', (await inv('conversation:stats', convNew.id)).goal === null)
+
+// --- 表格提取（审计 P1-3）：原版唯一不依赖对话的独立工具页 ---
+//
+// 完整识别链路需要真实图片解码（本机 Electron 起不来），所以这里钉两件
+// **能在无头环境里证明**的事：① 通道与错误路径；② 模型输出的清洗 ——
+// 识别结果是模型生成的 HTML，要挂进 DOM，白名单清洗是必须的。
+mod.__setOpenDialog({ canceled: true, filePaths: [] })
+check('表格提取：取消选图时不返回图片', (await inv('tableOcr:pickImage')) === null)
+mod.__setOpenDialog(null)
+let ocrError = ''
+try {
+  await inv('tableOcr:run', path.join(intakeDir, '不存在.png'), '')
+} catch (e) {
+  ocrError = String(e?.message ?? e)
+}
+check('表格提取：图片不存在时给出可读原因（不是静默失败）', ocrError.includes('图片不存在'), ocrError.slice(0, 60))
+
+const attack = mod.sanitizeTableHtml(
+  '<div onclick="steal()">' +
+    '<table><tr><th colspan="2">表头</th></tr>' +
+    '<tr><td>甲</td><td rowspan="2">乙</td></tr></table>' +
+    '<img src=x onerror="alert(1)">' +
+    '<script>alert(document.cookie)</script>' +
+    '<style>body{display:none}</style>' +
+    '<a href="javascript:alert(1)">点我</a>' +
+    '</div>'
+)
+check('清洗后保留表格结构', attack.includes('<table>') && attack.includes('<tr>') && attack.includes('表头'))
+check('清洗后保留 colspan / rowspan（表格语义不能丢）', attack.includes('colspan="2"') && attack.includes('rowspan="2"'))
+check(
+  '剔除可执行载荷（script / style / 事件属性 / img）',
+  !attack.includes('script') &&
+    !attack.includes('style') &&
+    !attack.includes('onerror') &&
+    !attack.includes('onclick') &&
+    !attack.includes('<img') &&
+    !attack.includes('javascript:')
+)
+check('白名单外标签的文字内容仍然保留（不损失正常结果）', attack.includes('点我'))
+check(
+  '非法跨度被丢弃（不让超大 colspan 把表格撑坏）',
+  !mod.sanitizeTableHtml('<table><td colspan="99999">a</td></table>').includes('99999')
+)
+check(
+  '注释里的内容不会漏进去',
+  !mod.sanitizeTableHtml('<table><!-- <img onerror=x> --><tr><td>a</td></tr></table>').includes('onerror')
+)
+
+// 表格提取的连接信息解析（原版从配置方案里列模型让用户选）。
+// 这里用**当前生效的模型**：它一定在某个配置方案里（saveApiConfig 会回写当前方案）。
+const currentModel = (await inv('settings:load')).apiConfig?.model ?? ''
+const ocrConfig = await session.tableOcrConfig(currentModel)
+check(
+  '表格提取按模型名从配置方案里取连接信息',
+  ocrConfig.model === currentModel && ocrConfig.apiKey !== '',
+  `${ocrConfig.model} @ ${ocrConfig.baseUrl}`
+)
+const ocrFallback = await session.tableOcrConfig('不存在的模型')
+check(
+  '指定模型找不到时退回多模态配置 / 主配置，而不是直接报错',
+  ocrFallback.apiKey !== '',
+  ocrFallback.model
+)
+// 键名取自 core 的 Constants（'table_ocr_provider'），不要在这里自己拼字符串
+await inv('settings:saveString', 'table_ocr_provider', currentModel)
+check(
+  '表格提取记住的模型选择能持久化（原版 TableOcrPage 的 LS_KEY_TABLE_OCR_PROVIDER）',
+  (await inv('settings:load')).prefs?.['table_ocr_provider'] === currentModel
+)
 
 // --- 产物汇总（审计 P2-8）：一轮工作产出了哪些文件 ---
 //

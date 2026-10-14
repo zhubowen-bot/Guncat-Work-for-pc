@@ -688,6 +688,32 @@ check(
   mod.renderArtifactsEmpty().length + ' 字节'
 )
 
+// --- 表格提取（审计 P1-3） ---
+//
+// 事故形状：原版唯一一个不依赖大模型对话的独立工具页，桌面端完全不存在 ——
+// TableOcrService 零引用，也没有任何界面入口。
+console.log('\n27. 表格提取')
+const ocrHtml = mod.renderTableOcr()
+check('弹层有「表格提取」标题', ocrHtml.includes('表格提取'))
+check('有「选择图片」入口', ocrHtml.includes('选择图片'))
+check('有模型选择（原版从配置方案里列模型）', ocrHtml.includes('识别模型') && ocrHtml.includes('<select'))
+check(
+  '模型下拉里带上来源（哪套配置方案 / 多模态解析）',
+  ocrHtml.includes('glm-4v-flash（多模态解析）') && ocrHtml.includes('doubao-vision（生产）')
+)
+check('没选图时给出空态而不是空白', ocrHtml.includes('还没有选择图片'))
+check(
+  '说明里讲清「数据不进入对话上下文」（与原版独立页的语义一致）',
+  ocrHtml.includes('不进入对话上下文')
+)
+const ocrResult = mod.renderTableOcrResult()
+check('有图时给出缩略图、文件名与「开始识别」', ocrResult.includes('表格.png') && ocrResult.includes('开始识别'))
+check(
+  '有结果时渲染出 <table> 与「复制 HTML」',
+  ocrResult.includes('<table>') && ocrResult.includes('<th>季度</th>') && ocrResult.includes('复制 HTML')
+)
+check('结果显示用的是哪个模型（用户要知道用了哪套配置）', ocrResult.includes('glm-4v-flash'))
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

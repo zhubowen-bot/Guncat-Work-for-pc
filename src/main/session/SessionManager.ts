@@ -343,7 +343,9 @@ export class SessionManager {
     Constants.LS_KEY_LOCAL_SEARCH_CONFIG,
     // 推理强度（按形态分两个键，与原版一致）。渲染层的档位选择器读写它们。
     Constants.LS_KEY_REASONING_EFFORT,
-    Constants.LS_KEY_INTERACTIVE_EFFORT
+    Constants.LS_KEY_INTERACTIVE_EFFORT,
+    // 表格提取记住的模型选择（原版 TableOcrPage 的 LS_KEY_TABLE_OCR_PROVIDER）
+    Constants.LS_KEY_TABLE_OCR_PROVIDER
   ]
 
   private async loadStringPrefs(): Promise<Record<string, string>> {
@@ -1531,6 +1533,48 @@ export class SessionManager {
       updatedAt: conv.messages.length > 0 ? conv.messages[conv.messages.length - 1].timestamp : conv.createdAt,
       messages: conv.messages.map((m) => SessionManager.toMessageDto(m))
     }
+  }
+
+  /**
+   * 表格提取要用的连接信息（原版 TableOcrPage 从**配置方案**里列模型让用户选）。
+   *
+   * 解析顺序：
+   *   1) 指定模型名且能在某个配置方案里找到 → 用那套的 baseUrl/apiKey；
+   *   2) 找不到就用多模态配置（表格识别本质是多模态请求）；
+   *   3) 多模态没配 Key 就退回当前生效的主配置。
+   * 模型名留空时走 2) / 3)。API Key 只留在主进程，不下发到渲染层。
+   */
+  async tableOcrConfig(model: string): Promise<MultimodalConfig> {
+    const ctx: Context = this.ctx()
+    const wanted: string = model.trim()
+    if (wanted !== '') {
+      const { profiles } = await this.readApiProfiles(ctx)
+      const matched = profiles.find((p) => p.apiConfig.model === wanted)
+      if (matched !== undefined && matched.apiConfig.apiKey !== '') {
+        const fromProfile: MultimodalConfig = MultimodalConfig.default()
+        fromProfile.baseUrl = matched.apiConfig.baseUrl
+        fromProfile.apiKey = matched.apiConfig.apiKey
+        fromProfile.model = matched.apiConfig.model
+        return fromProfile
+      }
+    }
+    const mm: MultimodalConfig = await StorageManager.loadMultimodalConfig(ctx).catch(
+      (): MultimodalConfig => MultimodalConfig.default()
+    )
+    if (mm.apiKey !== '') {
+      return mm
+    }
+    const api: ApiConfig | null = await StorageManager.loadApiConfig(ctx).catch(
+      (): ApiConfig | null => null
+    )
+    if (api !== null && api.apiKey !== '') {
+      const fallback: MultimodalConfig = MultimodalConfig.default()
+      fallback.baseUrl = api.baseUrl
+      fallback.apiKey = api.apiKey
+      fallback.model = api.model
+      return fallback
+    }
+    throw new Error('请先在设置里配置多模态解析 API 或至少一套 API 配置')
   }
 
   /**

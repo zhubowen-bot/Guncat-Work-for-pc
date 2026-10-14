@@ -15,6 +15,8 @@ import type {
   MultimodalConfigDto,
   PickedAttachmentDto,
   RendererStage,
+  TableOcrImageDto,
+  TableOcrResultDto,
   WorkArtifactsDto,
   SearchEngineDto,
   WorkspaceEntryDto,
@@ -98,6 +100,11 @@ export interface GuncatApi {
   stats(conversationId: string): Promise<ConversationStatsDto>
   /** 本会话的产物汇总（对话流末尾的 Changes 卡） */
   artifacts(conversationId: string): Promise<WorkArtifactsDto>
+  /** 表格提取：选图 → 识别 → 返回清洗过的 <table> 片段 */
+  tableOcr: {
+    pickImage(): Promise<TableOcrImageDto | null>
+    run(imagePath: string, model: string): Promise<TableOcrResultDto>
+  }
   messages: {
     exportDocx(
       conversationId: string,

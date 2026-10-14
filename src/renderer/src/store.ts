@@ -90,6 +90,8 @@ interface State {
    * 聊天模式下来路（拖拽 / 命令行 / 第二实例）落进该会话工作区的文件同样能在这里看到。
    */
   workspaceOpen: boolean
+  /** 表格提取弹层是否打开（原版是一个独立页面，桌面端没有 pages/ 概念） */
+  tableOcrOpen: boolean
   /** 「填入输入框 / 重新编辑」请求：由消息操作行写入，输入框消费后清空 */
   pendingDraft: { text: string; at: number } | null
 
@@ -106,6 +108,7 @@ interface State {
   setWebSearch(value: boolean): void
   openSettings(open: boolean): void
   toggleWorkspace(open?: boolean): void
+  openTableOcr(open: boolean): void
   reloadSettings(): Promise<void>
   send(text: string, attachmentPaths?: string[]): Promise<void>
   /**
@@ -288,6 +291,7 @@ export const useStore = create<State>((set, get) => {
     notice: null,
     settingsOpen: false,
     workspaceOpen: true,
+    tableOcrOpen: false,
     pendingDraft: null,
 
     async init() {
@@ -436,6 +440,10 @@ export const useStore = create<State>((set, get) => {
 
     toggleWorkspace(open) {
       set((state) => ({ workspaceOpen: open ?? !state.workspaceOpen }))
+    },
+
+    openTableOcr(open) {
+      set({ tableOcrOpen: open })
     },
 
     async reloadSettings() {

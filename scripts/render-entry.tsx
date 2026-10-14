@@ -52,6 +52,7 @@ import {
   formatTaskDuration,
   workspaceFileIcon
 } from '@renderer/components/WorkspacePanel'
+import { TableOcrPanel } from '@renderer/components/TableOcrDialog'
 import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
 import { marqueeText } from '@renderer/components/MessageView'
 import type { MessageDto } from '@ipc/contract'
@@ -211,6 +212,53 @@ export function renderTaskStatsEmpty(): string {
 export { formatTaskDuration }
 export function renderDurations(): string[] {
   return [0, 8400, 83400, 125000].map((ms) => formatTaskDuration(ms))
+}
+
+/**
+ * 表格提取面板（原版唯一不依赖对话的独立工具页）。
+ * 直接渲染纯展示层：弹层由 store 控制，而 SSR 的 server snapshot 取的是 store
+ * **初始状态**（zustand v5 的行为），没法靠 setState 打开，所以这里绕过 store 测面板本身。
+ */
+export function renderTableOcr(): string {
+  return renderToStaticMarkup(
+    createElement(
+      'div',
+      null,
+      createElement(TableOcrPanel, {
+        models: [
+          { id: 'glm-4v-flash', label: 'glm-4v-flash（多模态解析）' },
+          { id: 'doubao-vision', label: 'doubao-vision（生产）' }
+        ],
+        model: 'glm-4v-flash',
+        image: null,
+        result: null,
+        busy: false,
+        onModelChange: () => {},
+        onPick: () => {},
+        onRecognize: () => {},
+        onCopy: () => {},
+        onClose: () => {}
+      })
+    )
+  )
+}
+
+/** 有图有结果时的面板（表格预览与复制入口） */
+export function renderTableOcrResult(): string {
+  return renderToStaticMarkup(
+    createElement(TableOcrPanel, {
+      models: [{ id: 'glm-4v-flash', label: 'glm-4v-flash（多模态解析）' }],
+      model: 'glm-4v-flash',
+      image: { path: 'C:/tmp/表格.png', name: '表格.png', size: 2048, thumbnail: '' },
+      result: { html: '<table><tr><th>季度</th><th>收入</th></tr><tr><td>Q1</td><td>120</td></tr></table>', model: 'glm-4v-flash' },
+      busy: false,
+      onModelChange: () => {},
+      onPick: () => {},
+      onRecognize: () => {},
+      onCopy: () => {},
+      onClose: () => {}
+    })
+  )
 }
 
 /**

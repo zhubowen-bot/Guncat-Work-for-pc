@@ -2212,6 +2212,104 @@ select {
 
 /* ===== 工作区文件预览弹层 ===== */
 
+/* ===== 表格提取弹层 ===== */
+.tableocr {
+  width: min(920px, 92vw);
+  max-height: 88vh;
+}
+
+.tableocr__picked {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  margin-top: 10px;
+}
+
+.tableocr__thumb {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex: none;
+}
+
+.tableocr__thumb--empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  border: 1px dashed var(--border);
+}
+
+.tableocr__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tableocr__empty {
+  margin-top: 10px;
+  padding: 22px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-faint);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.tableocr__result {
+  margin-top: 14px;
+  border-top: 1px solid var(--divider);
+  padding-top: 10px;
+}
+
+.tableocr__resulthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.tableocr__table {
+  overflow: auto;
+  max-height: 46vh;
+}
+
+.tableocr__table table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+
+.tableocr__table td,
+.tableocr__table th {
+  border: 1px solid var(--border);
+  padding: 5px 8px;
+  color: var(--text);
+  text-align: left;
+  vertical-align: top;
+}
+
+.tableocr__table th {
+  background: var(--bg-sunken);
+  font-weight: 600;
+}
+
+.tableocr__table caption {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-bottom: 6px;
+}
+
 .preview-overlay {
   position: fixed;
   inset: 0;

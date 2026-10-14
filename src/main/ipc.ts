@@ -22,6 +22,9 @@ import { getMainWindow, markRendererAlive } from './window'
 import { bootLog, bootMark } from './bootlog'
 import { getDataRoot, resourcesDir, makeTempDir } from '@core/platform/appPaths'
 import { image } from '@core/platform/kit/ImageKit'
+import { TableOcrService, TableOcrImage } from '@core/service/TableOcrService'
+import { MultimodalConfig } from '@core/model/MultimodalConfig'
+import { sanitizeTableHtml } from './sanitizeHtml'
 
 function send(event: GuncatEvent): void {
   const window = getMainWindow()
@@ -297,6 +300,49 @@ export function registerIpcHandlers(session: SessionManager): void {
   ipcMain.handle(INVOKE.conversationArtifacts, async (_e, conversationId: string) =>
     session.workArtifacts(conversationId)
   )
+
+  // ===== 表格提取（原版唯一不依赖对话的独立工具页） =====
+  //
+  // 桌面端此前完全没有这个功能：`TableOcrService` 零引用，也没有任何界面入口。
+  // 这里只负责「选图」与「跑识别」——识别用的连接信息在主进程按模型名解析，
+  // API Key 不必经过渲染层。
+  ipcMain.handle(INVOKE.tableOcrPickImage, async () => {
+    const window = getMainWindow()
+    const result = await dialog.showOpenDialog(window ?? undefined!, {
+      title: '选择要提取表格的图片',
+      buttonLabel: '选择',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }]
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return null
+    }
+    const filePath: string = result.filePaths[0]
+    return {
+      path: filePath,
+      name: path.basename(filePath),
+      size: fs.existsSync(filePath) ? fs.statSync(filePath).size : 0,
+      thumbnail: await makeAttachmentThumbnail(filePath)
+    }
+  })
+
+  ipcMain.handle(INVOKE.tableOcrRun, async (_e, imagePath: string, model: string) => {
+    if (!fs.existsSync(imagePath)) {
+      throw new Error('图片不存在，请重新选择')
+    }
+    const config: MultimodalConfig = await session.tableOcrConfig(model)
+    const bytes: ArrayBuffer = (() => {
+      const buffer: Buffer = fs.readFileSync(imagePath)
+      return buffer.buffer.slice(
+        buffer.byteOffset,
+        buffer.byteOffset + buffer.byteLength
+      ) as ArrayBuffer
+    })()
+    // 压缩在识别之前（原版 TableOcrPage 的顺序）：长边超 2500px 等比缩小并转 JPEG
+    const compressed: TableOcrImage = await TableOcrService.compressImage(bytes)
+    const raw: string = await TableOcrService.recognizeImage(config, compressed)
+    return { html: sanitizeTableHtml(TableOcrService.cleanHtml(raw)), model: config.model }
+  })
 
   // ===== 应用信息 =====
   ipcMain.handle(INVOKE.appInfo, async (): Promise<AppInfoDto> => {

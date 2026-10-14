@@ -10,9 +10,10 @@ import { SpeechBar } from './components/SpeechBar'
 import { MODE_HINT, agentById } from './conversations'
 import { AgentGlyph } from './components/AgentGlyph'
 import { WorkArtifactsCard } from './components/WorkArtifactsCard'
+import { TableOcrDialog } from './components/TableOcrDialog'
 import { useWorkspacePreview } from './components/WorkspacePanel'
 import { useSpeech, speechTextOf } from './speech/speechStore'
-import { IconBrain, IconClose, IconGlobe } from './icons'
+import { IconBrain, IconClose, IconGlobe, IconTable } from './icons'
 
 function Notice() {
   const notice = useStore((s) => s.notice)
@@ -59,6 +60,7 @@ export default function App() {
   const activeAgentId = useStore((s) => s.activeAgentId)
   const workspaceOpen = useStore((s) => s.workspaceOpen)
   const artifacts = useStore((s) => s.artifacts)
+  const openTableOcr = useStore((s) => s.openTableOcr)
   // 工作区面板收起时，产物卡的「预览」也要能弹出来 —— 弹层挂在 App 这一层
   // （面板展开时由面板自己渲染，避免两份弹层同时出现）。
   const preview = useWorkspacePreview(active?.id ?? null)
@@ -237,6 +239,15 @@ export default function App() {
               </select>
             </label>
           ) : null}
+          {/* 表格提取：原版唯一不依赖对话的独立工具页，入口在顶栏（桌面端没有 pages/ 概念） */}
+          <button
+            className="toggle"
+            title="表格提取（选一张表格图片，用视觉模型识别成 HTML 表格）"
+            onClick={() => openTableOcr(true)}
+          >
+            <IconTable size={14} />
+            表格提取
+          </button>
           <button
             className="toggle"
             data-on={thinkingEnabled}
@@ -315,6 +326,7 @@ export default function App() {
       {!showWorkspace ? preview.overlay : null}
 
       <SettingsDialog />
+      <TableOcrDialog />
       <SpeechBar />
       <Notice />
     </div>

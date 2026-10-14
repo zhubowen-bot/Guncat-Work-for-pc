@@ -33,6 +33,13 @@ export const INVOKE = {
    */
   conversationArtifacts: 'conversation:artifacts',
   /**
+   * 表格提取（原版 AgentDrawerView 的「表格提取」→ pages/TableOcrPage）。
+   * 原版这是**唯一一个不依赖大模型对话的独立工具页**，桌面端此前完全不存在：
+   * `TableOcrService` 零引用，也没有任何界面入口。
+   */
+  tableOcrPickImage: 'tableOcr:pickImage',
+  tableOcrRun: 'tableOcr:run',
+  /**
    * 配置方案（多套 API 配置）。原版 SettingsPanel 顶部的「配置方案 / 配置名称」就是它；
    * 桌面端此前 ApiProfileDto、saveApiProfiles 通道、StorageManager 的读写**全都在**，
    * 只有渲染层从来没有调用点 —— 用户无法保存/切换第二套配置。
@@ -202,6 +209,29 @@ export interface WorkArtifactsDto {
   files: ArtifactFileDto[]
   totalAdds: number
   totalDels: number
+}
+
+export interface TableOcrImageDto {
+  path: string
+  name: string
+  size: number
+  /** 预览缩略图（data URL）；生成失败时为空串 */
+  thumbnail: string
+}
+
+export interface TableOcrResultDto {
+  /** 已清洗的 `<table>` 片段（只保留表格结构与 colspan/rowspan） */
+  html: string
+  /** 实际使用的模型（界面上说清「用的是哪套配置」） */
+  model: string
+}
+
+/** 表格提取可选的模型来源（原版 TableOcrPage 从配置方案里列模型） */
+export interface TableOcrModelDto {
+  /** 传回给主进程的标识（模型名） */
+  id: string
+  label: string
+  baseUrl: string
 }
 
 export interface SearchEngineDto {
