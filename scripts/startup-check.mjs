@@ -295,6 +295,14 @@ const log1 = fs.readFileSync(path.join(dataRoot, 'startup.log'), 'utf8')
 check('日志记了 dom-ready 里程碑（ASCII 标记）', log1.includes('[RENDERER_DOM_READY]'))
 check('日志记了「加载完成」里程碑（ASCII 标记）', log1.includes('[RENDERER_FINISH_LOAD]'))
 check('日志记了 是否提权', /是否提权=(true|false)/.test(log1))
+
+// 定时提醒的每秒推进必须在启动时就拉起来：
+// 不启动的话 schedule_create 会「成功但永远不响」——静默失效最伤信任。
+check(
+  '启动时就拉起了定时提醒推进（否则 schedule_create 成功却永不触发）',
+  log1.includes('定时提醒推进已启动'),
+  log1.split('\n').filter((l) => l.includes('定时提醒')).join(' | ').slice(0, 120) || '(没有相关日志)'
+)
 check('日志记了 进程位数', log1.includes('进程位数='))
 check('日志记了 userData 目录', log1.includes('userData 目录='))
 check('正常启动时日志记 是否兼容模式=false', log1.includes('是否兼容模式=false'))

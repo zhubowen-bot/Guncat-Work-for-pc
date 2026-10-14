@@ -576,6 +576,54 @@ check(
 )
 check('附件类型按扩展名归类', attachList[0]?.type === 'file', String(attachList[0]?.type))
 
+// --- 定时提醒推进：此前 ScheduleService.tick 零调用点 ---
+//
+// 事故形状：模型调 schedule_create 会成功返回、并对用户说「5 分钟后提醒你」，
+// 到点**什么都不发生** —— 不是功能缺失，而是静默失效，用户只会认为应用失灵。
+// 这里直接往工作区写一份到期的提醒，启动每秒推进，看它是否真的注入成用户消息。
+const convSched = await inv('conversations:create', agents[0].id, 'work')
+const schedRoot = session.workspaceRoot(convSched.id)
+fs.mkdirSync(schedRoot, { recursive: true })
+const schedFile = path.join(schedRoot, '.schedule.json')
+fs.writeFileSync(
+  schedFile,
+  JSON.stringify([
+    {
+      id: 'sched-1',
+      message: '该提交周报了',
+      dueAt: Date.now() - 1000,
+      everySeconds: 0,
+      createdAt: Date.now() - 60000
+    }
+  ]),
+  'utf8'
+)
+events.length = 0
+session.startScheduleTicker()
+await new Promise((resolve) => setTimeout(resolve, 1600))
+const convSchedDto = await inv('conversation:get', convSched.id)
+const reminderMsg = (convSchedDto?.messages ?? []).find(
+  (m) => m.role === 'user' && String(m.content).startsWith('【定时提醒】')
+)
+check(
+  '到期的定时提醒被注入成用户消息（此前整条链路没有任何调用点）',
+  reminderMsg !== undefined,
+  String(reminderMsg?.content ?? '(没有消息)')
+)
+check(
+  '触发时也推了一条可见提示',
+  events.some((e) => e.type === 'notice' && String(e.text ?? '').includes('定时提醒已触发')),
+  events.filter((e) => e.type === 'notice').map((e) => e.text).join(' | ').slice(0, 80)
+)
+let schedLeft = []
+try {
+  schedLeft = JSON.parse(fs.readFileSync(schedFile, 'utf8'))
+} catch {
+  schedLeft = []
+}
+check('一次性提醒触发后被移除（不会每拍重复响）', Array.isArray(schedLeft) && schedLeft.length === 0)
+session.stopScheduleTicker()
+
 // --- 导出回答为 Word ---
 // 渲染进程走的是带保存对话框的通道（替身返回取消）
 const exportCanceled = await inv('message:exportDocx', conv3.id, 'nope-msg')

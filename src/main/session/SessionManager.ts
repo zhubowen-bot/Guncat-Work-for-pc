@@ -1,4 +1,4 @@
-﻿// SessionManager：主进程的业务权威。
+// SessionManager：主进程的业务权威。
 //
 // 它持有全部会话（内存中的 Conversation 模型 + 落盘持久化），
 // 驱动「聊天模式」的三协议流式对话与「工作模式」的 Agent Loop，
@@ -33,6 +33,7 @@ import { generateMessageId } from '@core/common/Utils'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { GuncatUiRuntime, GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
 import { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
+import { ScheduleService } from '@core/service/ScheduleService'
 // 附件链路：MultimodalService（先行解析）与 FileUploadService（Files API）此前是零引用的
 // 已移植能力，见 makeAttachments 的说明。
 import { MultimodalService } from '@core/service/MultimodalService'
@@ -487,6 +488,114 @@ export class SessionManager {
     // 两个服务各自持有活跃请求注册表，都要中断
     ChatService.abort()
     AgentLoopService.abort()
+  }
+
+  // ===== 定时提醒推进 =====
+  //
+  // 审计发现：ScheduleService.tick 在桌面端**零调用点** ——
+  // 模型调 schedule_create 会成功返回、并对用户说「5 分钟后提醒你」，到点什么都不发生。
+  // 这是最糟的一类问题：不是功能缺失，而是**静默失效**，用户只会认为应用失灵。
+  //
+  // 原版由 ChatPage 的 1 秒定时器调 tickSchedules()，到期把「【定时提醒】…」注入为
+  // 一条用户消息并启动工作循环。桌面端把这件事放在主进程（会话与循环都在这里）。
+
+  private scheduleTimer: ReturnType<typeof setInterval> | null = null
+
+  /** 启动每秒推进。重复调用无副作用。 */
+  startScheduleTicker(): void {
+    if (this.scheduleTimer !== null) {
+      return
+    }
+    this.scheduleTimer = setInterval(() => {
+      this.tickSchedules()
+    }, 1000)
+    // 不因为这个定时器把进程吊住（关窗后仍能正常退出）
+    this.scheduleTimer.unref?.()
+  }
+
+  stopScheduleTicker(): void {
+    if (this.scheduleTimer !== null) {
+      clearInterval(this.scheduleTimer)
+      this.scheduleTimer = null
+    }
+  }
+
+  /**
+   * 推进所有工作/交互形态会话的提醒。
+   *
+   * 与原版的一处差异（有意为之）：原版只看**当前**会话，切走了提醒就不会响；
+   * 桌面端逐会话推进 —— 提醒存在各自的工作区里，用户切到别的会话期间到期的提醒同样该响。
+   * 会话正在跑时不推进（原版是塞进插话队列；插话通道还没移植，这里改成「这一拍跳过」，
+   * 提醒不会丢：ScheduleService.tick 只在真的触发时才推进到期时间）。
+   */
+  private tickSchedules(): void {
+    for (const conv of this.conversations) {
+      if (conv.mode !== 'work' && conv.mode !== 'interactive') {
+        continue
+      }
+      if (this.handle(conv.id).busy) {
+        continue
+      }
+      try {
+        ScheduleService.tick(this.workspaceRoot(conv.id), (message: string): void => {
+          void this.fireSchedule(conv.id, message)
+        })
+      } catch {
+        // 单个会话的提醒文件坏了不影响其它会话
+      }
+    }
+  }
+
+  /** 提醒到期：注入一条用户消息，并在没在跑时自动唤醒工作循环（对齐原版 tickSchedules） */
+  private async fireSchedule(conversationId: string, message: string): Promise<void> {
+    const conv: Conversation | undefined = this.find(conversationId)
+    if (conv === undefined) {
+      return
+    }
+    const text: string = `【定时提醒】${message}`
+    const userMsg: Message = Message.ofUser(generateMessageId(), text, text, [])
+    conv.messages.push(userMsg)
+    this.emit({
+      type: 'message:added',
+      conversationId,
+      message: SessionManager.toMessageDto(userMsg)
+    })
+    this.emit({ type: 'notice', level: 'info', text: `定时提醒已触发：${message}` })
+    await this.persist()
+
+    const config: ApiConfig | null = await StorageManager.loadApiConfig(this.ctx()).catch(
+      (): ApiConfig | null => null
+    )
+    if (config === null || config.apiKey === '' || config.model === '') {
+      // 没配置就没法自动继续；消息已经落进会话，用户打开就能看到
+      this.emit({
+        type: 'notice',
+        level: 'warn',
+        text: '定时提醒已触发，但还没配置 API，无法自动继续'
+      })
+      return
+    }
+    const thinkingEnabled: boolean = await StorageManager.loadBoolean(
+      this.ctx(),
+      Constants.LS_KEY_THINKING_ENABLED,
+      false
+    ).catch((): boolean => false)
+    try {
+      await this.runWork({
+        conversationId,
+        text,
+        mode: conv.mode as 'work' | 'interactive',
+        thinkingEnabled,
+        webSearchEnabled: false
+      })
+    } catch (e: unknown) {
+      // runWork 自己会把失败通过 turn:finished 报出去；这里只保证定时器不因此中断
+      this.emit({
+        type: 'notice',
+        level: 'error',
+        text: `定时提醒唤醒失败：${e instanceof Error ? e.message : String(e)}`
+      })
+    }
   }
 
   // ===== 聊天模式 =====

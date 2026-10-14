@@ -270,6 +270,11 @@ if (!gotLock) {
       registerIpcHandlers(session)
       bootLog('IPC 通道已注册')
 
+      // 定时提醒的每秒推进。不启动的话 schedule_create 会「成功但永远不响」——
+      // 静默失效最伤信任，见 SessionManager.startScheduleTicker 的说明。
+      session.startScheduleTicker()
+      bootLog('定时提醒推进已启动（每秒）')
+
       // 页面加载完成后把积压的收件文件推给渲染进程（页面加载完成的监听在 window.ts 里）
       setPendingFlush(() => {
         flushPendingIntake()
