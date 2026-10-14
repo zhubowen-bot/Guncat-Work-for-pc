@@ -15,7 +15,38 @@
 | 四 | 端侧增强：朗读 / 语音输入 / 文件收件 / 导出 Word | ✅ 已完成 |
 
 验证方式见 [README 的验证矩阵](../README.md#验证)：`npm run typecheck` / `npm run build` /
-`npm run smoke`（内核 126 项 + 渲染 128 项 + 契约 76 项 + 启动链路 149 项 + 端侧 27 项 + 语音 12 项）。
+`npm run smoke`（内核 135 项 + 渲染 175 项 + 契约 123 项 + 启动链路 150 项 + 端侧 74 项 + 语音 12 项）。
+
+### 阶段六：补上「内核已移植、但没有任何调用点」的那一批能力
+
+阶段一到五把内核搬完了，但对照原版做了一次系统审计后发现：**一批已经移植好的能力在桌面端
+一个调用点都没有**。它们不是「没实现」，而是「实现了但没人用」—— 这类问题比功能缺失更隐蔽，
+因为代码看起来是齐的，用户却会遇到「模型说会提醒，到点什么都不发生」。
+
+| 能力 | 症状 | 桌面端做法 |
+| --- | --- | --- |
+| 聊天模式附件（`MultimodalService` / `FileUploadService`） | 加附件等于没加：`makeAttachments` 只留文件名，`dataUrl`/`parsedText` 全空，三条协议都因「既无文本又无图」直接跳过 | 回形针 + 预览条 + `attachments:pick`；发送路径上按原版 `enqueueFiles`/`parseOneFile`/`prepareAttachmentFileIds` 真正读文件、先行解析、大文件走 Files API |
+| 定时提醒（`ScheduleService.tick`） | 模型调 `schedule_create` 成功返回、还会说「5 分钟后提醒你」，但**到点什么都不发生**（静默失效） | `SessionManager.startScheduleTicker()` 每秒推进，到期注入「【定时提醒】…」并唤醒一次工作循环 |
+| 产物汇总（`WorkArtifacts`） | 一轮跑完看不到「改了哪些文件、各加减多少行」 | `conversation:artifacts` + 对话流末尾的 Changes 卡（`WorkArtifactsCard`） |
+| 表格提取（`TableOcrService`） | 原版唯一一个不依赖对话的独立工具页，桌面端完全不存在 | 顶栏入口 + `tableOcr:run`；识别结果是**模型生成的 HTML**，因此主进程按白名单重建后才交给渲染层（`src/main/sanitizeHtml.ts`） |
+| 插件热加载（`PluginHotLoader`） | 随包的 `plugins/plugin_list.json` 无人读，插件工具一律「插件未实现」 | 补上 `service/PluginHotLoader.ts`（原文件此前没有移植），`bootstrap()` 里加载 |
+| 当前目标（`GoalService.read`） | 跑长任务看不到「当前目标是什么」 | 工作区面板的目标卡（随统计卡一起下发） |
+| 自动朗读（`reader_enabled`） | 偏好键清单里一直有它，却没有任何读写点 | `speechStore.autoRead` + 设置面板开关；只在一轮结束的那一次跃迁上朗读 |
+
+同时修掉三处**会真的伤到用户**的缺陷：
+
+| 缺陷 | 后果 | 修法 |
+| --- | --- | --- |
+| `NetworkKit` 把 `readTimeout` 当整段超时 | 工作模式流式超 5 分钟、聊天超 3 分钟**必然以网络错误中断**，哪怕数据一直在流 | 改成读空闲计时（每收到一块数据重置），`connectTimeout` 单独覆盖「未拿到响应头」那一段 |
+| 推理强度被写死在主进程（`high`/`none`） | 工作模式永远拿不到 Max 档，也没法选 Low 提速 | 契约加 `reasoningEffort` + 顶栏档位选择器（按形态分键持久化，与原版同名） |
+| 提示词把桌面版描述成手机/鸿蒙应用 | 模型自称「在 HarmonyOS 平台原生构建」、说「无法访问手机其他目录」，mermaid 按手机竖屏排版 | 22 处平台语义改为桌面端措辞（详见第 5 节的补丁清单） |
+
+另外补齐了几处「IPC 齐全、渲染层零调用点」的界面：**配置方案**（多套 API 配置）、
+工作区的**文件预览**、聊天模式下的**工作区面板**、侧栏的**引擎分组**、
+执行中的**插话**（对齐原版 workSteerQueue）、工具行的 **diff 卡与任务清单卡**、
+工作区面板的**任务统计卡**，以及**产物汇总卡**。
+
+---
 
 ### 阶段五：平台适配层的两个「后端缺席」补完
 

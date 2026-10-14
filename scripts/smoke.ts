@@ -11,11 +11,14 @@ import path from 'node:path'
 import os from 'node:os'
 
 import { initAppPaths } from '../src/core/platform/appPaths'
-import { appContext } from '../src/core/platform/kit/AbilityKit'
+import { appContext, common } from '../src/core/platform/kit/AbilityKit'
 import { AgentLoader } from '../src/core/service/AgentLoader'
 import { WorkFileService } from '../src/core/service/WorkFileService'
 import { WorkToolRunner } from '../src/core/service/WorkToolRunner'
 import { WorkSkillService } from '../src/core/service/WorkSkillService'
+import { PluginHotLoader } from '../src/core/service/PluginHotLoader'
+import type { PluginManifestResult } from '../src/core/common/PluginManifestLoader'
+import { filesDir, cacheDir, tempDir } from '../src/core/platform/appPaths'
 import { StorageManager } from '../src/core/data/StorageManager'
 import { ChatService, resolveEndpointUrl } from '../src/core/service/ChatService'
 import { AgentLoopService } from '../src/core/service/AgentLoopService'
@@ -101,6 +104,70 @@ async function main(): Promise<void> {
   check('filesDir 已创建', fs.existsSync(ctx.filesDir), ctx.filesDir)
   check('tempDir 已创建', fs.existsSync(ctx.tempDir))
   check('resourceManager 可读 agents.json', ctx.resourceManager.getRawFileContentSync('agents.json').length > 0)
+
+  // ===== 插件热加载 =====
+  //
+  // `WorkToolRunner` 早就会分发插件工具、随包也有 plugins/plugin_list.json，
+  // 但一直没有加载器 —— 于是插件工具一律返回「插件未实现」。
+  // 这里用一份临时的插件目录把「读清单 → 解析 → 注册进 ToolRegistry」这条链跑通。
+  section('插件热加载（plugin_list.json → ToolRegistry）')
+  const pluginRoot = path.join(root, 'plugin-resources')
+  fs.mkdirSync(path.join(pluginRoot, 'plugins'), { recursive: true })
+  fs.writeFileSync(
+    path.join(pluginRoot, 'plugins', 'plugin_list.json'),
+    JSON.stringify(['demo.json', 'broken.json', 'missing.json']),
+    'utf8'
+  )
+  fs.writeFileSync(
+    path.join(pluginRoot, 'plugins', 'demo.json'),
+    JSON.stringify({
+      id: 'demo_plugin',
+      version: '1',
+      category: 'plugin',
+      permissions: [],
+      tools: [
+        {
+          name: 'demo_plugin_tool',
+          description: '示例插件工具',
+          parameters: { type: 'object', properties: {} },
+          readOnly: true,
+          mutating: false,
+          timeoutMs: 5000,
+          maxRetries: 1
+        }
+      ],
+      skills: []
+    }),
+    'utf8'
+  )
+  // 一份解析不了的 manifest：应当只影响这一个插件
+  fs.writeFileSync(path.join(pluginRoot, 'plugins', 'broken.json'), '{ 这不是 JSON', 'utf8')
+  // 直接用一份指向临时插件目录的上下文（appContext 是进程级单例，不能再换根目录）
+  const pluginCtx = new common.UIAbilityContext(filesDir(), cacheDir(), tempDir(), pluginRoot)
+  const pluginResults: PluginManifestResult[] = await PluginHotLoader.loadAll(pluginCtx)
+  check(
+    '插件清单里声明的插件被加载（loadAll 此前零调用点）',
+    PluginHotLoader.loadedCount() === 1,
+    PluginHotLoader.loadedSummary()
+  )
+  check(
+    '插件工具真的注册进了工具表（否则调用时只会返回「插件未实现」）',
+    ToolRegistry.defs('').some((d) => (d as unknown as Record<string, unknown>).name === 'demo_plugin_tool'),
+    PluginHotLoader.loadedSummary()
+  )
+  check(
+    '坏掉的 manifest 只让那一个插件失败，不影响其他',
+    pluginResults.filter((r) => !r.ok).length === 2 &&
+      pluginResults.some((r) => r.error.indexOf('parse_failed') === 0) &&
+      pluginResults.some((r) => r.error.indexOf('read_failed') === 0),
+    pluginResults.map((r) => r.error || 'ok').join(' | ')
+  )
+  PluginHotLoader.unloadAll()
+  check('卸载后工具表里不再有插件工具（unloadAll 幂等）', PluginHotLoader.loadedCount() === 0)
+  const noListCtx = new common.UIAbilityContext(filesDir(), cacheDir(), tempDir(), root)
+  const noList: PluginManifestResult[] = await PluginHotLoader.loadAll(noListCtx)
+  check('没有插件清单时视为没有插件（不抛错、不阻断启动）', noList.length === 0)
+
 
   // ===== 2. 智能体加载（rawfile → 文件系统） =====
   section('2. 智能体加载（rawfile 适配）')

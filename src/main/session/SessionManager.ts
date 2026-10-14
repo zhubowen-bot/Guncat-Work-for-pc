@@ -41,6 +41,8 @@ import {
   WorkArtifactUtil
 } from '@core/common/WorkArtifacts'
 import { FileDiff } from '@core/common/DiffUtil'
+import { PluginHotLoader } from '@core/service/PluginHotLoader'
+import type { PluginManifestResult } from '@core/common/PluginManifestLoader'
 // 附件链路：MultimodalService（先行解析）与 FileUploadService（Files API）此前是零引用的
 // 已移植能力，见 makeAttachments 的说明。
 import { MultimodalService } from '@core/service/MultimodalService'
@@ -108,6 +110,22 @@ export class SessionManager {
     // 本地联网搜索配置同样在启动时绑定一次：渲染层虽然会在 init 里读一次设置，
     // 但那是一次 IPC 往返，理论上可以在它之前就跑起一轮工作 —— 那时工具会拿到默认配置。
     await this.bindLocalSearchConfig(ctx)
+    // 插件热加载（对齐原版 ChatViewModel.init 的顺序）：没有这一步，
+    // 随包的资源 / 插件清单不会被读，插件工具一律返回「插件未实现」。
+    // 单个插件失败不影响启动。
+    try {
+      const results: PluginManifestResult[] = await PluginHotLoader.loadAll(ctx)
+      const failed: PluginManifestResult[] = results.filter((r) => !r.ok)
+      this.emit({
+        type: 'notice',
+        level: failed.length > 0 ? 'warn' : 'info',
+        text:
+          PluginHotLoader.loadedSummary() +
+          (failed.length > 0 ? `；${failed.length} 个加载失败：${failed.map((r) => r.error).join(', ')}` : '')
+      })
+    } catch {
+      // 插件目录/清单不存在都走「没有插件」，不该拖住应用启动
+    }
     this.loaded = true
   }
 
