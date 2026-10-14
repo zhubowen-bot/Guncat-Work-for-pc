@@ -22,6 +22,11 @@
   --warn: #b6791f;
   --ok: #22c55e;
   --code-bg: #f9fafb;
+  /* diff 卡片与代码块要用的令牌：取自原版 color.json 的 diff_add / diff_del / code_text */
+  --diff-add: #22c55e;
+  --diff-del: #ec1313;
+  --code-text: #0f1115;
+  --font-mono: 'Cascadia Mono', 'Consolas', 'Menlo', 'DejaVu Sans Mono', monospace;
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 6px 20px rgba(0, 0, 0, 0.05);
@@ -48,6 +53,9 @@
     --warn: #d9a441;
     --ok: #22c55e;
     --code-bg: #1b1b1c;
+    --diff-add: #4ed17e;
+    --diff-del: #f25a5a;
+    --code-text: #e5e9f0;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.3);
   }
 }
@@ -613,6 +621,121 @@ select {
 
 .topbar__effort select:disabled {
   color: var(--text-faint);
+}
+
+/* ===== diff 卡片（对齐原版 WorkTurnView 的 dsh DiffBlock 风格） ===== */
+.diffcard {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-code);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.diffcard__head {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 9px 14px 5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diffcard__head[data-error='true'] {
+  color: var(--danger);
+}
+
+.diffcard__body {
+  max-height: 220px;
+  overflow: auto;
+  padding: 0 14px 10px;
+}
+
+.diffrow {
+  display: flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-faint);
+  white-space: pre;
+}
+
+.diffrow[data-type='add'] {
+  color: var(--diff-add);
+}
+
+.diffrow[data-type='del'] {
+  color: var(--diff-del);
+}
+
+.diffrow__sign {
+  flex: none;
+  width: 8px;
+}
+
+.diffcard__stat {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  padding: 0 4px 4px;
+}
+
+.diff-stat__add {
+  color: var(--diff-add);
+}
+
+.diff-stat__del {
+  color: var(--diff-del);
+}
+
+/* 单行摘要右侧的增删统计 */
+.tool__counts {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ===== todo_write 任务清单卡 ===== */
+.todocard {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.todorow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.todorow__mark {
+  flex: none;
+  width: 14px;
+  color: var(--text-faint);
+}
+
+.todorow[data-status='completed'] {
+  color: var(--text-faint);
+}
+
+.todorow[data-status='completed'] .todorow__mark {
+  color: var(--ok);
+}
+
+.todorow[data-status='completed'] .todorow__text {
+  text-decoration: line-through;
+}
+
+.todorow[data-status='in_progress'] .todorow__mark {
+  color: var(--accent);
 }
 
 .timeline {

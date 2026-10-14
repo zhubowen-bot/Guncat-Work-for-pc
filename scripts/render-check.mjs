@@ -553,6 +553,75 @@ check(
   sidebarHtml.includes('工作区') && sidebarHtml.includes('foot-btn')
 )
 
+// --- 工具行的 diff / 任务清单卡片（审计 P2-9） ---
+//
+// 事故形状：展开一个工具行只有「参数」「结果」两个 <pre> 原文块 ——
+// edit 看不出改了哪几行，todo_write 显示成一段转义 JSON。
+// 原版 WorkTurnView 是按工具名分派卡片，且三种形态**互斥**。
+console.log('\n24. 工具行（diff / 任务清单卡片）')
+const fileDiff = JSON.stringify({
+  path: 'src/core/main.ts',
+  adds: 2,
+  dels: 1,
+  truncated: false,
+  hunks: [
+    {
+      header: '@@ -1,3 +1,4 @@',
+      lines: [
+        { t: 'same', x: 'const a = 1' },
+        { t: 'del', x: 'const b = 2' },
+        { t: 'add', x: 'const b = 3' },
+        { t: 'add', x: 'const c = 4' }
+      ]
+    }
+  ]
+})
+const editRow = mod.renderToolRow('edit', '{"path":"src/core/main.ts"}', '已写入', fileDiff)
+check('edit 展开后是 diff 卡片', editRow.includes('diffcard') && editRow.includes('src/core/main.ts'))
+check(
+  '增删行分别着色（+ / - 两态）',
+  editRow.includes('data-type="add"') &&
+    editRow.includes('data-type="del"') &&
+    editRow.includes('data-type="same"')
+)
+check('diff 卡片底部有增删统计', editRow.includes('diffcard__stat') && editRow.includes('+2'))
+check(
+  '有 diff 时不再叠一份原始参数/结果（原版是互斥的）',
+  !editRow.includes('io__label') && !editRow.includes('io__pre')
+)
+check(
+  '单行摘要右侧也能看到 +N -M',
+  editRow.includes('tool__counts') && editRow.includes('diff-stat__del')
+)
+
+const todoRow = mod.renderToolRow(
+  'todo_write',
+  '{"todos":[]}',
+  '[已完成] 1. 读需求\n[进行中] 2. 改代码\n[待开始] 3. 跑验证'
+)
+check('todo_write 展开后是任务清单卡', todoRow.includes('todocard') && todoRow.includes('todorow'))
+check(
+  '三种状态分别可辨（完成/进行中/待开始）',
+  todoRow.includes('data-status="completed"') &&
+    todoRow.includes('data-status="in_progress"') &&
+    todoRow.includes('data-status="pending"')
+)
+check(
+  '清单序号（1. ）被去掉，只留内容',
+  todoRow.includes('读需求') && !todoRow.includes('1. 读需求')
+)
+check('单行摘要给出完成进度 1/3', todoRow.includes('1/3'))
+
+const plainRow = mod.renderToolRow('read_file', '{"path":"a.md"}', '文件内容')
+check(
+  '没有结构化数据的工具仍然退回原始参数/结果（不会因为没卡片而空掉）',
+  plainRow.includes('io__pre') && plainRow.includes('文件内容')
+)
+check(
+  '损坏的 diff meta 安全退回原始 IO（不让界面因渲染失败而空掉）',
+  mod.renderToolRow('edit', '{}', '已写入', '{ 这不是 JSON').includes('io__pre')
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

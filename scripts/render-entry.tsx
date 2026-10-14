@@ -3,6 +3,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 import { GuncatUiBlock } from '@renderer/guncat-ui/GuncatUiBlock'
+import { ToolCallRow } from '@renderer/components/Disclosure'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { docxFileName } from '@renderer/fileName'
 import {
@@ -131,6 +132,33 @@ export function renderWorkspaceFileIcons(): Record<string, string> {
     out[name] = renderToStaticMarkup(workspaceFileIcon(name))
   }
   return out
+}
+
+/**
+ * 工具行（展开状态）。点开的形态是**互斥**的，对齐原版 WorkTurnView：
+ * edit/str_replace_editor 有 diff 就只给 diff 卡，todo_write 只给清单卡，其余才给原始 IO。
+ */
+export function renderToolRow(
+  name: string,
+  argsJson: string,
+  result: string,
+  diff = ''
+): string {
+  return renderToStaticMarkup(
+    createElement(ToolCallRow, {
+      defaultExpanded: true,
+      call: {
+        id: 'call-1',
+        name,
+        argsJson,
+        result,
+        status: 'ok',
+        startedAt: 0,
+        finishedAt: 1,
+        diff
+      }
+    })
+  )
 }
 
 /**

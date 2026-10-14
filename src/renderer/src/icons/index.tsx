@@ -193,6 +193,25 @@ export function IconPlus(props: IconProps) {
   )
 }
 
+/** 完成（圆内对勾，对应原版 sys.symbol.checkmark_circle_fill） */
+export function IconCheckCircle(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 12.4l2.6 2.6L16 9.6" />
+    </Svg>
+  )
+}
+
+/** 未完成（空心圆，对应原版 sys.symbol.circle） */
+export function IconCircle(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="9" />
+    </Svg>
+  )
+}
+
 /** 插话（在既有流程里加一条旁注/补充说明） */
 export function IconSteer(props: IconProps) {
   return (

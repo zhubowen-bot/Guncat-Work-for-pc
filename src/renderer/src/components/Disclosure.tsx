@@ -10,7 +10,9 @@ import {
   IconCalendar,
   IconChart,
   IconCheck,
+  IconCheckCircle,
   IconChevronDown,
+  IconCircle,
   IconCopy,
   IconDownload,
   IconEdit,
@@ -122,11 +124,26 @@ export function Disclosure({
   )
 }
 
-/** 工具调用行：单行摘要 + 点开看参数/结果 */
-export function ToolCallRow({ call }: { call: ToolCallRecordDto }) {
-  const [open, setOpen] = useState(false)
+/** 工具调用行：单行摘要 + 点开看结构化卡片（diff / 任务清单），拿不到结构就退回原始 IO */
+export function ToolCallRow({
+  call,
+  defaultExpanded = false
+}: {
+  call: ToolCallRecordDto
+  /** 初始展开状态（对应原版的 expandedStepId；渲染验证要能看到卡片内容） */
+  defaultExpanded?: boolean
+}) {
+  const [open, setOpen] = useState(defaultExpanded)
   const status = toolStatus(call)
   const summary = toolArgsSummary(call.argsJson)
+  // edit / str_replace_editor 的改动行、todo_write 的清单都已经被工具层结构化好了
+  // （见 core/common/DiffUtil 与 todo_write 的结果格式），直接渲染成卡片，
+  // 不必让用户去读转义 JSON —— 原版 WorkTurnView 就是这么做的。
+  //
+  // 与原版一致：这三种形态是**互斥**的 —— 有清单/卡片就不再叠一份原始参数与结果。
+  const useTodo = call.name === 'todo_write' && status.state !== 'error' && call.result !== ''
+  const diff = useTodo ? null : parseFileDiff(call.diff)
+  const todos = useTodo ? parseTodoRows(call.result) : []
 
   return (
     <div className="tool" data-state={status.state}>
@@ -136,6 +153,17 @@ export function ToolCallRow({ call }: { call: ToolCallRecordDto }) {
         </span>
         <span className="tool__name">{toolDisplayName(call.name)}</span>
         {summary !== '' ? <span className="tool__args">{summary}</span> : null}
+        {diff !== null ? (
+          <span className="tool__counts">
+            <span className="diff-stat__add">+{diff.adds}</span>
+            <span className="diff-stat__del">-{diff.dels}</span>
+          </span>
+        ) : null}
+        {todos.length > 0 ? (
+          <span className="tool__counts">
+            {todos.filter((t) => t.status === 'completed').length}/{todos.length}
+          </span>
+        ) : null}
         {status.state !== 'ok' ? (
           <span className="tool__status" data-state={status.state}>
             {status.label}
@@ -147,26 +175,194 @@ export function ToolCallRow({ call }: { call: ToolCallRecordDto }) {
       </button>
       {open ? (
         <div className="tool__body">
-          <div className="io">
-            <div className="io__label">参数</div>
-            <pre className="io__pre">{call.argsJson !== '' ? call.argsJson : '(无)'}</pre>
-          </div>
-          <div className="io">
-            <div className="io__label" data-error={status.state === 'error'}>
-              {status.state === 'error' ? '错误' : '结果'}
-            </div>
-            <pre className="io__pre">
-              {call.result !== ''
-                ? call.result.length > 6000
-                  ? `${call.result.slice(0, 6000)}\n…(已截断)`
-                  : call.result
-                : status.state === 'running'
-                  ? '(执行中…)'
-                  : '(尚无输出)'}
-            </pre>
-          </div>
+          {diff !== null ? (
+            <DiffCard diff={diff} isError={status.state === 'error'} />
+          ) : todos.length > 0 ? (
+            <TodoChecklist rows={todos} />
+          ) : (
+            <>
+              <div className="io">
+                <div className="io__label">参数</div>
+                <pre className="io__pre">{call.argsJson !== '' ? call.argsJson : '(无)'}</pre>
+              </div>
+              <div className="io">
+                <div className="io__label" data-error={status.state === 'error'}>
+                  {status.state === 'error' ? '错误' : '结果'}
+                </div>
+                <pre className="io__pre">
+                  {call.result !== ''
+                    ? call.result.length > 6000
+                      ? `${call.result.slice(0, 6000)}\n…(已截断)`
+                      : call.result
+                    : status.state === 'running'
+                      ? '(执行中…)'
+                      : '(尚无输出)'}
+                </pre>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+// ===== diff / todo 卡片 =====
+
+interface DiffRowDto {
+  type: string
+  text: string
+  header: string
+}
+
+interface ParsedDiff {
+  path: string
+  adds: number
+  dels: number
+  truncated: boolean
+  rows: DiffRowDto[]
+}
+
+interface TodoRowDto {
+  status: string
+  content: string
+}
+
+/**
+ * 解析工具结果 meta 里的 FileDiff。
+ * 结构由 `core/common/DiffUtil.FileDiff.toJsonObject()` 产生（行用短键 t/x 存）。
+ * 任何解析失败一律返回 null → 退回原来的 IO 卡片，绝不让界面因为卡片渲染不出来而空掉。
+ */
+export function parseFileDiff(meta: string): ParsedDiff | null {
+  if (meta === '' || meta === undefined) {
+    return null
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(meta)
+  } catch {
+    return null
+  }
+  if (typeof raw !== 'object' || raw === null) {
+    return null
+  }
+  const obj = raw as Record<string, unknown>
+  const hunks = obj.hunks
+  if (!Array.isArray(hunks)) {
+    return null
+  }
+  const rows: DiffRowDto[] = []
+  for (const hunkRaw of hunks) {
+    if (typeof hunkRaw !== 'object' || hunkRaw === null) {
+      continue
+    }
+    const hunk = hunkRaw as Record<string, unknown>
+    const header = typeof hunk.header === 'string' ? hunk.header : ''
+    const lines = hunk.lines
+    if (!Array.isArray(lines)) {
+      continue
+    }
+    for (const lineRaw of lines) {
+      if (typeof lineRaw !== 'object' || lineRaw === null) {
+        continue
+      }
+      const line = lineRaw as Record<string, unknown>
+      rows.push({
+        type: typeof line.t === 'string' ? line.t : 'same',
+        text: typeof line.x === 'string' ? line.x : '',
+        header
+      })
+    }
+  }
+  return {
+    path: typeof obj.path === 'string' ? obj.path : '',
+    adds: typeof obj.adds === 'number' ? obj.adds : 0,
+    dels: typeof obj.dels === 'number' ? obj.dels : 0,
+    truncated: obj.truncated === true,
+    rows
+  }
+}
+
+/**
+ * 解析 `todo_write` 的结果文本。
+ * 工具层输出的是逐行状态标记（`[已完成]/[进行中]/[待开始]`，也兼容 `[x]/[~]/[ ]`），
+ * 里面还带着清单序号（`1. `），渲染前把它去掉。
+ */
+export function parseTodoRows(result: string): TodoRowDto[] {
+  if (result === '') {
+    return []
+  }
+  const rows: TodoRowDto[] = []
+  for (const rawLine of result.split('\n')) {
+    const line = rawLine.trim()
+    let status = ''
+    let content = ''
+    const marks: Array<[string, string]> = [
+      ['[已完成]', 'completed'],
+      ['[进行中]', 'in_progress'],
+      ['[待开始]', 'pending'],
+      ['[x]', 'completed'],
+      ['[X]', 'completed'],
+      ['[~]', 'in_progress'],
+      ['[ ]', 'pending']
+    ]
+    for (const [prefix, mapped] of marks) {
+      if (line.startsWith(prefix)) {
+        status = mapped
+        content = line.slice(prefix.length).trim()
+        break
+      }
+    }
+    if (status === '' || content === '') {
+      continue
+    }
+    const dot = content.indexOf('. ')
+    if (dot > 0 && dot <= 3 && !Number.isNaN(Number.parseInt(content.slice(0, dot), 10))) {
+      content = content.slice(dot + 2)
+    }
+    rows.push({ status, content })
+  }
+  return rows
+}
+
+/** dsh DiffBlock 风格：代码底色 + 增删行着色 + 底部统计 */
+function DiffCard({ diff, isError }: { diff: ParsedDiff; isError: boolean }) {
+  return (
+    <div className="diffcard">
+      <div className="diffcard__head" data-error={isError}>
+        {isError ? 'ERROR' : diff.path}
+      </div>
+      <div className="diffcard__body">
+        {diff.rows.map((row, index) => (
+          <div className="diffrow" data-type={row.type} key={`${index}-${row.type}`}>
+            <span className="diffrow__sign">
+              {row.type === 'add' ? '+' : row.type === 'del' ? '-' : ' '}
+            </span>
+            <span className="diffrow__text">{row.text}</span>
+          </div>
+        ))}
+      </div>
+      <div className="diffcard__stat">
+        └ <span className="diff-stat__add">+{diff.adds}</span>{' '}
+        <span className="diff-stat__del">-{diff.dels}</span>
+        {diff.truncated ? ' · 已折叠' : ''}
+      </div>
+    </div>
+  )
+}
+
+/** todo_write 的任务清单卡：勾选状态 + 完成项划线 */
+function TodoChecklist({ rows }: { rows: TodoRowDto[] }) {
+  return (
+    <div className="todocard">
+      {rows.map((row, index) => (
+        <div className="todorow" data-status={row.status} key={`${index}-${row.content}`}>
+          <span className="todorow__mark">
+            {row.status === 'completed' ? <IconCheckCircle size={14} /> : <IconCircle size={14} />}
+          </span>
+          <span className="todorow__text">{row.content}</span>
+        </div>
+      ))}
     </div>
   )
 }
