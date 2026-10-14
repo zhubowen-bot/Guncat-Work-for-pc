@@ -118,6 +118,56 @@ fs.cpSync(path.join(root, 'resources'), path.join(outDir, 'resources', 'resource
   recursive: true
 })
 
+// ===== 4b. PDF 后端的两块随包数据（见 src/core/platform/native/pdfBackend.ts） =====
+//
+// 为什么不能只靠 vite 打包：这两样都不是「代码」。
+//   · pdfjs-dist 的解析器与内嵌 worker 由主进程在运行时按模块名解析（构建里是 external），
+//     因为它内部有自己的 worker / wasm / 字体动态路径，打进 bundle 会被改坏；
+//   · 原生 canvas（.node）根本打不进 bundle，只能按路径 require。
+// 于是这里把最小必要集合拷进去：
+//   resources/app/node_modules/pdfjs-dist/  —— 只带 package.json 与 legacy/build（约 4MB，
+//                                              而不是整包的 34MB）
+//   resources/app/node_modules/@napi-rs/    —— canvas 本体 + win32 预编译二进制
+//   resources/resources/pdfjs/              —— 标准字体 / CJK CMap / wasm 解码器
+// 少任何一块都不会「报文件损坏」：文本抽取退化成缺字体度量，渲染退化成明确的「缺渲染后端」。
+const nodeModulesOut = path.join(outDir, 'resources', 'app', 'node_modules')
+const pdfjsSrc = path.join(root, 'node_modules', 'pdfjs-dist')
+if (fs.existsSync(pdfjsSrc)) {
+  const pdfjsOut = path.join(nodeModulesOut, 'pdfjs-dist')
+  fs.mkdirSync(pdfjsOut, { recursive: true })
+  fs.cpSync(path.join(pdfjsSrc, 'package.json'), path.join(pdfjsOut, 'package.json'))
+  fs.cpSync(path.join(pdfjsSrc, 'legacy', 'build'), path.join(pdfjsOut, 'legacy', 'build'), {
+    recursive: true,
+    filter: (src) => !src.endsWith('.map')
+  })
+  step('复制 pdfjs-dist（package.json + legacy/build）')
+
+  const dataOut = path.join(outDir, 'resources', 'resources', 'pdfjs')
+  for (const sub of ['standard_fonts', 'cmaps', 'wasm']) {
+    const from = path.join(pdfjsSrc, sub)
+    if (fs.existsSync(from)) {
+      fs.cpSync(from, path.join(dataOut, sub), { recursive: true })
+    }
+  }
+  step('复制 pdfjs 数据（standard_fonts / cmaps / wasm）→ resources/pdfjs')
+} else {
+  console.warn('  ! 找不到 pdfjs-dist，PDF 工具将不可用（先跑 npm install）')
+}
+
+const canvasSrc = path.join(root, 'node_modules', '@napi-rs')
+if (fs.existsSync(canvasSrc)) {
+  const canvasOut = path.join(nodeModulesOut, '@napi-rs')
+  fs.mkdirSync(canvasOut, { recursive: true })
+  for (const name of fs.readdirSync(canvasSrc)) {    // 只带本平台的预编译二进制：别的平台的 .node 在 Windows 上纯属体积
+    if (name.startsWith('canvas-win32') || name === 'canvas') {
+      fs.cpSync(path.join(canvasSrc, name), path.join(canvasOut, name), { recursive: true })
+    }
+  }
+  step('复制 @napi-rs/canvas（PDF 页面转图用）')
+} else {
+  console.warn('  ! 找不到 @napi-rs/canvas，PDF 页面转图将不可用（文本抽取不受影响）')
+}
+
 // ===== 5. 可执行文件改名 =====
 const exeSource = path.join(outDir, 'electron.exe')
 const exeTarget = path.join(outDir, `${appName}.exe`)

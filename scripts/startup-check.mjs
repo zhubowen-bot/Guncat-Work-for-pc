@@ -87,7 +87,11 @@ for (const target of [outfile, outfilePackaged, outfileSteady]) {
     platform: 'node',
     format: 'esm',
     target: 'node22',
-    external: ['fflate'],
+    // pdfjs 与原生 canvas 保持外部依赖：
+    //   · pdfjs 内部有自己的 worker / wasm / 标准字体动态路径，打进 bundle 会被改坏；
+    //   · @napi-rs/canvas 是 .node 原生模块，esbuild 根本打不进去。
+    // 生产构建（electron.vite.config.ts）对这两者也是 external，两边口径一致。
+    external: ['fflate', 'pdfjs-dist', 'pdfjs-dist/*', '@napi-rs/canvas'],
     alias: {
       ...alias,
       '@main': path.join(root, 'src/main'),

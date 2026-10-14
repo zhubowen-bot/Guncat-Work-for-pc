@@ -24,8 +24,9 @@
     "dist": "npm run build && node scripts/package-portable.mjs",
     "dist:only": "node scripts/package-portable.mjs"
   },
-  "//dependencies": "本应用的运行时代码全部由 vite 打进 out/，因此没有 runtime dependencies —— 这也是 electron-builder 能干净出包的前提。下面这些包只参与构建。",
+  "//dependencies": "本应用的运行时代码全部由 vite 打进 out/，因此 npm 层面没有 runtime dependencies。唯一的例外是 PDF 后端的两块东西 —— pdfjs-dist 与 @napi-rs/canvas（原生 .node）—— 它们不能进 bundle，由 scripts/package-portable.mjs 手工拷进产物的 resources/app/node_modules 下；两者都在 devDependencies 里，只参与构建与打包。",
   "devDependencies": {
+    "@napi-rs/canvas": "^0.1.100",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
@@ -38,6 +39,7 @@
     "highlight.js": "^11.12.0",
     "katex": "^0.16.22",
     "mermaid": "^11.17.2",
+    "pdfjs-dist": "^5.7.284",
     "rcedit": "^4.0.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

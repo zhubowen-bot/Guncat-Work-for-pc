@@ -66,6 +66,12 @@ electron-builder 的 pnpm 依赖收集器拿不到 `pnpm list --json` 的输出�
 **打包时本来就没有 node_modules 需要收集** —— 那一步是多余的。
 自带的脚本按 Electron 标准应用目录结构直接组装，结果更可控也更快。
 
+唯一的例外是 PDF 后端：`pdfjs-dist` 与 `@napi-rs/canvas`（原生 `.node`）都不能进 bundle
+（前者内部有 worker / wasm / 字体的动态路径，后者根本打不进），因此它们由组装脚本
+手工拷进 `resources/app/node_modules/`，PDF 的标准字体 / CMap / wasm 解码器拷进
+`resources/resources/pdfjs/`。缺任何一块都不会「报文件损坏」：文本抽取退化成缺字体度量，
+渲染退化成一条明确的「缺渲染后端」提示。见 `src/core/platform/native/pdfBackend.ts`。
+
 `electron-builder.yml` 保留在仓库里，供将来需要**签名安装包 / 自动更新**时使用。
 
 ### 关于构建期的两个坑（已固化处理）

@@ -9,6 +9,7 @@ import { app, BrowserWindow, dialog } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { initAppPaths, clearTempDir } from '@core/platform/appPaths'
+import { installPdfJsBackend } from '@core/platform/native/pdfBackend'
 import { registerElectronPicker } from './picker'
 import { registerIpcHandlers } from './ipc'
 import { collectFileArgs } from './intake'
@@ -244,6 +245,11 @@ if (!gotLock) {
 
       registerElectronPicker()
       bootLog('文件选择器已注册')
+
+      // PDF 后端（PDF.js）：不装的话，所有 PDF 工具都会报「文档结构损坏」——
+      // 因为平台适配层在没有后端时只能返回 PARSE_ERROR_FORMAT。见 core/platform/native/pdfBackend.ts。
+      installPdfJsBackend()
+      bootLog('PDF 后端已就绪（PDF.js）')
 
       // 任务栏身份与菜单栏都要在**建窗口之前**定下来：
       // 窗口一旦建立，就已经带着当时的 AppUserModelID 与默认菜单进了任务栏。

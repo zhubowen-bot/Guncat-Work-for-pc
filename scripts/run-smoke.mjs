@@ -22,8 +22,11 @@ await build({
   format: 'esm',
   target: 'node22',
   sourcemap: 'inline',
-  // electron 保持外部依赖：ImageKit 只在真正解码像素时才 require 它
-  external: ['electron'],
+  // electron 保持外部依赖：ImageKit 只在真正解码像素时才 require 它。
+  // pdfjs 与原生 canvas 同样外部化：pdfjs 有自己的 worker / wasm / 字体动态路径，
+  // 打进 bundle 会被改坏；@napi-rs/canvas 是 .node 原生模块，根本打不进去。
+  // 生产构建（electron.vite.config.ts）对这两者也是 external，两边口径一致。
+  external: ['electron', 'pdfjs-dist', 'pdfjs-dist/*', '@napi-rs/canvas'],
   alias,
   logLevel: 'error'
 })

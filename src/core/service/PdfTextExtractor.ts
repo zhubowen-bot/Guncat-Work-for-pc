@@ -11,6 +11,11 @@
 // 限制: 加密文档(无密码)返回 PARSE_ERROR_PASSWORD; 扫描件(纯图片)无文字层, 文本返回空。
 // 性能: loadDocument/getTextContent 为同步原生调用(无法内部让出), 页间 await 让出主线程
 //   防止多页大文档触发 watchdog(THREAD_BLOCK)。
+//
+// 桌面端(平台差异, 见 platform/native/pdfBackend.ts):
+//   Node 侧没有 PDF Kit 那样的同步原生后端, 唯一可用的是 PDF.js, 而它从打开到取内容全是异步的。
+//   因此这里统一走 PdfDocument.loadDocumentAsync(), 并在取每页文本前 await page.prepare()。
+//   这条差异只落在两个入口上, 移植代码的其余部分不受影响。
 import { pdfService } from '@kit.PDFKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
@@ -71,7 +76,9 @@ export class PdfTextExtractor {
     try {
       let pr: pdfService.ParseResult = pdfService.ParseResult.PARSE_ERROR_HANDLER;
       try {
-        pr = doc.loadDocument(absPath);
+        // 桌面端后端（PDF.js）是异步的：走 loadDocumentAsync；鸿蒙侧那条同步
+        // loadDocument 仍保留在 PDFKit 上，但 Node 下没有可用的同步后端。
+        pr = await doc.loadDocumentAsync(absPath);
       } catch (e) {
         throw new Error('PDF 加载异常: ' + PdfTextExtractor.errMessage(e as Object));
       }
@@ -88,6 +95,8 @@ export class PdfTextExtractor {
       let produced: number = 0;
       for (let i: number = s - 1; i < result.pageCount && i < s - 1 + maxPages; i++) {
         let page: pdfService.PdfPage = doc.getPage(i);
+        // 先让后端把这一页的内容备好，后面的同步访问器才有数据
+        await page.prepare();
         let text: string = PdfTextExtractor.pageText(page);
         page.release();
         if (text.length > maxChars) {
@@ -124,7 +133,7 @@ export class PdfTextExtractor {
     try {
       let pr: pdfService.ParseResult = pdfService.ParseResult.PARSE_ERROR_HANDLER;
       try {
-        pr = doc.loadDocument(absPath);
+        pr = await doc.loadDocumentAsync(absPath);
       } catch (e) {
         throw new Error('PDF 加载异常: ' + PdfTextExtractor.errMessage(e as Object));
       }
@@ -168,6 +177,7 @@ export class PdfTextExtractor {
     let pageCount: number = doc.getPageCount();
     for (let p: number = 0; p < pageCount && hits.length < maxMatches; p++) {
       let page: pdfService.PdfPage = doc.getPage(p);
+      await page.prepare();
       let text: string = PdfTextExtractor.pageText(page);
       page.release();
       if (text === '') {
@@ -209,7 +219,7 @@ export class PdfTextExtractor {
     try {
       let pr: pdfService.ParseResult = pdfService.ParseResult.PARSE_ERROR_HANDLER;
       try {
-        pr = doc.loadDocument(absPath);
+        pr = await doc.loadDocumentAsync(absPath);
       } catch (e) {
         throw new Error('PDF 加载异常: ' + PdfTextExtractor.errMessage(e as Object));
       }
@@ -254,13 +264,17 @@ export class PdfTextExtractor {
     return result;
   }
 
-  // 单页渲染 → jpg 落盘: 约 2 倍页面尺寸(≈144dpi), 上限 2000px;
-  // getAreaPixelMapWithOptions 失败时退化 getPagePixelMap(系统默认分辨率)。
+  // 单页渲染 → jpg 落盘: 约 2 倍页面尺寸(≈144dpi), 上限 2000px。
+  //
+  // 平台差异说明: 鸿蒙侧走 getAreaPixelMapWithOptions(同步原生), 桌面端后端(PDF.js)只有
+  // 异步的 renderToPixelMap, 所以这里统一走异步那一条 —— getWidth/getHeight 之前必须先
+  // await page.prepare(), 否则拿到的还是 0(见 PDFKit 里 prepare 的说明)。
   private static async renderOnePage(page: pdfService.PdfPage, packer: image.ImagePacker,
     outFile: string): Promise<boolean> {
     let pm: image.PixelMap | null = null;
     let file: fileIo.File | null = null;
     try {
+      await page.prepare();
       let pw: number = page.getWidth();
       let ph: number = page.getHeight();
       let targetW: number = Math.round(pw * 2);
@@ -270,17 +284,7 @@ export class PdfTextExtractor {
         targetW = 2000;
       }
       let targetH: number = pw > 0 ? Math.round(targetW * ph / pw) : targetW;
-      let matrix: pdfService.PdfMatrix = new pdfService.PdfMatrix();
-      matrix.x = 0;
-      matrix.y = 0;
-      matrix.width = pw;
-      matrix.height = ph;
-      matrix.rotate = 0;
-      try {
-        pm = page.getAreaPixelMapWithOptions(matrix, targetW, targetH);
-      } catch (e) {
-        pm = page.getPagePixelMap();
-      }
+      pm = await page.renderToPixelMap(targetW, targetH);
       if (pm === null) {
         return false;
       }

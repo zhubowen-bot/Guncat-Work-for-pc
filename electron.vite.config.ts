@@ -40,7 +40,13 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: { index: resolve('src/main/index.ts') }
+        input: { index: resolve('src/main/index.ts') },
+        // 两个不能打进 bundle 的依赖：
+        //   · pdfjs-dist —— 内部有 worker / wasm / 标准字体的动态路径，打包会改坏它们；
+        //   · @napi-rs/canvas —— .node 原生模块，只能运行时按路径解析。
+        // 两者都由 package-portable.mjs 随包放到 resources/app/node_modules 下，
+        // 运行时经 createRequire 解析（取不到 canvas 时 PDF 仍有文本能力，只是不出图）。
+        external: ['pdfjs-dist', 'pdfjs-dist/legacy/build/pdf.mjs', '@napi-rs/canvas']
       }
     }
   },

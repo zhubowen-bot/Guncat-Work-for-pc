@@ -23,6 +23,9 @@ import { PptxImage } from '../export/PptxImage';
 import { PptxImporter, PptxImportResult } from '../export/PptxImporter';
 import { Deck, DeckParser, DeckOutline, DeckOps } from '../export/DeckModel';
 import { SvgUtil } from '../export/SvgUtil';
+// 桌面端的 SVG 栅格化：鸿蒙侧靠设备图片引擎，而 Electron 的 nativeImage 只认位图，
+// 见 platform/native/svgRaster.ts 的说明。
+import { rasterizeSvgToPng } from '../platform/native/svgRaster';
 import { XmlUtil } from '../export/XmlUtil';
 import { Constants } from '../common/Constants';
 import { ToolExecutionGuard } from '../common/ToolExecutionGuard';
@@ -743,8 +746,7 @@ export class WorkToolRunner {
     let previewRel: string = rel.replace(/\.svg$/i, '') + '_preview.png';
     let out: string = '已生成 ' + rel + ' (' + aspectNote + ')' + autoFixed;
     try {
-      let png: PptxImagePart = await WorkToolRunner.rasterizeSvgFile(abs, width, dims,
-        context.cacheDir + '/work_svg');
+      let png: PptxImagePart = await WorkToolRunner.rasterizeSvgFile(abs, width, dims);
       let previewResult: ToolExecResult = WorkFileService.writeBytesAt(context, convId,
         previewRel, png.data);
       if (previewResult.ok) {
@@ -764,11 +766,15 @@ export class WorkToolRunner {
     return WorkToolRunner.okMsg(out);
   }
 
-  // SVG 文件 -> PNG 字节(设备图片引擎栅格化; 抛错由调用方转为可读信息)
-  // 流程: 读源码 -> SvgUtil.normalize 补齐 width/height -> 写临时规整文件 -> 解码打包 -> 清理。
-  // 不改动工作区里的原文件; 临时文件落在 cacheDir。
-  private static async rasterizeSvgFile(absPath: string, width: number, dims: number[],
-    cacheDir: string): Promise<PptxImagePart> {
+  // SVG 文件 -> PNG 字节。
+  //
+  // 平台差异(用户报障: write_svg 能存源码、预览 PNG 却出不来, 于是 docx/pptx 也引用不了 svg):
+  //   鸿蒙侧把 SVG 交给设备图片引擎解码; Electron 的 nativeImage **只认位图**(PNG/JPEG),
+  //   喂它 SVG 必然失败 —— 这条栅格化路径以前就是从这里断掉的。
+  //   桌面端改用 @napi-rs/canvas 的 loadImage(底层 resvg)画到 canvas 再编码,
+  //   因此不再需要「写临时规整文件 → 用图片引擎解码」那一圈, 也不再依赖 cacheDir。
+  private static async rasterizeSvgFile(absPath: string, width: number,
+    dims: number[]): Promise<PptxImagePart> {
     let h: number = width;
     if (dims[2] > 0 && dims[0] > 0) {
       h = Math.round(width * dims[1] / dims[0]);
@@ -778,50 +784,14 @@ export class WorkToolRunner {
     }
     let svgText: string = WorkToolRunner.readWorkspaceText(absPath);
     let normalized: string = SvgUtil.normalize(svgText, 512);
-    WorkFileService.ensureDir(cacheDir);
-    let tempPath: string = cacheDir + '/svg_raster_' + Date.now().toString() + '.svg';
-    let encoder: util.TextEncoder = new util.TextEncoder();
-    WorkFileService.writeBytes(tempPath, encoder.encode(normalized));
-    let file: fileIo.File = fileIo.openSync(tempPath, fileIo.OpenMode.READ_ONLY);
-    let source: image.ImageSource | null = null;
-    let pixelMap: image.PixelMap | null = null;
-    let packer: image.ImagePacker | null = null;
-    try {
-      source = image.createImageSource(file.fd);
-      let opts: image.DecodingOptions = { desiredSize: { width: width, height: h } };
-      pixelMap = await source.createPixelMap(opts);
-      packer = image.createImagePacker();
-      let packOpts: image.PackingOption = { format: 'image/png', quality: 100 };
-      let buffer: ArrayBuffer = await packer.packToData(pixelMap, packOpts);
-      if (buffer.byteLength < 8) {
-        throw new Error('栅格化输出为空');
-      }
-      let part: PptxImagePart = new PptxImagePart();
-      part.data = new Uint8Array(buffer);
-      part.mime = 'image/png';
-      part.ext = 'png';
-      part.widthPx = width;
-      part.heightPx = h;
-      return part;
-    } finally {
-      if (pixelMap !== null) {
-        await pixelMap.release();
-      }
-      if (source !== null) {
-        await source.release();
-      }
-      if (packer !== null) {
-        await packer.release();
-      }
-      fileIo.closeSync(file);
-      try {
-        if (fileIo.accessSync(tempPath)) {
-          fileIo.unlinkSync(tempPath);
-        }
-      } catch (e) {
-        // 临时文件清理失败不阻断主流程
-      }
-    }
+    let png: Buffer = await rasterizeSvgToPng(normalized, width, h);
+    let part: PptxImagePart = new PptxImagePart();
+    part.data = new Uint8Array(png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength));
+    part.mime = 'image/png';
+    part.ext = 'png';
+    part.widthPx = width;
+    part.heightPx = h;
+    return part;
   }
 
   // ===== download_file: http(s) -> 工作区 =====
@@ -1124,8 +1094,7 @@ export class WorkToolRunner {
           let svg: string = WorkToolRunner.readWorkspaceText(abs);
           let dims: number[] = SvgUtil.aspect(svg);
           // PPT 图形位图按 1024px 宽栅格化保证清晰
-          return await WorkToolRunner.rasterizeSvgFile(abs, 1024, dims,
-            context.cacheDir + '/work_svg');
+          return await WorkToolRunner.rasterizeSvgFile(abs, 1024, dims);
         } catch (e) {
           return null;
         }

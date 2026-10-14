@@ -205,4 +205,16 @@ export namespace image {
   export function createImagePacker(): ImagePacker {
     return new ImagePacker()
   }
+
+  /**
+   * 从已编码的图片字节（PNG/JPEG）造一个 PixelMap。
+   *
+   * 为什么需要它：桌面端的 PDF 后端（PDF.js + @napi-rs/canvas）渲染出来的是 PNG 字节，
+   * 而端口代码期望拿到 PixelMap（再交给 ImagePacker 编码落盘）。
+   * 让 PixelMap 的构造只经由本模块，Electron（nativeImage）的依赖就不会漏到别处去。
+   */
+  export function createPixelMapFromBuffer(data: Buffer | Uint8Array): PixelMap {
+    const buf: Buffer = Buffer.isBuffer(data) ? data : Buffer.from(data)
+    return new PixelMap(nativeImage().createFromBuffer(buf))
+  }
 }

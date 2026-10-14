@@ -26,6 +26,46 @@ import { ToolRegistry } from '../src/core/common/ToolRegistry'
 import { GuncatUiLang } from '../src/core/common/GuncatUiLang'
 import { DataPipeline } from '../src/core/common/DataPipeline'
 import { runJs } from '../src/core/platform/native/libguncatjs'
+import {
+  installPdfJsBackend,
+  renderPdfPageToPng,
+  itemsToText,
+  itemsToObjects
+} from '../src/core/platform/native/pdfBackend'
+
+/**
+ * 造一个最小但结构完整的 PDF（未压缩内容流 + Helvetica + WinAnsi）。
+ *
+ * 为什么要自己造：工作区与上游鸿蒙项目里都没有现成的 PDF 文件，而「PDF 解析」
+ * 恰恰是最需要回归保护的一段（它曾经对任何 PDF 都报「文档结构损坏」）。
+ * 夹具只用 ASCII —— WinAnsi 单字节编码写不进中文，硬塞进去会得到乱码，
+ * 反而让断言变得不可信。
+ */
+function makeTestPdf(lines: string[]): Buffer {
+  const content = lines.map((t, i) => `BT /F1 24 Tf 72 ${720 - i * 40} Td (${t}) Tj ET`).join('\n')
+  const objects: string[] = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
+      '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'
+  ]
+  // xref 的偏移必须逐字节准确，否则解析器会判结构损坏 —— 这也正是夹具自身的有效性检查
+  let out = '%PDF-1.4\n'
+  const offsets: number[] = []
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(out.length)
+    out += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`
+  }
+  const xrefPos = out.length
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  for (const off of offsets) {
+    out += `${String(off).padStart(10, '0')} 00000 n \n`
+  }
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`
+  return Buffer.from(out, 'latin1')
+}
 
 let passed = 0
 let failed = 0
@@ -544,6 +584,149 @@ async function main(): Promise<void> {
 
   const loadMissing = await callTool('load_skill', { name: 'no-such-skill' })
   check('不存在的技能给出明确错误', !loadMissing.ok, loadMissing.output.slice(0, 80))
+
+  // ===== 17. PDF（用户报障：三个 PDF 工具对任何来源都报「文档结构损坏」） =====
+  //
+  // 根因不是文件坏了，而是平台适配层的 PDF 后端**从来没被装上** ——
+  // backend === null 时 loadDocument 只能返回 PARSE_ERROR_FORMAT，
+  // 而它的文案正是「PDF 格式解析失败(文档结构损坏)」。这一节把整条链路钉住。
+  section('17. PDF 解析（PDF.js 后端）')
+  installPdfJsBackend()
+  const pdfDir = path.join(wsRoot, 'docs')
+  fs.mkdirSync(pdfDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(pdfDir, 'probe.pdf'),
+    makeTestPdf([
+      'Guncat Work PDF smoke line one',
+      'second line with digits 12345',
+      'third line about revenue'
+    ])
+  )
+
+  const parsed = await WorkToolRunner.execute(
+    ctx,
+    convId,
+    'parse_document',
+    JSON.stringify({ path: 'docs/probe.pdf' })
+  )
+  check(
+    'parse_document 不再报「文档结构损坏」（这是后端缺席的症状，不是文件问题）',
+    parsed.ok && !parsed.output.includes('文档结构损坏'),
+    parsed.output.slice(0, 120)
+  )
+  check('parse_document 取到第一行正文', parsed.output.includes('Guncat Work PDF smoke line one'))
+  check('parse_document 行不粘连（hasEOL 让相邻行各占一行）', parsed.output.includes('\n'))
+
+  const searched = await WorkToolRunner.execute(
+    ctx,
+    convId,
+    'search_pdf',
+    JSON.stringify({ path: 'docs/probe.pdf', query: 'digits' })
+  )
+  check('search_pdf 命中关键词', searched.ok && searched.output.includes('digits'), searched.output.slice(0, 120))
+  check('search_pdf 给出页码', searched.ok && searched.output.includes('第 1 页'), searched.output.slice(0, 80))
+
+  const searchMiss = await WorkToolRunner.execute(
+    ctx,
+    convId,
+    'search_pdf',
+    JSON.stringify({ path: 'docs/probe.pdf', query: '这个关键词不存在于文档中' })
+  )
+  check('search_pdf 无命中时如实报告', searchMiss.ok && !searchMiss.output.includes('文档结构损坏'))
+
+  const parseMissing = await WorkToolRunner.execute(
+    ctx,
+    convId,
+    'parse_document',
+    JSON.stringify({ path: 'docs/没有这个文件.pdf' })
+  )
+  check('不存在的 PDF 给出「文件不存在」而不是「结构损坏」', !parseMissing.ok, parseMissing.output.slice(0, 80))
+
+  // 页面渲染：走纯函数（不经过 Electron 的 nativeImage），因此无头环境也能真的验证像素产出
+  const png = await renderPdfPageToPng(path.join(pdfDir, 'probe.pdf'), 1, 600)
+  check('PDF 页面可渲染成图（PNG 字节非空）', png.length > 1000, `${png.length} 字节`)
+  check(
+    '渲染产物确实是 PNG（魔数校验）',
+    png[0] === 0x89 && png.toString('ascii', 1, 4) === 'PNG'
+  )
+  check(
+    '渲染尺寸按目标宽等比缩放',
+    png.readUInt32BE(16) === 600,
+    `${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`
+  )
+
+  // 两个纯函数的边界：行标记与坐标映射
+  check(
+    'itemsToText：只有 hasEOL 才换行',
+    itemsToText([
+      { str: '甲' },
+      { str: '乙', hasEOL: true },
+      { str: '丙' }
+    ]) === '甲乙\n丙'
+  )
+  check(
+    'itemsToObjects：x/y 取自变换矩阵的 e/f（y 从页底算，与鸿蒙侧一致）',
+    (() => {
+      const objs = itemsToObjects([{ str: '甲', transform: [1, 0, 0, 1, 72, 700], width: 10, height: 12 }])
+      return objs.length === 1 && objs[0].x === 72 && objs[0].y === 700
+    })()
+  )
+
+  // ===== 18. SVG 栅格化 =====
+  //
+  // 用户报障：「write_svg 能保存 SVG 源码，但预览栅格化在本机失败，导致 docx/pptx 也不能引用 svg」。
+  // 根因是那条栅格化走的是 Electron 的 nativeImage —— 它**只解码位图**，喂 SVG 必然失败。
+  // 现在改走 @napi-rs/canvas（底层 resvg）。这一节把预览与两条引用路径都钉住。
+  section('18. SVG 栅格化（write_svg 预览 / docx 与 pptx 引用 svg）')
+  const svgSource =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">' +
+    '<rect width="200" height="100" rx="12" fill="#0A7AFF"/>' +
+    '<circle cx="60" cy="50" r="24" fill="#ffffff"/>' +
+    '<path d="M110 30 L170 50 L110 70 Z" fill="#FFD166"/></svg>'
+  const svgWrite = await callTool('write_svg', { path: 'art/badge.svg', svg: svgSource, width: 512 })
+  check('write_svg 成功', svgWrite.ok, svgWrite.output.slice(0, 140))
+  check(
+    'write_svg 这次真的生成了预览 PNG（此前这一步必然失败）',
+    svgWrite.ok && svgWrite.output.includes('预览已生成'),
+    svgWrite.output.split('\n').slice(1, 3).join(' | ')
+  )
+  const previewFile = path.join(wsRoot, 'art/badge_preview.png')
+  check('预览 PNG 已落盘', fs.existsSync(previewFile))
+  const previewBytes = fs.existsSync(previewFile) ? fs.readFileSync(previewFile) : Buffer.alloc(0)
+  check('预览是合法 PNG（魔数）', previewBytes.length > 100 && previewBytes.toString('ascii', 1, 4) === 'PNG')
+  check(
+    '预览宽度按 width 参数、高度按 viewBox 等比',
+    previewBytes.readUInt32BE(16) === 512 && previewBytes.readUInt32BE(20) === 256,
+    `${previewBytes.readUInt32BE(16)}x${previewBytes.readUInt32BE(20)}`
+  )
+
+  // pptx 直接引用 .svg：走 imageResolver 的自动栅格化
+  const pptxSvg = await callTool('write_pptx', {
+    path: 'out/图形汇报.pptx',
+    deck: JSON.stringify({
+      title: '图形汇报',
+      slides: [{ layout: 'image', title: '徽标', image: 'art/badge.svg' }]
+    })
+  })
+  check('write_pptx 可引用 .svg（自动栅格化）', pptxSvg.ok, pptxSvg.output.slice(0, 120))
+  const pptxSvgBytes = fs.existsSync(path.join(wsRoot, 'out/图形汇报.pptx'))
+    ? fs.readFileSync(path.join(wsRoot, 'out/图形汇报.pptx'))
+    : Buffer.alloc(0)
+  check(
+    'pptx 里确实嵌入了图片（zip 内含 ppt/media）',
+    pptxSvgBytes.includes(Buffer.from('ppt/media/'))
+  )
+
+  // docx 引用预览 PNG（工具说明要求 docx 引用预览而不是 .svg）
+  const docxSvg = await callTool('write_docx', {
+    path: 'out/图形报告.docx',
+    markdown: '# 图形\n\n![徽标](art/badge_preview.png)\n'
+  })
+  check('write_docx 可引用预览 PNG', docxSvg.ok, docxSvg.output.slice(0, 120))
+  const docxSvgBytes = fs.existsSync(path.join(wsRoot, 'out/图形报告.docx'))
+    ? fs.readFileSync(path.join(wsRoot, 'out/图形报告.docx'))
+    : Buffer.alloc(0)
+  check('docx 里确实嵌入了图片（zip 内含 word/media）', docxSvgBytes.includes(Buffer.from('word/media/')))
 
   // ===== 结果 =====
   console.log(`\n${'─'.repeat(58)}`)

@@ -88,6 +88,16 @@ export namespace pdfService {
     getWidth(): number
     getHeight(): number
     renderToPixelMap(width: number, height: number): Promise<image.PixelMap>
+    /**
+     * 把这一页的内容准备好，之后 getTextContent / getGraphicsObjects / getWidth 等
+     * **同步**访问器才有数据。
+     *
+     * 为什么要有它：鸿蒙的 PDF Kit 是同步原生调用，而桌面端后端（PDF.js）一律是异步的。
+     * 端口代码里「取第 i 页 → 取文本」这条链是同步的，于是把异步那一步显式提到
+     * prepare() 上 —— 调用方先 await 一次，后面的同步访问器就都能成立。
+     * 不实现（或已备好）的后端返回 resolved Promise 即可。
+     */
+    prepare?(): Promise<void>
   }
 
   /** 文档抽象：由后端实现 */
@@ -108,6 +118,12 @@ export namespace pdfService {
      * 可通过抛出携带 code 的错误来表达加密等具体原因。
      */
     open(absPath: string): PdfDocumentBackend | null
+    /**
+     * 异步打开（桌面端 PDF.js 後端用）。
+     * 鸿蒙的 loadDocument 是同步原生调用，Node 侧没有这条同步路可走，
+     * 所以给后端留一个异步入口，由 PdfDocument.loadDocumentAsync 调用。
+     */
+    openAsync?(absPath: string): Promise<PdfDocumentBackend | null>
   }
 
   let backend: PdfBackend | null = null
@@ -163,6 +179,16 @@ export namespace pdfService {
       return this.inner.renderToPixelMap(width, height)
     }
 
+    /**
+     * 准备这一页（桌面端后端是异步的，见 PdfPageBackend.prepare 的说明）。
+     * 后端没实现或已经备好时是空操作。
+     */
+    async prepare(): Promise<void> {
+      if (this.inner.prepare !== undefined) {
+        await this.inner.prepare()
+      }
+    }
+
     release(): void {
       // 后端自行管理页对象生命周期
     }
@@ -195,6 +221,39 @@ export namespace pdfService {
 
     getPageCount(): number {
       return this.inner === null ? 0 : this.inner.getPageCount()
+    }
+
+    /**
+     * 异步加载（桌面端 PDF.js 后端走这条）。
+     *
+     * 为什么必须有：鸿蒙的 loadDocument 是**同步**原生调用，端口代码里
+     * 「loadDocument → getPageCount → getPage(i).getTextContent()」是一条同步链；
+     * 而 Node 侧唯一的可用后端（PDF.js）从打开到取内容全是异步的。
+     * 与其把整条链改成异步（会牵动大量移植代码），不如把异步只在这一个入口显式化：
+     * 这里 await 一次，后面的同步访问器就都成立（页内容由 prepare() 预取）。
+     */
+    async loadDocumentAsync(absPath: string): Promise<ParseResult> {
+      if (backend === null) {
+        return ParseResult.PARSE_ERROR_FORMAT
+      }
+      try {
+        const doc: PdfDocumentBackend | null =
+          backend.openAsync !== undefined
+            ? await backend.openAsync(absPath)
+            : backend.open(absPath)
+        if (doc === null) {
+          return ParseResult.PARSE_ERROR_FORMAT
+        }
+        this.inner = doc
+        this.opened = true
+        return ParseResult.PARSE_SUCCESS
+      } catch (e) {
+        const code: number | undefined = (e as { code?: number }).code
+        if (code === ParseResult.PARSE_ERROR_PASSWORD || code === ParseResult.PARSE_ERROR_CERT) {
+          return code
+        }
+        return ParseResult.PARSE_ERROR_FORMAT
+      }
     }
 
     getPage(index: number): PdfPage {
