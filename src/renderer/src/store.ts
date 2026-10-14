@@ -6,6 +6,7 @@
 import { create } from 'zustand'
 import { useSpeech } from './speech/speechStore'
 import {
+  INTERACTIVE_AGENT_ID,
   agentIdForMode,
   buildAgentList,
   engineIdOfConversation,
@@ -31,21 +32,84 @@ export interface Notice {
   at: number
 }
 
-// 推理强度的偏好键（与主进程 Constants 里的两个键同名）
+// 偏好键（与主进程 Constants 里的键名一致）
 const PREF_EFFORT_WORK = 'guncat_reasoning_effort'
 const PREF_EFFORT_INTERACTIVE = 'guncat_interactive_effort'
+const PREF_THINKING = 'guncat_thinking_enabled'
+const PREF_WEB_SEARCH = 'guncat_web_search_enabled'
 
 /**
- * 从偏好里取某个形态的推理强度。
+ * 从偏好里取工作模式的推理强度。
  *
- * 默认值按原版的口径：工作模式 'high'（均衡），交互模式 'high'。
- * 聊天形态没有强度概念，但 store 里是一个字段，就统一用工作那个键 ——
- * 反正只在工作/交互形态下才会被读走。
+ * 逐字对齐原版 ChatViewModel.ets:280-281：
+ * `loadString(LS_KEY_REASONING_EFFORT, 'high')` 之后只认 'max' / 'low'，其余一律回 'high'
+ * —— 也就是说「均衡」是缺省档，而存档里不需要真的写 'high'。
  */
-function effortFromPrefs(prefs: Record<string, string> | undefined, mode: string): string {
-  const key = mode === 'interactive' ? PREF_EFFORT_INTERACTIVE : PREF_EFFORT_WORK
-  const raw = prefs?.[key] ?? ''
-  return raw === 'max' || raw === 'high' || raw === 'low' || raw === 'none' ? raw : 'high'
+export function workEffortFromPrefs(prefs: Record<string, string> | undefined): string {
+  const raw = prefs?.[PREF_EFFORT_WORK] ?? ''
+  return raw === 'max' || raw === 'low' ? raw : 'high'
+}
+
+/**
+ * 交互模式的推理强度。
+ *
+ * 逐字对齐原版 ChatViewModel.ets:282-285：默认值是 **'low'**（首答速度优先，
+ * 交付物是界面而不是长篇分析），只认 'off' / 'low'，其余回 'high'。
+ * 这里容易写错成和交互模式一样默认 'high' —— 那会让首答明显变慢。
+ */
+export function interactiveEffortFromPrefs(prefs: Record<string, string> | undefined): string {
+  const raw = prefs?.[PREF_EFFORT_INTERACTIVE]
+  if (raw === undefined) {
+    return 'low'
+  }
+  return raw === 'off' || raw === 'low' ? raw : 'high'
+}
+
+/**
+ * 智能体默认的深度思考开关（对齐原版 ChatViewModel.ets:614-624 的 defaultThinkingForAgent）。
+ * 按**名称**匹配而不是 id：改名时不必回来改逻辑。返回 null 表示「这个智能体没有默认值」。
+ */
+export function defaultThinkingForAgent(agent: AgentDto | null): boolean | null {
+  const name = agent?.name ?? ''
+  if (name === '效率模式' || name === '轻简模式') {
+    return false
+  }
+  if (name === '专家模式') {
+    return true
+  }
+  return null
+}
+
+/** 某形态是否 Agent Loop（工作 / 交互）：这两种形态下深度思考恒为开，档位才是开关 */
+export function isLoopMode(mode: string): boolean {
+  return mode === 'work' || mode === 'interactive'
+}
+
+/**
+ * 一次请求真正要下发的思考参数（对齐原版 loopEffortForRequest / loopThinkingEnabled）。
+ *
+ * · 工作模式：思考开关就是全局 `thinkingEnabled`（界面上不显示它，由智能体默认值决定），
+ *   强度取工作档位；
+ * · 交互模式：档位「关闭(off)」= 思考关闭，此时**下发值退回 'low'**
+ *   （原版注释：部分服务端即使 thinking=disabled 也会校验 reasoning_effort 的合法性）；
+ * · 聊天模式：走深度思考开关，不带强度（聊天协议没有强度概念）。
+ */
+export function requestThinking(
+  mode: AgentMode,
+  thinkingEnabled: boolean,
+  workEffort: string,
+  interactiveEffort: string
+): { thinkingEnabled: boolean; reasoningEffort: string | undefined } {
+  if (mode === 'interactive') {
+    return {
+      thinkingEnabled: interactiveEffort !== 'off',
+      reasoningEffort: interactiveEffort === 'off' ? 'low' : interactiveEffort
+    }
+  }
+  if (mode === 'work') {
+    return { thinkingEnabled, reasoningEffort: workEffort }
+  }
+  return { thinkingEnabled, reasoningEffort: undefined }
 }
 
 interface State {
@@ -63,11 +127,12 @@ interface State {
   running: boolean
   thinkingEnabled: boolean
   /**
-   * 推理强度（工作 / 交互模式）：'max' | 'high' | 'low' | 'none'。
-   * 原版按形态分两个偏好键持久化（工作 Max/High/Low，交互 High/Low/Off），
-   * 桌面端此前把它写死在主进程里，用户无法选择。
+   * 工作模式的推理强度：'max' | 'high' | 'low'（缺省 'high'）。
+   * 交互模式另有 `interactiveEffort` —— 两个档位各存一个偏好键，互不影响（与原版一致）。
    */
   reasoningEffort: string
+  /** 交互模式的推理强度：'high' | 'low' | 'off'（缺省 **'low'**，首答速度优先） */
+  interactiveEffort: string
   webSearchEnabled: boolean
   settings: AppSettingsDto | null
   workspace: WorkspaceEntryDto[]
@@ -105,6 +170,9 @@ interface State {
   setMode(mode: AgentMode): void
   setThinking(value: boolean): void
   setReasoningEffort(value: string): void
+  setInteractiveEffort(value: string): void
+  /** 按当前智能体重置深度思考默认值（效率/轻简模式关、专家模式开） */
+  applyAgentThinkingDefault(): Promise<void>
   setWebSearch(value: boolean): void
   openSettings(open: boolean): void
   toggleWorkspace(open?: boolean): void
@@ -283,7 +351,9 @@ export const useStore = create<State>((set, get) => {
     running: false,
     thinkingEnabled: false,
     reasoningEffort: 'high',
-    webSearchEnabled: false,
+    interactiveEffort: 'low',
+    // 原版默认**开启**服务端联网搜索（LS_KEY_WEB_SEARCH_ENABLED 的缺省值是 true）
+    webSearchEnabled: true,
     settings: null,
     workspace: [],
     stats: null,
@@ -317,20 +387,44 @@ export const useStore = create<State>((set, get) => {
         window.guncat.settings.load()
       ])
       const engines = buildAgentList(agents)
-      const firstReal = agents.find((a) => !isVirtualAgentId(a.id))
+      // 冷启动落点（对齐原版 ChatViewModel.ets:323-363）：
+      // (1) 固定进入**交互模式**，不是最后一个真实智能体；
+      // (2) 每次重新打开应用都从「新对话」开始 —— 若该智能体最新一条对话已经非空，
+      //    就新建一条，而不是把用户丢回上次的长会话里（空会话则直接复用）。
+      const interactiveAgent =
+        engines.find((a) => a.id === INTERACTIVE_AGENT_ID) ??
+        engines.find((a) => isVirtualAgentId(a.id)) ??
+        engines[0]
+      const fallbackAgent = agents.find((a) => !isVirtualAgentId(a.id))
+      const startAgentId = interactiveAgent?.id ?? fallbackAgent?.id ?? ''
       set({
         agents,
         engines,
-        activeAgentId: firstReal === undefined ? '' : firstReal.id,
+        activeAgentId: startAgentId,
         summaries,
         settings,
-        // 推理强度按当前形态从偏好里取（工作 / 交互各一个键，与原版一致）
-        reasoningEffort: effortFromPrefs(settings.prefs, 'chat'),
+        // 深度思考与两个档位都从偏好里恢复（缺省值与原版一致：关 / high / low）
+        thinkingEnabled: settings.prefs?.[PREF_THINKING] === 'true',
+        reasoningEffort: workEffortFromPrefs(settings.prefs),
+        interactiveEffort: interactiveEffortFromPrefs(settings.prefs),
+        webSearchEnabled: settings.prefs?.[PREF_WEB_SEARCH] !== 'false',
         ready: true
       })
-      if (summaries.length > 0) {
-        await get().selectConversation(summaries[0].id)
+
+      // 该智能体最新的一条对话（按 updatedAt 取最大，不依赖列表返回顺序）
+      const ownConversations = summaries.filter((s) => s.agentId === startAgentId)
+      const latestForAgent = ownConversations.reduce<ConversationSummaryDto | undefined>(
+        (newest, item) => (newest === undefined || item.updatedAt > newest.updatedAt ? item : newest),
+        undefined
+      )
+      if (latestForAgent !== undefined && latestForAgent.messageCount === 0) {
+        // 已经是空会话：直接复用，不再堆一条新的（对齐原版 findLatestConversationForAgent 的复用分支）
+        await get().selectConversation(latestForAgent.id)
+      } else {
+        await get().createConversation()
       }
+      // 冷启动也按当前智能体重置一次深度思考默认值（效率/轻简模式关、专家模式开）
+      await get().applyAgentThinkingDefault()
     },
 
     async reloadSummaries() {
@@ -339,13 +433,26 @@ export const useStore = create<State>((set, get) => {
 
     async selectConversation(id) {
       const conv = await window.guncat.conversations.get(id)
+      // 落盘「当前会话」（对齐原版 openConversation：只写不读，避免存档停在过期的会话 id 上）
+      void window.guncat.settings.saveString('guncat_current_conv', id)
+      const mode = (conv?.mode as AgentMode) ?? 'chat'
       set({
         activeId: id,
         active: conv,
         activeAgentId: conv === null ? get().activeAgentId : engineIdOfConversation(conv),
-        mode: (conv?.mode as AgentMode) ?? 'chat',
+        mode,
         running: false
       })
+      // 对齐原版 openConversation 的两条联动：
+      //   (1) 打开的若是**空**会话，按智能体重置深度思考默认值；
+      //   (2) 打开的是 Agent Loop 会话（工作/交互）时，把全局深度思考强制为开 ——
+      //      「关闭」只属于交互模式的档位，不该被上一次聊天模式的开关带着走。
+      if (conv !== null && conv.messages.length === 0) {
+        await get().applyAgentThinkingDefault()
+      }
+      if (isLoopMode(mode) && !get().thinkingEnabled) {
+        await get().setThinking(true)
+      }
       await get().loadWorkspace()
       await get().loadStats()
       await get().loadArtifacts()
@@ -362,6 +469,12 @@ export const useStore = create<State>((set, get) => {
       }
       const agentId = get().activeAgentId
       const conv = await window.guncat.conversations.create(agentId, get().mode)
+      // 新建对话时按智能体重置深度思考（效率/轻简模式关、专家模式开）；
+      // Agent Loop 形态则强制为开（此时界面上不显示该开关，档位才是开关）
+      await get().applyAgentThinkingDefault()
+      if (isLoopMode(get().mode) && !get().thinkingEnabled) {
+        await get().setThinking(true)
+      }
       // conversation:created 事件已把状态写好，这里只补工作区
       await get().loadWorkspace()
       return conv
@@ -384,6 +497,7 @@ export const useStore = create<State>((set, get) => {
       if (engine === undefined) {
         return
       }
+      await window.guncat.settings.saveString('guncat_current_agent', agentId)
       const mode = modeForAgentId(agentId)
       set({ activeAgentId: agentId, mode })
       // 切到该引擎的最新会话；没有就新建（原版 selectAgent 的行为）
@@ -398,14 +512,29 @@ export const useStore = create<State>((set, get) => {
       } else {
         await get().createConversation()
       }
+      // 切智能体后按它的名称重置深度思考默认值（效率/轻简模式关、专家模式开）；
+      // Agent Loop 形态再强制为开
+      await get().applyAgentThinkingDefault()
+      if (isLoopMode(get().mode) && !get().thinkingEnabled) {
+        await get().setThinking(true)
+      }
     },
 
     setMode(mode) {
       // 形态与引擎是同一件事的两种说法（原版：形态切换就是切到对应虚拟智能体），
       // 因此这里走 selectAgent，顺带把会话也切过去，避免「界面显示工作模式、
       // 实际发到聊天模式会话」这种错位。
-      // 推理强度按形态各存一个键，切形态时把它一起换过来。
-      set({ reasoningEffort: effortFromPrefs(get().settings?.prefs, mode) })
+      //
+      // 两道守卫逐字对齐原版 ChatViewModel.ets:666-697 的 setInteractiveMode / setWorkMode：
+      //   (1) 已经在目标形态里 → 什么都不做（原版这是为了「点当前档不把你带走」）；
+      //   (2) 正在生成或正在解析附件 → 提示并拒绝（切走会让用户以为任务没了）。
+      if (mode === get().mode) {
+        return
+      }
+      if (get().running) {
+        get().pushNotice('warn', '请等待当前任务完成后再切换模式')
+        return
+      }
       const target = agentIdForMode(mode, get().agents, get().activeAgentId)
       if (target === '') {
         set({ mode })
@@ -420,18 +549,37 @@ export const useStore = create<State>((set, get) => {
 
     setThinking(value) {
       set({ thinkingEnabled: value })
+      void window.guncat.settings.saveString(PREF_THINKING, value ? 'true' : 'false')
+    },
+
+    /**
+     * 按当前智能体重置深度思考开关（效率模式/轻简模式关、专家模式开）。
+     * 对齐原版 applyAgentThinkingDefault：只有在智能体**有**默认值时才动这个开关，
+     * 否则保留用户自己选的状态（不能因为切了个没默认值的智能体就把它抹掉）。
+     */
+    async applyAgentThinkingDefault() {
+      const agent = get().engines.find((a) => a.id === get().activeAgentId) ?? null
+      const def = defaultThinkingForAgent(agent)
+      if (def === null || def === get().thinkingEnabled) {
+        return
+      }
+      set({ thinkingEnabled: def })
+      await window.guncat.settings.saveString(PREF_THINKING, def ? 'true' : 'false')
     },
 
     setReasoningEffort(value) {
       set({ reasoningEffort: value })
-      // 按形态存到各自的键上（与原版 LS_KEY_REASONING_EFFORT / LS_KEY_INTERACTIVE_EFFORT 同名）：
-      // 切回另一种形态时能回到各自上次选的档位
-      const key = get().mode === 'interactive' ? PREF_EFFORT_INTERACTIVE : PREF_EFFORT_WORK
-      void window.guncat.settings.saveString(key, value)
+      void window.guncat.settings.saveString(PREF_EFFORT_WORK, value)
+    },
+
+    setInteractiveEffort(value) {
+      set({ interactiveEffort: value })
+      void window.guncat.settings.saveString(PREF_EFFORT_INTERACTIVE, value)
     },
 
     setWebSearch(value) {
       set({ webSearchEnabled: value })
+      void window.guncat.settings.saveString(PREF_WEB_SEARCH, value ? 'true' : 'false')
     },
 
     openSettings(open) {
@@ -452,22 +600,38 @@ export const useStore = create<State>((set, get) => {
     },
 
     async send(text, attachmentPaths) {
+      // 发送前的配置校验（对齐原版 ChatPage.ets:1676-1691）：没有 API Key 时
+      // 不只是弹一句提示，而是**顺手把设置面板打开** —— 用户下一步就是要填它。
+      const settings = get().settings
+      if (settings === null || settings.apiConfig === null || settings.apiConfig.apiKey === '') {
+        get().pushNotice('warn', '请先配置 API Key')
+        set({ settingsOpen: true })
+        return
+      }
       let activeId = get().activeId
       if (activeId === null) {
         const conv = await get().createConversation()
         activeId = conv.id
       }
       const mode = get().mode
+      // 思考参数按形态算：工作模式思考恒开（界面上不显示该开关）、交互模式的
+      // 「关闭(off)」档位同时把思考关掉并把下发强度退回 'low'。见 requestThinking。
+      const thinking = requestThinking(
+        mode,
+        get().thinkingEnabled,
+        get().reasoningEffort,
+        get().interactiveEffort
+      )
       const request = {
         conversationId: activeId,
         text,
         mode,
-        thinkingEnabled: get().thinkingEnabled,
+        thinkingEnabled: thinking.thinkingEnabled,
         webSearchEnabled: get().webSearchEnabled,
         // 附件只在聊天模式直传；工作/交互模式的素材入口是工作区（上传/拖拽）
         attachmentPaths: mode === 'chat' ? (attachmentPaths ?? []) : [],
         // 推理强度只对 Agent Loop 的两种形态有意义（原版也是这么分档的）
-        reasoningEffort: mode === 'chat' ? undefined : get().reasoningEffort
+        reasoningEffort: thinking.reasoningEffort
       }
       set({ running: true })
       try {
@@ -586,8 +750,12 @@ export const useStore = create<State>((set, get) => {
       if (activeId === null) {
         return
       }
-      await window.guncat.workspace.clear(activeId)
-      await get().loadWorkspace()
+      // 确认弹窗在主进程（原生对话框）；用户取消时 cleared=false，什么都不做
+      const result = await window.guncat.workspace.clear(activeId)
+      if (result.cleared) {
+        await get().loadWorkspace()
+        get().pushNotice('info', '工作区已清空')
+      }
     },
 
     async exportWorkspace() {

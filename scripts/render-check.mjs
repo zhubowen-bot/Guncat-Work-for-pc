@@ -621,6 +621,33 @@ check(
   '损坏的 diff meta 安全退回原始 IO（不让界面因渲染失败而空掉）',
   mod.renderToolRow('edit', '{}', '已写入', '{ 这不是 JSON').includes('io__pre')
 )
+check(
+  '工具行右端显示耗时（原版 formatDuration 口径：<1s 用 ms）',
+  plainRow.includes('tool__duration') && plainRow.includes('320ms')
+)
+check('工具名与参数摘要之间有「·」分隔符（原版 Row 里的 Text(\'·\')）', plainRow.includes('tool__dot'))
+check(
+  '展开区带 2px 细竖线（原版挂在行内文字起点下方）',
+  plainRow.includes('tool__detail')
+)
+const runningRow = mod.renderToolRowRunning()
+check(
+  '执行中的工具行：图标位是转圈、不给耗时、不给展开箭头',
+  runningRow.includes('spinner') &&
+    !runningRow.includes('tool__duration') &&
+    !runningRow.includes('tool__caret')
+)
+check('执行中的工具行仍然显示参数摘要', runningRow.includes('docs/a.md'))
+check(
+  '展开时的截断对齐原版 capText（参数 600 / 结果 800）',
+  (() => {
+    const longResult = 'x'.repeat(1200)
+    const html = mod.renderToolRow('read_file', '{"path":"a.md"}', longResult)
+    // 渲染出来的文本长度应当接近 800（含省略号），远小于 1200
+    const body = html.slice(html.indexOf('io__pre'))
+    return body.includes('…') && !body.includes('x'.repeat(900))
+  })()
+)
 
 // --- 任务统计卡 / 目标卡（审计 P2-10） ---
 //
@@ -713,6 +740,54 @@ check(
   ocrResult.includes('<table>') && ocrResult.includes('<th>季度</th>') && ocrResult.includes('复制 HTML')
 )
 check('结果显示用的是哪个模型（用户要知道用了哪套配置）', ocrResult.includes('glm-4v-flash'))
+
+// --- 开关与档位的默认值 / 下发值（对齐原版 ChatViewModel 的三条 getter） ---
+console.log('\n28. 开关与推理档位')
+check(
+  '工作模式档位缺省 high，只认 max/low（其余回 high）',
+  mod.workEffortFromPrefs(undefined) === 'high' &&
+    mod.workEffortFromPrefs({ guncat_reasoning_effort: 'max' }) === 'max' &&
+    mod.workEffortFromPrefs({ guncat_reasoning_effort: 'low' }) === 'low' &&
+    mod.workEffortFromPrefs({ guncat_reasoning_effort: '乱写' }) === 'high'
+)
+check(
+  '交互模式档位缺省是 low（首答速度优先），只认 off/low',
+  mod.interactiveEffortFromPrefs(undefined) === 'low' &&
+    mod.interactiveEffortFromPrefs({ guncat_interactive_effort: 'off' }) === 'off' &&
+    mod.interactiveEffortFromPrefs({ guncat_interactive_effort: 'low' }) === 'low' &&
+    mod.interactiveEffortFromPrefs({ guncat_interactive_effort: '乱写' }) === 'high'
+)
+check(
+  '智能体默认深度思考按名称匹配：效率/轻简模式关、专家模式开、其余不干预',
+  mod.defaultThinkingForAgent({ name: '效率模式' }) === false &&
+    mod.defaultThinkingForAgent({ name: '轻简模式' }) === false &&
+    mod.defaultThinkingForAgent({ name: '专家模式' }) === true &&
+    mod.defaultThinkingForAgent({ name: '别的' }) === null
+)
+const tInteractiveOff = mod.requestThinking('interactive', false, 'high', 'off')
+check(
+  '交互模式选「关闭」：思考关掉，且下发强度退回 low（部分服务端会校验取值合法性）',
+  tInteractiveOff.thinkingEnabled === false && tInteractiveOff.reasoningEffort === 'low'
+)
+const tInteractiveLow = mod.requestThinking('interactive', false, 'high', 'low')
+check(
+  '交互模式选「快速」：思考开着、强度 low（不受全局 thinking 开关影响）',
+  tInteractiveLow.thinkingEnabled === true && tInteractiveLow.reasoningEffort === 'low'
+)
+const tWork = mod.requestThinking('work', false, 'max', 'low')
+check(
+  '工作模式：思考**恒定按全局开关**、强度取工作档位（交互档位不干扰）',
+  tWork.thinkingEnabled === false && tWork.reasoningEffort === 'max'
+)
+const tChat = mod.requestThinking('chat', true, 'max', 'off')
+check(
+  '聊天模式：只带全局思考开关，不带强度（聊天协议没有强度概念）',
+  tChat.thinkingEnabled === true && tChat.reasoningEffort === undefined
+)
+check(
+  'isLoopMode 只把工作/交互算作 Agent Loop',
+  mod.isLoopMode('work') && mod.isLoopMode('interactive') && !mod.isLoopMode('chat')
+)
 
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {

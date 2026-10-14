@@ -334,7 +334,10 @@ export function MessageView({
         ) : null}
         <div className="bubble bubble--ai">
           <AssistantBody message={message} interactive={interactive} />
-          {text.trim() !== '' && showActions ? (
+          {/* 操作行只在**回答结束后**出现（原版 ChatBubbleView 的条件是
+              `!isStreaming && content !== '' && (!isWork || isLastAssistant)`）：
+              流式时给一排还没意义的按钮，既闪又容易误点。 */}
+          {!streaming && text.trim() !== '' && showActions ? (
             <MessageActions message={message} text={text} onEditToInput={onEditToInput} />
           ) : null}
         </div>

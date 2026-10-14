@@ -287,6 +287,11 @@ export interface ToolCallRecordDto {
   status: string
   startedAt: number
   finishedAt: number
+  /**
+   * 工具耗时（毫秒）。**负数表示还没跑完** —— 这是原版 `WorkStepFormat` 全链路的判据
+   * （决定图标位显示转圈还是类别图标、右侧显示耗时还是「失败」、要不要给展开箭头）。
+   */
+  durationMs: number
   diff: string
 }
 

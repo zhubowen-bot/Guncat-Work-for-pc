@@ -22,7 +22,7 @@ fs.writeFileSync(
 export { SessionManager } from '@main/session/SessionManager'
 export { collectFileArgs } from '@main/intake'
 export { resolveTranscriptionUrl, loadAsrConfig, transcribeAudio } from '@main/asr'
-export { __invoke, __channels, __events, __calls, __setOpenDialog, __reset } from 'electron'
+export { __invoke, __channels, __events, __calls, __setOpenDialog, __setMessageBox, __reset } from 'electron'
 export { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 export { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
 export { sanitizeTableHtml } from '@main/sanitizeHtml'
@@ -926,6 +926,59 @@ await inv('settings:saveString', 'table_ocr_provider', currentModel)
 check(
   '表格提取记住的模型选择能持久化（原版 TableOcrPage 的 LS_KEY_TABLE_OCR_PROVIDER）',
   (await inv('settings:load')).prefs?.['table_ocr_provider'] === currentModel
+)
+
+// --- 清空工作区的二次确认（原版 ChatViewModel.clearWorkspace 的 promptAction.showDialog） ---
+const convClear = await inv('conversations:create', agents[0].id, 'work')
+const clearRoot = session.workspaceRoot(convClear.id)
+fs.mkdirSync(clearRoot, { recursive: true })
+fs.writeFileSync(path.join(clearRoot, '待清空.txt'), 'x', 'utf8')
+mod.__setMessageBox(0) // 用户点了「取消」
+const cancelClear = await inv('workspace:clear', convClear.id)
+check(
+  '清空工作区：用户取消时不删任何东西（原版是带确认的破坏性操作）',
+  cancelClear.cleared === false && fs.existsSync(path.join(clearRoot, '待清空.txt')),
+  JSON.stringify(cancelClear)
+)
+check(
+  '确认框的按钮文案与原版一致（取消 / 清空）',
+  (mod.__calls() ?? []).some(
+    (c) => c.fn === 'dialog.showMessageBox' && JSON.stringify(c.args).includes('清空')
+  )
+)
+mod.__setMessageBox(1) // 用户点了「清空」
+const doClear = await inv('workspace:clear', convClear.id)
+check(
+  '确认后才真的清空（目录被重建、文件消失）',
+  doClear.cleared === true && fs.existsSync(clearRoot) && !fs.existsSync(path.join(clearRoot, '待清空.txt')),
+  JSON.stringify(doClear)
+)
+mod.__setMessageBox(null)
+
+// --- 开关类偏好的持久化（原版：联网搜索默认**开**，深度思考默认关，都落盘） ---
+await inv('settings:saveString', 'guncat_web_search_enabled', 'false')
+await inv('settings:saveString', 'guncat_thinking_enabled', 'true')
+await inv('settings:saveString', 'guncat_reasoning_effort', 'max')
+await inv('settings:saveString', 'guncat_interactive_effort', 'off')
+await inv('settings:saveString', 'guncat_current_agent', 'interactive')
+await inv('settings:saveString', 'guncat_current_conv', 'conv-x')
+const prefsDto = (await inv('settings:load')).prefs ?? {}
+check(
+  '开关与档位偏好能往返（此前深度思考/联网搜索只存在内存里，重启即丢）',
+  prefsDto['guncat_web_search_enabled'] === 'false' &&
+    prefsDto['guncat_thinking_enabled'] === 'true' &&
+    prefsDto['guncat_reasoning_effort'] === 'max' &&
+    prefsDto['guncat_interactive_effort'] === 'off',
+  JSON.stringify({
+    web: prefsDto['guncat_web_search_enabled'],
+    think: prefsDto['guncat_thinking_enabled'],
+    work: prefsDto['guncat_reasoning_effort'],
+    act: prefsDto['guncat_interactive_effort']
+  })
+)
+check(
+  '当前智能体 / 当前会话也落盘（原版每次切换都会写）',
+  prefsDto['guncat_current_agent'] === 'interactive' && prefsDto['guncat_current_conv'] === 'conv-x'
 )
 
 // --- 产物汇总（审计 P2-8）：一轮工作产出了哪些文件 ---

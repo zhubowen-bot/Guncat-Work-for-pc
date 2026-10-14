@@ -71,7 +71,8 @@ export interface GuncatApi {
     treeText(conversationId: string): Promise<string>
     read(conversationId: string, path: string): Promise<{ text: string; truncated: boolean }>
     remove(conversationId: string, path: string): Promise<void>
-    clear(conversationId: string): Promise<void>
+    /** 清空工作区；主进程会先弹原生确认框，用户取消时返回 cleared:false */
+    clear(conversationId: string): Promise<{ cleared: boolean }>
     openInFolder(conversationId: string): Promise<void>
     exportZip(conversationId: string): Promise<{ saved: boolean; path?: string }>
   }

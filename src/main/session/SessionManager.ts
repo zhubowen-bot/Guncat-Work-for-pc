@@ -363,7 +363,14 @@ export class SessionManager {
     Constants.LS_KEY_REASONING_EFFORT,
     Constants.LS_KEY_INTERACTIVE_EFFORT,
     // 表格提取记住的模型选择（原版 TableOcrPage 的 LS_KEY_TABLE_OCR_PROVIDER）
-    Constants.LS_KEY_TABLE_OCR_PROVIDER
+    Constants.LS_KEY_TABLE_OCR_PROVIDER,
+    // 深度思考 / 联网搜索开关：渲染层的开关直接落盘，重启后要能读回来。
+    // 此前这两个开关只存在于内存里，重启就回到缺省 —— 而原版的缺省是「联网搜索开」。
+    Constants.LS_KEY_THINKING_ENABLED,
+    Constants.LS_KEY_WEB_SEARCH_ENABLED,
+    // 当前智能体 / 当前会话：原版每次切换都会落盘（其他路径只读不依赖，但存档不该停在过期的对象上）
+    Constants.LS_KEY_CURRENT_AGENT_ID,
+    Constants.LS_KEY_CURRENT_CONV_ID
   ]
 
   private async loadStringPrefs(): Promise<Record<string, string>> {
@@ -1065,6 +1072,9 @@ export class SessionManager {
           if (handle.abort.aborted) {
             break
           }
+          // 真实计时：工具行右端要显示耗时（原版 WorkStepFormat.formatDuration 的口径），
+          // 之前这里写死 0，界面上的耗时永远是「0ms」
+          const toolStartedAt: number = Date.now()
           const outcome = await WorkToolRunner.execute(
             ctx as never,
             conv.id,
@@ -1074,7 +1084,7 @@ export class SessionManager {
           )
           call.result = outcome.ok ? outcome.output : outcome.output
           call.isError = !outcome.ok
-          call.durationMs = 0
+          call.durationMs = Date.now() - toolStartedAt
           call.timeout = outcome.timeout
           call.cancelled = outcome.cancelled
           call.schemaError = outcome.schemaError
@@ -1514,6 +1524,8 @@ export class SessionManager {
       status: rec.isError ? 'error' : rec.durationMs < 0 ? 'running' : 'ok',
       startedAt: 0,
       finishedAt: 0,
+      // 真实耗时：工具行的右端、图标位的转圈与否都靠它判断（原版同口径）
+      durationMs: rec.durationMs,
       diff: rec.meta
     }
   }

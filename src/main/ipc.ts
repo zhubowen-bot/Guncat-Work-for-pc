@@ -169,9 +169,27 @@ export function registerIpcHandlers(session: SessionManager): void {
   })
   ipcMain.handle(INVOKE.workspaceClear, async (_e, conversationId: string) => {
     const root: string = session.workspaceRoot(conversationId)
+    // 清空是不可恢复的破坏性操作，必须先确认（对齐原版 ChatViewModel.clearWorkspace
+    // 的 promptAction.showDialog：标题/正文/按钮文案逐字一致）。
+    // 放在主进程做而不是渲染层 window.confirm：那是 Chromium 的简陋提示框，
+    // 与应用自己的弹层观感差距很大，也不受深浅色主题控制。
+    const window = getMainWindow()
+    const answer = await dialog.showMessageBox(window ?? undefined!, {
+      type: 'warning',
+      title: '清空工作区',
+      message: '将删除工作区中的全部文件, 该操作不可恢复。确定继续吗?',
+      buttons: ['取消', '清空'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    })
+    if (answer.response !== 1) {
+      return { cleared: false }
+    }
     fs.rmSync(root, { recursive: true, force: true })
     fs.mkdirSync(root, { recursive: true })
     send({ type: 'workspace:changed', conversationId })
+    return { cleared: true }
   })
   ipcMain.handle(INVOKE.workspaceOpenInFolder, async (_e, conversationId: string) => {
     const root: string = session.workspaceRoot(conversationId)

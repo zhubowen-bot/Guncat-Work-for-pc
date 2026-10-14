@@ -1056,37 +1056,128 @@ select {
   font-size: 12.5px;
 }
 
+/* ===== Markdown 正文配色（逐项对齐原版 RichTextView.initializeController 的 controller 设置） =====
+   原版是给三方库下的一整套指令，这里逐条翻译成 CSS：
+     标题 1-6 统一 brand（库默认红色）、引用块 brand 边 + brand_light 底 + 圆角 12、
+     超链接 brand 且带下划线、无序列表点与待办勾选 brand、行内代码 brand 字色 +
+     surface_secondary 底、分割线 border、表格表头 brand_light 底 + brand 字色 +
+     奇偶行 surface_secondary/surface 交错 + 内外边框 + 圆角 14。 */
+
+.msg__body h1,
+.msg__body h2,
+.msg__body h3,
+.msg__body h4,
+.msg__body h5,
+.msg__body h6 {
+  color: var(--accent);
+  margin: 14px 0 8px;
+  line-height: 1.4;
+}
+
+.msg__body h1 {
+  font-size: 19px;
+}
+
+.msg__body h2 {
+  font-size: 17px;
+}
+
+.msg__body h3 {
+  font-size: 15.5px;
+}
+
+.msg__body h4,
+.msg__body h5,
+.msg__body h6 {
+  font-size: 14px;
+}
+
+.msg__body blockquote {
+  margin: 10px 0;
+  padding: 10px 12px 10px 14px;
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.msg__body blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+.msg__body a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.msg__body ul > li::marker,
+.msg__body ol > li::marker {
+  color: var(--accent);
+}
+
+/* GFM 待办清单的勾选框：库里的 setTodoSelectedColor(brand) */
+.msg__body input[type='checkbox'] {
+  accent-color: var(--accent);
+  margin-right: 6px;
+}
+
+.msg__body hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 14px 0;
+}
+
 .msg__body code {
   font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
   font-size: 12.5px;
 }
 
 .msg__body :not(pre) > code {
+  color: var(--accent);
   background: var(--bg-sunken);
   padding: 1px 5px;
   border-radius: 4px;
 }
 
+/* 表格：底色 surface_secondary、奇偶行 surface 交错、表头 brand_light + brand、圆角 14 */
 .msg__body table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
   margin: 10px 0;
   font-size: 13px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
 }
 
 .msg__body th,
 .msg__body td {
-  border: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   padding: 5px 9px;
   text-align: left;
+  color: var(--text);
+}
+
+.msg__body th:last-child,
+.msg__body td:last-child {
+  border-right: 0;
+}
+
+.msg__body tr:last-child th,
+.msg__body tr:last-child td {
+  border-bottom: 0;
 }
 
 .msg__body th {
-  background: var(--bg-sunken);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
-.msg__body a {
-  color: var(--accent);
+.msg__body tbody tr:nth-child(even) {
+  background: var(--bg-elevated);
 }
 
 /* ===== 代码块（对齐原版 RichTextView 的代码块主题与语法高亮配色） ===== */
@@ -1496,8 +1587,7 @@ select {
   flex: none;
 }
 
-.tool__args {
-  flex: 1;
+.tool__args {  flex: 1;
   min-width: 0;
   color: var(--text-faint);
   font-family: 'Cascadia Code', Consolas, monospace;
@@ -1507,8 +1597,22 @@ select {
   text-overflow: ellipsis;
 }
 
+/* 工具行右侧的「·」分隔符（原版 Row 里的 Text('·')） */
+.tool__dot {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+/* 工具行右侧耗时（原版只在 durationMs>=0 时显示；错误时换成「失败」） */
+.tool__duration {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
 .tool__status {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-faint);
   flex: none;
 }
@@ -1526,15 +1630,21 @@ select {
   align-items: center;
   color: var(--text-faint);
   flex: none;
-  transform: rotate(-90deg);
 }
 
-.tool__head:has(+ .tool__body) .tool__caret {
-  transform: none;
+.tool__caret[data-open='true'] {
+  transform: rotate(180deg);
 }
 
+/* 展开区：外层缩进到行内文字起点（图标约 20 + 16 边距），
+   内层挂一条 2px 细竖线 —— 都逐字对齐原版 ChatBubbleView.buildToolSteps */
 .tool__body {
-  padding: 6px 4px 8px 24px;
+  padding: 0 16px 6px 36px;
+}
+
+.tool__detail {
+  padding: 6px 0 6px 10px;
+  border-left: 2px solid var(--border);
 }
 
 .io {

@@ -244,9 +244,28 @@ export const dialog = {
   async showSaveDialog(): Promise<{ canceled: boolean; filePath?: string }> {
     return { canceled: true }
   },
+  /**
+   * 确认类对话框（清空工作区等）。默认返回「取消」（response 0）——
+   * 验证脚本不该在没人点的情况下把工作区删掉。
+   */
+  async showMessageBox(
+    _window?: unknown,
+    options?: { buttons?: string[] }
+  ): Promise<{ response: number; checkboxChecked: boolean }> {
+    calls.push({ fn: 'dialog.showMessageBox', args: [options?.buttons ?? []] })
+    return { response: nextMessageBox ?? 0, checkboxChecked: false }
+  },
   showErrorBox(title: string, content: string): void {
     calls.push({ fn: 'dialog.showErrorBox', args: [title, content] })
   }
+}
+
+/** 下一次 dialog.showMessageBox 的返回值（null 表示默认「取消」） */
+let nextMessageBox: number | null = null
+
+/** 让验证脚本模拟「用户在确认框里点了第 N 个按钮」 */
+export function __setMessageBox(response: number | null): void {
+  nextMessageBox = response
 }
 
 /** 下一次 dialog.showOpenDialog 的返回值（null 表示默认「用户取消」） */

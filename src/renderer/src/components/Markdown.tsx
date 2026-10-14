@@ -15,6 +15,7 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
+import { sanitizeMarkdownForRender } from '@core/common/MarkdownSanitizer'
 import { CodeBlock, MermaidBlock } from './CodeBlock'
 
 interface Props {
@@ -63,6 +64,14 @@ const COMPONENTS: Components = {
 }
 
 export const Markdown = memo(function Markdown({ text }: Props) {
+  // 渲染前做表格结构规范化。
+  //
+  // `core/common/MarkdownSanitizer` 是原版为 @luvi/lv-markdown-in 的表格闪退写的防御
+  // （表头全空、某行缺单元格这类退化表格会让库内部抛 TypeError 并闪退），
+  // 桌面端用 react-markdown 不会闪退，但同一个模块**在端口里此前零调用点** ——
+  // 而它做的事情对这里同样有意义：结构合法的表格被补齐到统一形态，
+  // 修不了的退化表格降级成纯文本（内容不丢，不会被渲染成一张错位的表）。
+  const prepared = sanitizeMarkdownForRender(text)
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -70,7 +79,7 @@ export const Markdown = memo(function Markdown({ text }: Props) {
       remarkRehypeOptions={REHYPE_OPTIONS}
       components={COMPONENTS}
     >
-      {text}
+      {prepared}
     </ReactMarkdown>
   )
 })

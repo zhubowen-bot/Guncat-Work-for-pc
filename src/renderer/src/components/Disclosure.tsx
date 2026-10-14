@@ -31,6 +31,8 @@ import {
   toolDisplayName,
   toolIconKind,
   toolStatus,
+  capText,
+  formatDuration,
   type ToolIconKind
 } from '../turns'
 
@@ -144,15 +146,23 @@ export function ToolCallRow({
   const useTodo = call.name === 'todo_write' && status.state !== 'error' && call.result !== ''
   const diff = useTodo ? null : parseFileDiff(call.diff)
   const todos = useTodo ? parseTodoRows(call.result) : []
+  // 执行中用转圈代替图标，并且不给耗时与展开箭头（原版以「durationMs 是否为负」为唯一判据）
+  const finished = call.durationMs >= 0
 
   return (
     <div className="tool" data-state={status.state}>
       <button className="tool__head" onClick={() => setOpen((v) => !v)}>
         <span className="tool__icon">
-          <IconForKind kind={toolIconKind(call.name)} />
+          {finished ? <IconForKind kind={toolIconKind(call.name)} /> : <span className="spinner" />}
         </span>
         <span className="tool__name">{toolDisplayName(call.name)}</span>
-        {summary !== '' ? <span className="tool__args">{summary}</span> : null}
+        {/* 原版这里是「·」分隔符 + 参数摘要；摘要可能为空，那时连分隔符一起省掉 */}
+        {summary !== '' ? (
+          <>
+            <span className="tool__dot">·</span>
+            <span className="tool__args">{summary}</span>
+          </>
+        ) : null}
         {diff !== null ? (
           <span className="tool__counts">
             <span className="diff-stat__add">+{diff.adds}</span>
@@ -164,14 +174,19 @@ export function ToolCallRow({
             {todos.filter((t) => t.status === 'completed').length}/{todos.length}
           </span>
         ) : null}
-        {status.state !== 'ok' ? (
-          <span className="tool__status" data-state={status.state}>
-            {status.label}
+        {/* 右端：错误显示「失败」，否则显示耗时；执行中两者都不显示 */}
+        {status.state === 'error' ? (
+          <span className="tool__status" data-state="error">
+            失败
+          </span>
+        ) : finished ? (
+          <span className="tool__duration">{formatDuration(call.durationMs)}</span>
+        ) : null}
+        {finished ? (
+          <span className="tool__caret" data-open={open}>
+            <IconChevronDown size={12} />
           </span>
         ) : null}
-        <span className="tool__caret">
-          <IconChevronDown size={14} />
-        </span>
       </button>
       {open ? (
         <div className="tool__body">
@@ -180,26 +195,29 @@ export function ToolCallRow({
           ) : todos.length > 0 ? (
             <TodoChecklist rows={todos} />
           ) : (
-            <>
+            /* 未命中结构化卡片时退回原始 IO。截断口径逐字对齐原版 WorkStepFormat.capText
+               （参数 600 / 结果 800）—— 截太多会把长参数里最关键的尾部丢掉。 */
+            <div className="tool__detail">
               <div className="io">
                 <div className="io__label">参数</div>
-                <pre className="io__pre">{call.argsJson !== '' ? call.argsJson : '(无)'}</pre>
+                <pre className="io__pre">{capText(call.argsJson !== '' ? call.argsJson : '(无)', 600)}</pre>
               </div>
               <div className="io">
                 <div className="io__label" data-error={status.state === 'error'}>
                   {status.state === 'error' ? '错误' : '结果'}
                 </div>
-                <pre className="io__pre">
-                  {call.result !== ''
-                    ? call.result.length > 6000
-                      ? `${call.result.slice(0, 6000)}\n…(已截断)`
-                      : call.result
-                    : status.state === 'running'
-                      ? '(执行中…)'
-                      : '(尚无输出)'}
+                <pre className="io__pre" data-error={status.state === 'error'}>
+                  {capText(
+                    call.result === ''
+                      ? status.state === 'running'
+                        ? '(执行中...)'
+                        : '(尚无输出)'
+                      : call.result,
+                    800
+                  )}
                 </pre>
               </div>
-            </>
+            </div>
           )}
         </div>
       ) : null}

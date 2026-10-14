@@ -49,6 +49,8 @@ export default function App() {
   const thinkingEnabled = useStore((s) => s.thinkingEnabled)
   const reasoningEffort = useStore((s) => s.reasoningEffort)
   const setReasoningEffort = useStore((s) => s.setReasoningEffort)
+  const interactiveEffort = useStore((s) => s.interactiveEffort)
+  const setInteractiveEffort = useStore((s) => s.setInteractiveEffort)
   const webSearchEnabled = useStore((s) => s.webSearchEnabled)
   const setThinking = useStore((s) => s.setThinking)
   const setWebSearch = useStore((s) => s.setWebSearch)
@@ -229,31 +231,36 @@ export default function App() {
             </small>
           </div>
 
-          {/* 推理强度（对齐原版 ChatPage 输入区「模型」胶囊里的能力预设）：
-              工作模式 极高/均衡/快速，交互模式 均衡/快速/关闭。
-              此前这个值被写死在主进程里（high/none），工作模式永远拿不到 Max 档。 */}
+          {/* 能力预设（推理强度）：对齐原版 ChatPage 输入区「模型」胶囊弹层下半部分。
+              档位按形态分叉，且是**两个独立字段、两个偏好键**：
+                工作模式 极高(max) / 均衡(high) / 快速(low)，缺省 high；
+                交互模式 均衡(high) / 快速(low) / 关闭(off)，缺省 **low**（首答速度优先）。
+              此前这个值被写死在主进程里，工作模式永远拿不到 Max 档；
+              交互模式的「关闭」也被错写成了 'none'。 */}
           {mode !== 'chat' ? (
             <label className="topbar__effort" title="推理强度（越高越慢，长程复杂任务建议拉满）">
               推理
-              <select
-                value={reasoningEffort}
-                onChange={(e) => setReasoningEffort(e.target.value)}
-                disabled={running}
-              >
-                {mode === 'interactive' ? (
-                  <>
-                    <option value="high">均衡</option>
-                    <option value="low">快速</option>
-                    <option value="none">关闭</option>
-                  </>
-                ) : (
-                  <>
-                    <option value="max">极高</option>
-                    <option value="high">均衡</option>
-                    <option value="low">快速</option>
-                  </>
-                )}
-              </select>
+              {mode === 'interactive' ? (
+                <select
+                  value={interactiveEffort}
+                  onChange={(e) => setInteractiveEffort(e.target.value)}
+                  disabled={running}
+                >
+                  <option value="high">均衡</option>
+                  <option value="low">快速</option>
+                  <option value="off">关闭</option>
+                </select>
+              ) : (
+                <select
+                  value={reasoningEffort}
+                  onChange={(e) => setReasoningEffort(e.target.value)}
+                  disabled={running}
+                >
+                  <option value="max">极高</option>
+                  <option value="high">均衡</option>
+                  <option value="low">快速</option>
+                </select>
+              )}
             </label>
           ) : null}
           {/* 模型胶囊（对齐原版 ChatPage 输入区左下角那颗）：直接在这儿换配置，
@@ -282,15 +289,21 @@ export default function App() {
             <IconTable size={14} />
             表格提取
           </button>
-          <button
-            className="toggle"
-            data-on={thinkingEnabled}
-            onClick={() => setThinking(!thinkingEnabled)}
-            title="深度思考（按各协议显式控制）"
-          >
-            <IconBrain size={14} />
-            深度思考
-          </button>
+          {/* 深度思考开关：**只在聊天模式给**。
+              原版 ChatPage 在 agentLoopMode（工作/交互）下不渲染它 —— 那两种形态的思考由
+              「智能体的默认值（效率/轻简模式默认关、专家模式默认开）」与交互模式的
+              「关闭(Off)」档位决定，再多一个开关只会和档位打架。 */}
+          {mode === 'chat' ? (
+            <button
+              className="toggle"
+              data-on={thinkingEnabled}
+              onClick={() => setThinking(!thinkingEnabled)}
+              title="深度思考（按各协议显式控制）"
+            >
+              <IconBrain size={14} />
+              深度思考
+            </button>
+          ) : null}
           <button
             className="toggle"
             data-on={webSearchEnabled}

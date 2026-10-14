@@ -96,7 +96,7 @@ const api = {
       ipcRenderer.invoke(INVOKE.workspaceRead, conversationId, path),
     remove: (conversationId: string, path: string): Promise<void> =>
       ipcRenderer.invoke(INVOKE.workspaceDelete, conversationId, path),
-    clear: (conversationId: string): Promise<void> =>
+    clear: (conversationId: string): Promise<{ cleared: boolean }> =>
       ipcRenderer.invoke(INVOKE.workspaceClear, conversationId),
     openInFolder: (conversationId: string): Promise<void> =>
       ipcRenderer.invoke(INVOKE.workspaceOpenInFolder, conversationId),

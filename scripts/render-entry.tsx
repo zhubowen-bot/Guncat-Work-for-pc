@@ -74,6 +74,19 @@ export {
   modeForAgentId
 }
 
+/**
+ * 开关与档位的纯函数（对应原版 ChatViewModel 的 defaultThinkingForAgent /
+ * loopEffortForRequest / loopThinkingEnabled）—— 这几条是「默认值写错就悄悄变慢
+ * 或悄悄不思考」的地方，单独导出来钉住。
+ */
+export {
+  defaultThinkingForAgent,
+  interactiveEffortFromPrefs,
+  isLoopMode,
+  requestThinking,
+  workEffortFromPrefs
+} from '@renderer/store'
+
 /** 回合归组与工具行展示的纯函数（对应原版 buildWorkTimeline / WorkStepFormat） */
 export {
   formatDuration,
@@ -150,7 +163,8 @@ export function renderToolRow(
   name: string,
   argsJson: string,
   result: string,
-  diff = ''
+  diff = '',
+  durationMs = 320
 ): string {
   return renderToStaticMarkup(
     createElement(ToolCallRow, {
@@ -160,10 +174,30 @@ export function renderToolRow(
         name,
         argsJson,
         result,
-        status: 'ok',
+        status: durationMs < 0 ? 'running' : 'ok',
         startedAt: 0,
-        finishedAt: 1,
+        finishedAt: 0,
+        durationMs,
         diff
+      }
+    })
+  )
+}
+
+/** 执行中的工具行（转圈 + 不给耗时与展开箭头） */
+export function renderToolRowRunning(): string {
+  return renderToStaticMarkup(
+    createElement(ToolCallRow, {
+      call: {
+        id: 'call-running',
+        name: 'read_file',
+        argsJson: '{"path":"docs/a.md"}',
+        result: '',
+        status: 'running',
+        startedAt: 0,
+        finishedAt: 0,
+        durationMs: -1,
+        diff: ''
       }
     })
   )
