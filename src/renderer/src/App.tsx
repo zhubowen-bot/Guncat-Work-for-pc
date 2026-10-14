@@ -11,6 +11,7 @@ import { MODE_HINT, agentById } from './conversations'
 import { AgentGlyph } from './components/AgentGlyph'
 import { WorkArtifactsCard } from './components/WorkArtifactsCard'
 import { TableOcrDialog } from './components/TableOcrDialog'
+import { ImageLightbox } from './components/ImageLightbox'
 import { useWorkspacePreview } from './components/WorkspacePanel'
 import { useSpeech, speechTextOf } from './speech/speechStore'
 import { IconBrain, IconClose, IconGlobe, IconTable } from './icons'
@@ -374,6 +375,7 @@ export default function App() {
 
       <SettingsDialog />
       <TableOcrDialog />
+      <ImageLightbox />
       <SpeechBar />
       <Notice />
     </div>

@@ -44,6 +44,7 @@ import {
 import { AgentItem, ConvItem, Sidebar } from '@renderer/components/Sidebar'
 import { GroupedTurn, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
+import { safeUrlTransform } from '@renderer/components/Markdown'
 import { Composer } from '@renderer/components/Composer'
 import {
   TaskGoalCard,
@@ -52,6 +53,7 @@ import {
   formatTaskDuration,
   workspaceFileIcon
 } from '@renderer/components/WorkspacePanel'
+import { LightboxView } from '@renderer/components/ImageLightbox'
 import { TableOcrPanel } from '@renderer/components/TableOcrDialog'
 import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
 import { marqueeText } from '@renderer/components/MessageView'
@@ -59,6 +61,12 @@ import type { MessageDto } from '@ipc/contract'
 
 /** 导出文件名推导 —— 纯函数，可直接断言 */
 export { docxFileName }
+
+/**
+ * 链接/图片地址的放行规则。react-markdown 默认会把 `data:` 剥掉，
+ * 而桌面端的图片正是 data URL —— 这条规则错了，正文里的图会**静默消失**。
+ */
+export { safeUrlTransform }
 
 /** 会话列表与引擎选择的纯函数（对应原版 DswSidebar.getConvTitle / selectAgent） */
 export {
@@ -249,6 +257,19 @@ export function renderDurations(): string[] {
 }
 
 /**
+ * 图片灯箱（原版 ImageLightbox.ets）。两张对照：有 url 时渲染遮罩 + 大图 + 关闭钮，
+ * 没有 url 时整块不渲染。
+ */
+export function renderLightbox(open = true): string {
+  return renderToStaticMarkup(
+    createElement(LightboxView, {
+      url: open ? 'data:image/png;base64,iVBORw0KGgo=' : '',
+      onClose: () => {}
+    })
+  )
+}
+
+/**
  * 表格提取面板（原版唯一不依赖对话的独立工具页）。
  * 直接渲染纯展示层：弹层由 store 控制，而 SSR 的 server snapshot 取的是 store
  * **初始状态**（zustand v5 的行为），没法靠 setState 打开，所以这里绕过 store 测面板本身。
@@ -371,6 +392,12 @@ export function renderMarkdown(): string {
   return renderToStaticMarkup(
     createElement(Markdown, { text: '正文有一处脚注[^1]。\n\n[^1]: 这是脚注内容。\n' })
   )
+}
+
+/** 正文里的图片（可点放大）。单独一张样例，避免动上面那份「三重重能力」样例。 */
+export function renderMarkdownImage(): string {
+  const text = ['看看这张图：', '', '![季度趋势](data:image/png;base64,iVBORw0KGgo=)', ''].join('\n')
+  return renderToStaticMarkup(createElement(Markdown, { text }))
 }
 
 /**

@@ -789,6 +789,30 @@ check(
   mod.isLoopMode('work') && mod.isLoopMode('interactive') && !mod.isLoopMode('chat')
 )
 
+// --- 图片灯箱 + 正文图片可点（原版 ImageLightbox 此前整条链路缺失） ---
+console.log('\n29. 图片灯箱')
+const lightboxOpen = mod.renderLightbox(true)
+check('有图时渲染全屏遮罩', lightboxOpen.includes('lightbox') && lightboxOpen.includes('lightbox__img'))
+check('大图带 Contain 规格与圆角（靠 class，样式在 CSS 里）', lightboxOpen.includes('data:image/png;base64'))
+check('右上角有关闭钮', lightboxOpen.includes('lightbox__close'))
+check('没有图时整块不渲染', mod.renderLightbox(false).length === 0)
+check(
+  '地址放行规则：data:image 放行、javascript: 与 data:text/html 一律拒绝',
+  mod.safeUrlTransform('data:image/png;base64,iVBORw0KGgo=') !== '' &&
+    mod.safeUrlTransform('https://example.com/a.png') !== '' &&
+    mod.safeUrlTransform('docs/a.png') !== '' &&
+    mod.safeUrlTransform('javascript:alert(1)') === '' &&
+    mod.safeUrlTransform('data:text/html,<script>alert(1)</script>') === '',
+  `js=${mod.safeUrlTransform('javascript:alert(1)') || '(拒绝)'}`
+)
+
+const mdWithImage = mod.renderMarkdownImage()
+check(
+  '正文里的图片可点放大（原版 RichTextView 的 onImageTap → 灯箱）',
+  mdWithImage.includes('msg__img') && mdWithImage.includes('季度趋势'),
+  mdWithImage.slice(mdWithImage.indexOf('<img'), mdWithImage.indexOf('<img') + 80)
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

@@ -16,6 +16,7 @@ import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import { sanitizeMarkdownForRender } from '@core/common/MarkdownSanitizer'
+import { useStore } from '../store'
 import { CodeBlock, MermaidBlock } from './CodeBlock'
 
 interface Props {
@@ -33,6 +34,32 @@ export const REHYPE_OPTIONS = {
 export function fenceLanguage(className: unknown): string {
   const match = /language-([^\s]+)/.exec(typeof className === 'string' ? className : '')
   return match === null ? '' : match[1]
+}
+
+/**
+ * 链接与图片地址的放行规则。
+ *
+ * react-markdown 默认的 urlTransform 只放 http(s)/mailto 之类，会把 `data:` 整个剥掉 ——
+ * 而桌面端的图片正是 data URL（附件直传、交互模式内嵌图、SVG 预览都是）。
+ * 直接返回 url 又等于关掉防护（`javascript:` 会真的可点）。所以这里用白名单：
+ *   · http / https / mailto / app:（自定义协议）
+ *   · data:image/*（只放图片，`data:text/html` 这类不放）
+ *   · 没有协议头的相对路径（工作区资源）
+ * 其余一律返回空串，链接不可点、图片不渲染。
+ */
+export function safeUrlTransform(url: string): string {
+  const trimmed = url.trim()
+  if (trimmed === '') {
+    return ''
+  }
+  if (/^(https?:|mailto:|app:|data:image\/)/i.test(trimmed)) {
+    return trimmed
+  }
+  // 没有协议头 → 相对路径，放行
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+    return trimmed
+  }
+  return ''
 }
 
 const COMPONENTS: Components = {
@@ -60,6 +87,24 @@ const COMPONENTS: Components = {
         {children}
       </code>
     )
+  },
+  // 正文里的图片点击放大（原版 RichTextView 的 onImageTap → ChatPage 打开灯箱）。
+  // 直接用 store 而不是层层传回调：正文渲染在气泡、产物卡、预览弹层里都可能出现，
+  // 穿透 props 会把这条链路弄得很脆。
+  img({ src, alt }) {
+    const url = typeof src === 'string' ? src : ''
+    if (url === '') {
+      return null
+    }
+    return (
+      <img
+        className="msg__img"
+        src={url}
+        alt={alt ?? ''}
+        title="点击查看大图"
+        onClick={() => useStore.getState().openLightbox(url)}
+      />
+    )
   }
 }
 
@@ -77,6 +122,7 @@ export const Markdown = memo(function Markdown({ text }: Props) {
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex]}
       remarkRehypeOptions={REHYPE_OPTIONS}
+      urlTransform={safeUrlTransform}
       components={COMPONENTS}
     >
       {prepared}

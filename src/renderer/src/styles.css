@@ -1180,6 +1180,59 @@ select {
   background: var(--bg-elevated);
 }
 
+/* ===== 图片灯箱（逐字对齐原版 ImageLightbox.ets） =====
+   全屏 #CC000000 黑遮罩、图片 Contain 且最大 90%×80%、圆角 24、黑色底 + 大投影，
+   右上角一颗 40×40 半透明白底（#FFFFFFD9）的关闭钮。 */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: #cc000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightbox__img {
+  max-width: 90%;
+  max-height: 80%;
+  object-fit: contain;
+  border-radius: 24px;
+  background: #000;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  cursor: default;
+}
+
+.lightbox__close {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 半透明白底 + 深色图标：在任何画面上都看得清 */
+  background: #ffffffd9;
+  color: #1b1b1c;
+}
+
+.lightbox__close:hover {
+  background: #fff;
+}
+
+/* 正文里的图片：可点放大 */
+.msg__img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  cursor: zoom-in;
+}
+
+.attachment__img {
+  cursor: zoom-in;
+}
+
 /* ===== 代码块（对齐原版 RichTextView 的代码块主题与语法高亮配色） ===== */
 
 .code-block {

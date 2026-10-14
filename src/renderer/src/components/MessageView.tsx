@@ -254,6 +254,7 @@ export function MessageView({
   const { body, text } = useBody(message)
   const isUser = message.role === 'user'
   const pushNotice = useStore((s) => s.pushNotice)
+  const openLightbox = useStore((s) => s.openLightbox)
   // 原版 ChatBubbleView：思考条在「流式中」或「已有思考内容」时出现；
   // 关掉深度思考时不挂空的思考条（否则那条永远不填内容，看起来像卡住）。
   const thinkingExpected = useStore((s) => s.thinkingEnabled)
@@ -267,8 +268,19 @@ export function MessageView({
             <div className="attachments">
               {message.attachments.map((att) => (
                 <span className="attachment" key={att.id} title={att.name}>
-                  {att.type === 'image' && att.thumbnail !== '' ? (
-                    <img className="attachment__img" src={att.thumbnail} alt={att.name} />
+                  {att.type === 'image' && (att.dataUrl !== '' || att.thumbnail !== '') ? (
+                    /* 点开看大图：用**原图 dataUrl** 而不是缩略图
+                       （缩略图只有 68×68，放大后是一片糊）。原版 ChatBubbleView 也是
+                       `onImageTap(dataUrl !== '' ? dataUrl : thumbnail)`。 */
+                    <img
+                      className="attachment__img"
+                      src={att.thumbnail !== '' ? att.thumbnail : att.dataUrl}
+                      alt={att.name}
+                      title="点击查看大图"
+                      onClick={() =>
+                        openLightbox(att.dataUrl !== '' ? att.dataUrl : att.thumbnail)
+                      }
+                    />
                   ) : (
                     <>
                       <span className="attachment__tag">FILE</span>

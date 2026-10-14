@@ -157,6 +157,11 @@ interface State {
   workspaceOpen: boolean
   /** 表格提取弹层是否打开（原版是一个独立页面，桌面端没有 pages/ 概念） */
   tableOcrOpen: boolean
+  /**
+   * 灯箱里正在看的大图（data URL）；空串表示没打开。
+   * 原版 ImageLightbox 由 ChatPage 挂载、气泡的 onImageTap 打开；桌面端此前整条链路都缺。
+   */
+  lightboxUrl: string
   /** 「填入输入框 / 重新编辑」请求：由消息操作行写入，输入框消费后清空 */
   pendingDraft: { text: string; at: number } | null
 
@@ -177,6 +182,8 @@ interface State {
   openSettings(open: boolean): void
   toggleWorkspace(open?: boolean): void
   openTableOcr(open: boolean): void
+  /** 打开/关闭大图查看（传空串即关闭） */
+  openLightbox(url: string): void
   reloadSettings(): Promise<void>
   send(text: string, attachmentPaths?: string[]): Promise<void>
   /**
@@ -362,6 +369,7 @@ export const useStore = create<State>((set, get) => {
     settingsOpen: false,
     workspaceOpen: true,
     tableOcrOpen: false,
+    lightboxUrl: '',
     pendingDraft: null,
 
     async init() {
@@ -592,6 +600,10 @@ export const useStore = create<State>((set, get) => {
 
     openTableOcr(open) {
       set({ tableOcrOpen: open })
+    },
+
+    openLightbox(url) {
+      set({ lightboxUrl: url })
     },
 
     async reloadSettings() {
