@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ApiConfigDto } from '@ipc/contract'
 import { useStore } from '../store'
+import { IconClose } from '../icons'
 
 const PROVIDERS: Array<{ id: string; label: string; baseUrl: string; hint: string }> = [
   {
@@ -101,8 +102,8 @@ export function SettingsDialog() {
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <div className="dialog__head">
           <span>设置</span>
-          <button className="btn btn--ghost" onClick={() => openSettings(false)}>
-            ✕
+          <button className="icon-btn" title="关闭" onClick={() => openSettings(false)}>
+            <IconClose size={16} />
           </button>
         </div>
 

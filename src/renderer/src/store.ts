@@ -5,6 +5,13 @@
 // 所有变更都来自 (a) 用户操作的 invoke 返回，或 (b) 主进程推来的事件。
 import { create } from 'zustand'
 import { useSpeech } from './speech/speechStore'
+import {
+  agentIdForMode,
+  buildAgentList,
+  engineIdOfConversation,
+  isVirtualAgentId,
+  modeForAgentId
+} from './conversations'
 import type {
   AgentDto,
   AgentMode,
@@ -24,7 +31,12 @@ export interface Notice {
 
 interface State {
   ready: boolean
+  /** 真实智能体（agents.json，IPC 原样） */
   agents: AgentDto[]
+  /** 引擎列表 = 两个虚拟智能体（工作 / 交互）+ 真实智能体，侧栏「引擎」区直接渲染它 */
+  engines: AgentDto[]
+  /** 当前选中的引擎 id（可能是 work / interactive 这两个虚拟智能体） */
+  activeAgentId: string
   summaries: ConversationSummaryDto[]
   activeId: string | null
   active: ConversationDto | null
@@ -36,18 +48,24 @@ interface State {
   workspace: WorkspaceEntryDto[]
   notice: Notice | null
   settingsOpen: boolean
+  /** 「填入输入框 / 重新编辑」请求：由消息操作行写入，输入框消费后清空 */
+  pendingDraft: { text: string; at: number } | null
 
   init(): Promise<void>
   reloadSummaries(): Promise<void>
   selectConversation(id: string): Promise<void>
   createConversation(): Promise<ConversationDto>
   deleteConversation(id: string): Promise<void>
+  /** 切换引擎（原版侧栏「引擎」区）：选中即切到该引擎的最新会话，没有就新建 */
+  selectAgent(agentId: string): Promise<void>
   setMode(mode: AgentMode): void
   setThinking(value: boolean): void
   setWebSearch(value: boolean): void
   openSettings(open: boolean): void
   reloadSettings(): Promise<void>
   send(text: string): Promise<void>
+  /** 重新生成最后一条回答 */
+  regenerate(): Promise<void>
   /** 交互模式：把界面控件的绑定值写回消息并持久化 */
   patchMessageContent(messageId: string, content: string): Promise<void>
   abort(): Promise<void>
@@ -58,6 +76,9 @@ interface State {
   openWorkspaceFolder(): Promise<void>
   pushNotice(level: Notice['level'], text: string): void
   dismissNotice(): void
+  /** 把一段文本填进输入框（消息操作行的「编辑 / 重新编辑」） */
+  fillDraft(text: string): void
+  consumeDraft(): void
   /** 端侧增强：把外部文件导入当前会话工作区 */
   intakeFiles(paths: string[]): Promise<void>
 }
@@ -68,7 +89,21 @@ function applyEvent(state: State, event: GuncatEvent): Partial<State> {
       return {
         summaries: [summaryOf(event.conversation), ...state.summaries],
         activeId: event.conversation.id,
-        active: event.conversation
+        active: event.conversation,
+        activeAgentId: engineIdOfConversation(event.conversation),
+        mode: event.conversation.mode as AgentMode
+      }
+
+    case 'conversation:sync':
+      // 「重新生成」把末尾若干条消息删掉了：增量事件表达不了删除，用整份会话替换
+      if (state.active === null || state.active.id !== event.conversation.id) {
+        return {}
+      }
+      return {
+        active: event.conversation,
+        summaries: state.summaries.map((s) =>
+          s.id === event.conversation.id ? summaryOf(event.conversation) : s
+        )
       }
 
     case 'conversation:deleted': {
@@ -174,7 +209,6 @@ function summaryOf(conv: ConversationDto): ConversationSummaryDto {
     lastPreview: last?.content?.slice(0, 60) ?? ''
   }
 }
-
 export const useStore = create<State>((set, get) => {
   async function refreshSummaries(): Promise<void> {
     const summaries = await window.guncat.conversations.list()
@@ -184,6 +218,8 @@ export const useStore = create<State>((set, get) => {
   return {
     ready: false,
     agents: [],
+    engines: [],
+    activeAgentId: '',
     summaries: [],
     activeId: null,
     active: null,
@@ -195,6 +231,7 @@ export const useStore = create<State>((set, get) => {
     workspace: [],
     notice: null,
     settingsOpen: false,
+    pendingDraft: null,
 
     async init() {
       window.guncat.onEvent((event: GuncatEvent) => {
@@ -213,7 +250,16 @@ export const useStore = create<State>((set, get) => {
         window.guncat.conversations.list(),
         window.guncat.settings.load()
       ])
-      set({ agents, summaries, settings, ready: true })
+      const engines = buildAgentList(agents)
+      const firstReal = agents.find((a) => !isVirtualAgentId(a.id))
+      set({
+        agents,
+        engines,
+        activeAgentId: firstReal === undefined ? '' : firstReal.id,
+        summaries,
+        settings,
+        ready: true
+      })
       if (summaries.length > 0) {
         await get().selectConversation(summaries[0].id)
       }
@@ -228,6 +274,7 @@ export const useStore = create<State>((set, get) => {
       set({
         activeId: id,
         active: conv,
+        activeAgentId: conv === null ? get().activeAgentId : engineIdOfConversation(conv),
         mode: (conv?.mode as AgentMode) ?? 'chat',
         running: false
       })
@@ -235,8 +282,16 @@ export const useStore = create<State>((set, get) => {
     },
 
     async createConversation() {
-      const agent = get().agents.find((a) => a.id === get().active?.agentId) ?? get().agents[0]
-      const conv = await window.guncat.conversations.create(agent?.id ?? '', get().mode)
+      // 空会话等价于新会话：先把它清掉，避免列表里堆一串没有任何内容的会话
+      // （对齐原版 cleanupEmptyConversation）。工作区里有文件时保留 ——
+      // 删会话只是把 id 从列表里抹掉，用户会看不到那些文件。
+      const current = get().active
+      if (current !== null && current.messages.length === 0 && get().workspace.length === 0) {
+        await window.guncat.conversations.remove(current.id)
+        set({ activeId: null, active: null })
+      }
+      const agentId = get().activeAgentId
+      const conv = await window.guncat.conversations.create(agentId, get().mode)
       // conversation:created 事件已把状态写好，这里只补工作区
       await get().loadWorkspace()
       return conv
@@ -254,12 +309,41 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    setMode(mode) {
-      set({ mode })
-      const active = get().active
-      if (active !== null) {
-        set({ active: { ...active, mode } })
+    async selectAgent(agentId) {
+      const engine = get().engines.find((a) => a.id === agentId)
+      if (engine === undefined) {
+        return
       }
+      const mode = modeForAgentId(agentId)
+      set({ activeAgentId: agentId, mode })
+      // 切到该引擎的最新会话；没有就新建（原版 selectAgent 的行为）
+      const summaries = get().summaries
+      const latest =
+        summaries.find((s) => engineIdOfConversation(s) === agentId) ??
+        (isVirtualAgentId(agentId)
+          ? summaries.find((s) => s.agentId === agentId)
+          : undefined)
+      if (latest !== undefined) {
+        await get().selectConversation(latest.id)
+      } else {
+        await get().createConversation()
+      }
+    },
+
+    setMode(mode) {
+      // 形态与引擎是同一件事的两种说法（原版：形态切换就是切到对应虚拟智能体），
+      // 因此这里走 selectAgent，顺带把会话也切过去，避免「界面显示工作模式、
+      // 实际发到聊天模式会话」这种错位。
+      const target = agentIdForMode(mode, get().agents, get().activeAgentId)
+      if (target === '') {
+        set({ mode })
+        const active = get().active
+        if (active !== null) {
+          set({ active: { ...active, mode } })
+        }
+        return
+      }
+      void get().selectAgent(target)
     },
 
     setThinking(value) {
@@ -300,6 +384,24 @@ export const useStore = create<State>((set, get) => {
         } else {
           await window.guncat.work.run(request)
         }
+      } finally {
+        set({ running: false })
+        await refreshSummaries()
+      }
+    },
+
+    async regenerate() {
+      const activeId = get().activeId
+      if (activeId === null) {
+        return
+      }
+      set({ running: true })
+      try {
+        await window.guncat.chat.regenerate({
+          conversationId: activeId,
+          thinkingEnabled: get().thinkingEnabled,
+          webSearchEnabled: get().webSearchEnabled
+        })
       } finally {
         set({ running: false })
         await refreshSummaries()
@@ -379,6 +481,14 @@ export const useStore = create<State>((set, get) => {
 
     dismissNotice() {
       set({ notice: null })
+    },
+
+    fillDraft(text) {
+      set({ pendingDraft: { text, at: Date.now() } })
+    },
+
+    consumeDraft() {
+      set({ pendingDraft: null })
     },
 
     async intakeFiles(paths) {

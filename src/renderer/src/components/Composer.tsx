@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAutoResize } from '../hooks/useAutoResize'
 import { useVoiceInput } from '../speech/useVoiceInput'
+import { useStore } from '../store'
+import { MODE_HINT } from '../conversations'
+import { IconMic, IconSend, IconStop, IconStopCircle } from '../icons'
 
 interface Props {
   running: boolean
@@ -14,11 +17,28 @@ export function Composer({ running, mode, onSend, onAbort }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null)
   useAutoResize(ref, text)
 
+  const pendingDraft = useStore((s) => s.pendingDraft)
+  const consumeDraft = useStore((s) => s.consumeDraft)
+
+  // 消息操作行的「编辑 / 重新编辑」把文本塞进这里，并聚焦回输入框
+  useEffect(() => {
+    if (pendingDraft === null) {
+      return
+    }
+    setText(pendingDraft.text)
+    consumeDraft()
+    const element = ref.current
+    if (element !== null) {
+      element.focus()
+      element.setSelectionRange(element.value.length, element.value.length)
+    }
+  }, [pendingDraft, consumeDraft])
+
   const voice = useVoiceInput((spoken) => {
     setText((prev) => (prev.trim() === '' ? spoken : `${prev}${spoken}`))
   })
 
-  // 切会话/切模式时清空草稿，避免误发到别的会话
+  // 切模式时清空草稿，避免误发到别的会话
   useEffect(() => {
     setText('')
   }, [mode])
@@ -60,7 +80,7 @@ export function Composer({ running, mode, onSend, onAbort }: Props) {
 
         <button
           type="button"
-          className="btn btn--ghost composer__mic"
+          className="composer__mic"
           data-recording={voice.state === 'recording'}
           title={
             voice.state === 'recording'
@@ -72,16 +92,23 @@ export function Composer({ running, mode, onSend, onAbort }: Props) {
           disabled={voice.state === 'transcribing'}
           onClick={voice.toggle}
         >
-          {voice.state === 'recording' ? '⏺ 停止' : voice.state === 'transcribing' ? '…' : '🎤'}
+          {voice.state === 'recording' ? <IconStop size={18} /> : <IconMic size={18} />}
         </button>
 
         {running ? (
-          <button className="btn btn--danger" onClick={onAbort}>
-            停止
+          <button className="composer__send composer__send--stop" title="停止生成" onClick={onAbort}>
+            <IconStopCircle size={20} />
+            <span className="composer__send-label">停止</span>
           </button>
         ) : (
-          <button className="btn btn--primary" onClick={submit} disabled={text.trim() === ''}>
-            发送
+          <button
+            className="composer__send"
+            title="发送（Enter）"
+            onClick={submit}
+            disabled={text.trim() === ''}
+          >
+            <IconSend size={18} />
+            <span className="composer__send-label">发送</span>
           </button>
         )}
       </div>
@@ -91,13 +118,7 @@ export function Composer({ running, mode, onSend, onAbort }: Props) {
         </div>
       ) : null}
       <div className="composer__hint">
-        <span>
-          {mode === 'chat'
-            ? '聊天模式'
-            : mode === 'interactive'
-              ? '交互模式 · 一句话直出可操作界面'
-              : '工作模式 · 多轮工具循环 + 沙箱工作区'}
-        </span>
+        <span>{MODE_HINT[mode] ?? ''}</span>
         <span>{text.length > 0 ? `${text.length} 字` : ''}</span>
       </div>
     </div>

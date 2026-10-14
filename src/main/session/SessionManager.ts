@@ -38,6 +38,7 @@ import type {
   AppSettingsDto,
   ApiConfigDto,
   ApiProfileDto,
+  ChatRegenerateRequest,
   ChatSendRequest,
   ConversationDto,
   ConversationSummaryDto,
@@ -207,12 +208,14 @@ export class SessionManager {
   }
 
   async createConversation(agentId: string, mode: string): Promise<ConversationDto> {
-    const agent: Agent | undefined = this.agents.find((a) => a.id === agentId)
-    const conv: Conversation = Conversation.create(
-      agentId,
-      agent !== undefined ? agent.name : '新对话',
-      mode
-    )
+    // 标题留空 —— 对齐鸿蒙原版 ChatViewModel.startNewConversation：
+    //   Conversation.create(this.currentAgent.id, '', mode)
+    // 标题由「第一条用户消息」推导（见 sendChat / runWork 里的 deriveTitle），
+    // 侧栏在标题为空时回退显示「与 X 的对话」。
+    //
+    // 历史事故：这里原先传的是 agent.name，而标题推导的守卫只认 ''/'新对话'，
+    // 于是引擎名被当成标题焊死在会话上 —— 用户看到的正是「每一条会话都叫轻简模式」。
+    const conv: Conversation = Conversation.create(agentId, '', mode)
     this.conversations.push(conv)
     await this.persist()
     const dto: ConversationDto = SessionManager.toDto(conv)
@@ -320,15 +323,84 @@ export class SessionManager {
     conv.messages.push(userMsg)
     this.emit({ type: 'message:added', conversationId: conv.id, message: SessionManager.toMessageDto(userMsg) })
 
+    const agent: Agent | undefined = this.agents.find((a) => a.id === conv.agentId)
     // 首条用户消息用它作为会话标题
-    if (conv.title === '' || conv.title === '新对话') {
+    if (SessionManager.needsDerivedTitle(conv.title, agent !== undefined ? agent.name : '')) {
       const title: string = SessionManager.deriveTitle(request.text)
-      if (title !== '') {
+      if (title !== '' && title !== conv.title) {
         conv.title = title
         this.emit({ type: 'conversation:title', conversationId: conv.id, title })
       }
     }
 
+    await this.runChatTurn(
+      conv,
+      config,
+      agent,
+      request.text,
+      request.thinkingEnabled,
+      request.webSearchEnabled
+    )
+  }
+
+  /**
+   * 重新生成：丢掉最后一条用户消息之后的所有 assistant 消息，再用同一个问题重跑。
+   * 与「重发」不同 —— 失败的/被中止的那次输出就地消失，不会在它下面再叠一条。
+   */
+  async regenerateChat(request: ChatRegenerateRequest): Promise<void> {
+    const conv: Conversation = this.mustFind(request.conversationId)
+    const handle: RunHandle = this.handle(conv.id)
+    if (handle.busy) {
+      this.emit({ type: 'notice', level: 'warn', text: '当前会话正在生成中，请先停止' })
+      return
+    }
+
+    const config: ApiConfig | null = await StorageManager.loadApiConfig(this.ctx()).catch(
+      (): ApiConfig | null => null
+    )
+    if (config === null || config.apiKey === '' || config.model === '') {
+      this.emit({ type: 'notice', level: 'error', text: '请先在设置里配置 API Key 与模型' })
+      return
+    }
+
+    let lastUserIndex: number = -1
+    for (let i: number = conv.messages.length - 1; i >= 0; i--) {
+      if (conv.messages[i].role === 'user') {
+        lastUserIndex = i
+        break
+      }
+    }
+    if (lastUserIndex < 0) {
+      this.emit({ type: 'notice', level: 'warn', text: '这条会话还没有可重新生成的问题' })
+      return
+    }
+    const prompt: string = conv.messages[lastUserIndex].content
+    conv.messages = conv.messages.slice(0, lastUserIndex + 1)
+    await this.persist()
+    // 整份会话同步给渲染进程：增量事件表达不了「消息被删掉」这件事
+    this.emit({ type: 'conversation:sync', conversation: SessionManager.toDto(conv) })
+
+    const agent: Agent | undefined = this.agents.find((a) => a.id === conv.agentId)
+    await this.runChatTurn(
+      conv,
+      config,
+      agent,
+      prompt,
+      request.thinkingEnabled,
+      request.webSearchEnabled
+    )
+  }
+
+  /** 执行一轮聊天流式输出（sendChat / regenerateChat 共用） */
+  private async runChatTurn(
+    conv: Conversation,
+    config: ApiConfig,
+    agent: Agent | undefined,
+    prompt: string,
+    thinkingEnabled: boolean,
+    webSearchEnabled: boolean
+  ): Promise<void> {
+    const handle: RunHandle = this.handle(conv.id)
     const assistantMsg: Message = Message.ofAssistant(generateMessageId(), '')
     conv.messages.push(assistantMsg)
     this.emit({
@@ -339,7 +411,6 @@ export class SessionManager {
     this.emit({ type: 'turn:started', conversationId: conv.id, messageId: assistantMsg.id })
 
     const history: Message[] = conv.messages.slice(0, -1)
-    const agent: Agent | undefined = this.agents.find((a) => a.id === conv.agentId)
     handle.busy = true
     handle.abort = new AbortSignal()
 
@@ -362,9 +433,9 @@ export class SessionManager {
         config,
         agent ?? null,
         history,
-        request.text,
-        request.thinkingEnabled,
-        request.webSearchEnabled,
+        prompt,
+        thinkingEnabled,
+        webSearchEnabled,
         callbacks,
         handle.abort
       )
@@ -428,9 +499,10 @@ export class SessionManager {
     const userMsg: Message = Message.ofUser(generateMessageId(), request.text, request.text, [])
     conv.messages.push(userMsg)
     this.emit({ type: 'message:added', conversationId: conv.id, message: SessionManager.toMessageDto(userMsg) })
-    if (conv.title === '' || conv.title === '新对话') {
+    const agent: Agent | undefined = this.agents.find((a) => a.id === conv.agentId)
+    if (SessionManager.needsDerivedTitle(conv.title, agent !== undefined ? agent.name : '')) {
       const title: string = SessionManager.deriveTitle(request.text)
-      if (title !== '') {
+      if (title !== '' && title !== conv.title) {
         conv.title = title
         this.emit({ type: 'conversation:title', conversationId: conv.id, title })
       }
@@ -755,6 +827,21 @@ export class SessionManager {
   static deriveTitle(text: string): string {
     const line: string = text.trim().split('\n')[0].trim()
     return line.length > 24 ? line.substring(0, 24) + '…' : line
+  }
+
+  /**
+   * 这条会话的标题是否还需要从首条用户消息推导。
+   *
+   * 除空标题与历史默认名之外，还认「标题恰好等于引擎名」这一种脏数据：
+   * 早期版本建会话时把 agent.name 写成了 title，只认 ''/'新对话' 的守卫会永远跳过它，
+   * 于是会话列表里每条都顶着同一个引擎名。这里补上自救，用户下次发消息标题就正常了。
+   */
+  static needsDerivedTitle(title: string, agentName: string): boolean {
+    const trimmed: string = title.trim()
+    if (trimmed === '' || trimmed === '新对话') {
+      return true
+    }
+    return agentName !== '' && trimmed === agentName
   }
 
   static toSummary(conv: Conversation): ConversationSummaryDto {

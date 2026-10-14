@@ -7,6 +7,7 @@ import type {
   ApiConfigDto,
   ApiProfileDto,
   AppInfoDto,
+  ChatRegenerateRequest,
   ChatSendRequest,
   ConversationDto,
   ConversationSummaryDto,
@@ -77,6 +78,11 @@ export function registerIpcHandlers(session: SessionManager): void {
   })
   ipcMain.handle(INVOKE.chatAbort, async (_e, conversationId: string) => {
     session.abort(conversationId)
+  })
+  // 「重答」：INVOKE.chatRegenerate 在契约里早就声明了，一直没有处理器
+  // （渲染进程此前也没有入口）。这里补上实现，通道名与语义都不变。
+  ipcMain.handle(INVOKE.chatRegenerate, async (_e, request: ChatRegenerateRequest) => {
+    await session.regenerateChat(request)
   })
   ipcMain.handle(INVOKE.workAbort, async (_e, conversationId: string) => {
     session.abort(conversationId)

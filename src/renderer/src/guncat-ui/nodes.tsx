@@ -33,43 +33,235 @@ export interface RenderCtx {
 }
 
 // ===== 图标 =====
-
-const ICONS: Record<string, string> = {
-  check: '✓',
-  close: '✕',
-  add: '＋',
-  remove: '−',
-  'arrow-right': '→',
-  'arrow-left': '←',
-  'arrow-up': '↑',
-  'arrow-down': '↓',
-  chart: '📊',
-  table: '▦',
-  list: '☰',
-  search: '🔍',
-  star: '★',
-  heart: '♥',
-  share: '↗',
-  download: '⤓',
-  edit: '✎',
-  delete: '🗑',
-  info: 'ⓘ',
-  warning: '⚠',
-  success: '✓',
-  error: '⚠',
-  clock: '🕐',
-  calendar: '📅',
-  user: '👤',
-  home: '⌂',
-  settings: '⚙',
-  sparkle: '✦',
-  refresh: '↻',
-  filter: '⛃',
-  sort: '⇅'
+//
+// 界面程序里的 Icon(name) 原先映射到 emoji / Unicode 符号（放大镜、垃圾桶、带圈 i 之类）。
+// 这类「图标」的实际长相由机器上的字体决定，同一个程序在两台机器上观感完全不同，
+// 也和界面其余部分不是一套笔画。这里换成与主界面同一套规格的行内 SVG：
+// viewBox 0 0 24 24、fill none、stroke currentColor、stroke-width 1.6，
+// 尺寸用 em 表达，跟着 .gui-icon 的字号走。
+//
+// 注意：只换图标本身，Icon 节点的尺寸/排版/交互一律不动。
+function GuiSvg({ children }: { children: ReactNode }): ReactNode {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width="1em"
+      height="1em"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ verticalAlign: '-0.125em' }}
+      aria-hidden="true"
+      focusable="false"
+    >
+      {children}
+    </svg>
+  )
 }
 
-function iconGlyph(name: string): string {
-  return ICONS[name] ?? '•'
+const GUI_ICONS: Record<string, ReactNode> = {
+  check: (
+    <GuiSvg>
+      <path d="m5.4 12.6 4.4 4.4 8.8-9.6" />
+    </GuiSvg>
+  ),
+  close: (
+    <GuiSvg>
+      <path d="M6.2 6.2l11.6 11.6M17.8 6.2 6.2 17.8" />
+    </GuiSvg>
+  ),
+  add: (
+    <GuiSvg>
+      <path d="M12 5.2v13.6M5.2 12h13.6" />
+    </GuiSvg>
+  ),
+  remove: (
+    <GuiSvg>
+      <path d="M5.2 12h13.6" />
+    </GuiSvg>
+  ),
+  'arrow-right': (
+    <GuiSvg>
+      <path d="M4.6 12h14.2M13.6 6.8 18.8 12l-5.2 5.2" />
+    </GuiSvg>
+  ),
+  'arrow-left': (
+    <GuiSvg>
+      <path d="M19.4 12H5.2M10.4 6.8 5.2 12l5.2 5.2" />
+    </GuiSvg>
+  ),
+  'arrow-up': (
+    <GuiSvg>
+      <path d="M12 19.4V5.2M6.8 10.4 12 5.2l5.2 5.2" />
+    </GuiSvg>
+  ),
+  'arrow-down': (
+    <GuiSvg>
+      <path d="M12 4.6v14.2M6.8 13.6 12 18.8l5.2-5.2" />
+    </GuiSvg>
+  ),
+  chart: (
+    <GuiSvg>
+      <path d="M4.4 19.6V14M10.2 19.6V6.4M16 19.6v-8" />
+      <path d="M20.6 19.6H3.4" />
+    </GuiSvg>
+  ),
+  table: (
+    <GuiSvg>
+      <rect x="3.6" y="5.4" width="16.8" height="13.2" rx="2" />
+      <path d="M3.6 10h16.8M9.6 10v8.6M15 10v8.6" />
+    </GuiSvg>
+  ),
+  list: (
+    <GuiSvg>
+      <path d="M9.4 6.6h10.2M9.4 12h10.2M9.4 17.4h10.2" />
+      <path d="M5 6.6h.01M5 12h.01M5 17.4h.01" />
+    </GuiSvg>
+  ),
+  search: (
+    <GuiSvg>
+      <circle cx="10.8" cy="10.8" r="6.4" />
+      <path d="m15.6 15.6 4.2 4.2" />
+    </GuiSvg>
+  ),
+  star: (
+    <GuiSvg>
+      <path d="m12 4 2.5 5.1 5.6.8-4.1 4 1 5.6-5-2.7-5 2.7 1-5.6-4.1-4 5.6-.8L12 4Z" />
+    </GuiSvg>
+  ),
+  heart: (
+    <GuiSvg>
+      <path d="M12 19.6S4.2 15 4.2 9.7A4.1 4.1 0 0 1 12 7.4a4.1 4.1 0 0 1 7.8 2.3c0 5.3-7.8 9.9-7.8 9.9Z" />
+    </GuiSvg>
+  ),
+  share: (
+    <GuiSvg>
+      <path d="M12 15.4V4.2" />
+      <path d="m8.2 8 3.8-3.8L15.8 8" />
+      <path d="M6 13.4v5.2a1.8 1.8 0 0 0 1.8 1.8h8.4a1.8 1.8 0 0 0 1.8-1.8v-5.2" />
+    </GuiSvg>
+  ),
+  download: (
+    <GuiSvg>
+      <path d="M12 3.8v11.4" />
+      <path d="m7.6 10.8 4.4 4.4 4.4-4.4" />
+      <path d="M4.4 20.2h15.2" />
+    </GuiSvg>
+  ),
+  edit: (
+    <GuiSvg>
+      <path d="M4.4 19.6h4.1L19.9 8.2a2.2 2.2 0 0 0-3.1-3.1L4.4 16.5v3.1Z" />
+      <path d="m14.9 6.9 3.2 3.2" />
+    </GuiSvg>
+  ),
+  delete: (
+    <GuiSvg>
+      <path d="M4.4 6.9h15.2" />
+      <path d="M9.6 6.9V5.4a1.2 1.2 0 0 1 1.2-1.2h2.4a1.2 1.2 0 0 1 1.2 1.2v1.5" />
+      <path d="M6.4 6.9l.8 11.3a1.6 1.6 0 0 0 1.6 1.5h6.4a1.6 1.6 0 0 0 1.6-1.5l.8-11.3" />
+      <path d="M10.4 10.6v5.6M13.6 10.6v5.6" />
+    </GuiSvg>
+  ),
+  info: (
+    <GuiSvg>
+      <circle cx="12" cy="12" r="8.4" />
+      <path d="M12 10.8v5.4M12 7.9h.01" />
+    </GuiSvg>
+  ),
+  warning: (
+    <GuiSvg>
+      <path d="M12 4.2 20.6 19.4H3.4L12 4.2Z" />
+      <path d="M12 9.8v4.4M12 17h.01" />
+    </GuiSvg>
+  ),
+  success: (
+    <GuiSvg>
+      <circle cx="12" cy="12" r="8.4" />
+      <path d="m8.2 12.4 2.6 2.6 5-5.4" />
+    </GuiSvg>
+  ),
+  error: (
+    <GuiSvg>
+      <circle cx="12" cy="12" r="8.4" />
+      <path d="M9.2 9.2l5.6 5.6M14.8 9.2l-5.6 5.6" />
+    </GuiSvg>
+  ),
+  clock: (
+    <GuiSvg>
+      <circle cx="12" cy="12" r="8.4" />
+      <path d="M12 7.4V12l3.2 2" />
+    </GuiSvg>
+  ),
+  calendar: (
+    <GuiSvg>
+      <rect x="3.8" y="5.4" width="16.4" height="14.2" rx="2" />
+      <path d="M3.8 10h16.4M8.4 3.6v3.4M15.6 3.6v3.4" />
+    </GuiSvg>
+  ),
+  user: (
+    <GuiSvg>
+      <circle cx="12" cy="8.6" r="3.6" />
+      <path d="M5.2 20a6.8 6.8 0 0 1 13.6 0" />
+    </GuiSvg>
+  ),
+  home: (
+    <GuiSvg>
+      <path d="M4.2 10.4 12 4l7.8 6.4v8.2a1.8 1.8 0 0 1-1.8 1.8H6a1.8 1.8 0 0 1-1.8-1.8v-8.2Z" />
+      <path d="M9.8 20.4v-6h4.4v6" />
+    </GuiSvg>
+  ),
+  settings: (
+    <GuiSvg>
+      <circle cx="12" cy="12" r="2.7" />
+      <path d="M19.1 14.6a1.6 1.6 0 0 0 .3 1.8l.1.1a1.9 1.9 0 1 1-2.7 2.7l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.3a1.9 1.9 0 1 1-3.8 0v-.2a1.6 1.6 0 0 0-2.8-1.1l-.1.1a1.9 1.9 0 1 1-2.7-2.7l.1-.1a1.6 1.6 0 0 0-1.1-2.7h-.3a1.9 1.9 0 1 1 0-3.8h.2a1.6 1.6 0 0 0 1.1-2.8l-.1-.1a1.9 1.9 0 1 1 2.7-2.7l.1.1A1.6 1.6 0 0 0 9.4 4.6V4.3a1.9 1.9 0 1 1 3.8 0v.2a1.6 1.6 0 0 0 2.7 1.1l.1-.1a1.9 1.9 0 1 1 2.7 2.7l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.3a1.9 1.9 0 1 1 0 3.8h-.2a1.6 1.6 0 0 0-1.4.9Z" />
+    </GuiSvg>
+  ),
+  sparkle: (
+    <GuiSvg>
+      <path d="M12 3.4 13.7 8.3 18.6 10 13.7 11.7 12 16.6 10.3 11.7 5.4 10 10.3 8.3 12 3.4Z" />
+      <path d="M18.4 16.2l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7.7-1.9Z" />
+    </GuiSvg>
+  ),
+  refresh: (
+    <GuiSvg>
+      <path d="M20 12a8 8 0 1 1-2.4-5.7" />
+      <path d="M20.2 4.4v5h-5" />
+    </GuiSvg>
+  ),
+  filter: (
+    <GuiSvg>
+      <path d="M4.2 5.6h15.6l-6.2 7.4v5.4l-3.2 1.8v-7.2L4.2 5.6Z" />
+    </GuiSvg>
+  ),
+  sort: (
+    <GuiSvg>
+      <path d="M8.2 5.6v12.8M5 15.2l3.2 3.2 3.2-3.2" />
+      <path d="M15.8 18.4V5.6M12.6 8.8 15.8 5.6l3.2 3.2" />
+    </GuiSvg>
+  ),
+  trendUp: (
+    <GuiSvg>
+      <path d="m4.6 15.4 5.2-5.2 3.2 3.2 6.4-6.4" />
+      <path d="M14.6 6.9h4.8v4.8" />
+    </GuiSvg>
+  ),
+  trendDown: (
+    <GuiSvg>
+      <path d="m4.6 8.6 5.2 5.2 3.2-3.2 6.4 6.4" />
+      <path d="M14.6 17.1h4.8v-4.8" />
+    </GuiSvg>
+  )
+}
+
+function iconGlyph(name: string): ReactNode {
+  return GUI_ICONS[name] ?? (
+    <GuiSvg>
+      <circle cx="12" cy="12" r="4" />
+    </GuiSvg>
+  )
 }
 
 // ===== 读取辅助 =====
@@ -215,7 +407,22 @@ function TrendBadge({ trend }: { trend: unknown }) {
   const rec = asRecord(trend)
   const direction = String(rec['direction'] ?? 'flat')
   const value = rec['value']
-  const arrow = direction === 'up' ? '▲' : direction === 'down' ? '▼' : '—'
+  const arrow =
+    direction === 'up' ? (
+      <GuiSvg>
+        <path d="m4.6 15.4 5.2-5.2 3.2 3.2 6.4-6.4" />
+        <path d="M14.6 6.9h4.8v4.8" />
+      </GuiSvg>
+    ) : direction === 'down' ? (
+      <GuiSvg>
+        <path d="m4.6 8.6 5.2 5.2 3.2-3.2 6.4 6.4" />
+        <path d="M14.6 17.1h4.8v-4.8" />
+      </GuiSvg>
+    ) : (
+      <GuiSvg>
+        <path d="M5.2 12h13.6" />
+      </GuiSvg>
+    )
   const label = value === undefined ? '' : ` ${String(value)}`
   return (
     <span className={`gui-trend gui-trend--${direction}`}>
@@ -499,7 +706,18 @@ function RadioControl({ el, ctx }: { el: UiElement; ctx: RenderCtx }) {
             disabled={ctx.stale}
             onClick={() => writeBinding(ctx, key, v)}
           >
-            <span>{current === v ? '◉' : '○'}</span>
+            <span>
+              {current === v ? (
+                <GuiSvg>
+                  <circle cx="12" cy="12" r="8.4" />
+                  <circle cx="12" cy="12" r="3.6" fill="currentColor" stroke="none" />
+                </GuiSvg>
+              ) : (
+                <GuiSvg>
+                  <circle cx="12" cy="12" r="8.4" />
+                </GuiSvg>
+              )}
+            </span>
             <span>
               {str(item, 'label')}
               {str(item, 'description') !== '' ? (
@@ -796,8 +1014,13 @@ function AccordionView({ el, ctx }: { el: UiElement; ctx: RenderCtx }) {
               className="gui-acc__head"
               onClick={() => setOpen(isOpen ? open.filter((x) => x !== i) : [...open, i])}
             >
-              <span className="disclosure__caret" style={{ transform: isOpen ? 'rotate(90deg)' : 'none' }}>
-                ▶
+              <span
+                className="disclosure__caret"
+                style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }}
+              >
+                <GuiSvg>
+                  <path d="m6.6 9.4 5.4 5.4 5.4-5.4" />
+                </GuiSvg>
               </span>
               <span>{str(item, 'trigger', str(item, 'value'))}</span>
             </button>

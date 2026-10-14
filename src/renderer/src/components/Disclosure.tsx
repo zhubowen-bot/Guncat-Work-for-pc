@@ -1,68 +1,155 @@
+// 可折叠区块与工具行。
+//
+// 对齐原版：WorkTurnView 的工具行是「dsh 24px 单行」规格 ——
+// [16 图标] · [标题] · [参数摘要] · [状态]，点击才展开参数/结果的 IO 卡片。
+// 折叠箭头用 SVG chevron（原版 sys.symbol.chevron_down/up），不再用实心三角这类字符。
 import { useState } from 'react'
 import type { ToolCallRecordDto } from '@ipc/contract'
+import {
+  IconArrowRight,
+  IconCalendar,
+  IconChart,
+  IconCheck,
+  IconChevronDown,
+  IconCopy,
+  IconDownload,
+  IconEdit,
+  IconFile,
+  IconFolder,
+  IconGlobe,
+  IconInfo,
+  IconList,
+  IconSearch,
+  IconStar,
+  IconTrash,
+  IconUser
+} from '../icons'
+import {
+  toolArgsSummary,
+  toolDisplayName,
+  toolIconKind,
+  toolStatus,
+  type ToolIconKind
+} from '../turns'
 
-/** 可折叠区块（思考过程、工具详情共用） */
+export function IconForKind({ kind, size = 15 }: { kind: ToolIconKind; size?: number }) {
+  switch (kind) {
+    case 'read':
+      return <IconFile size={size} />
+    case 'write':
+      return <IconEdit size={size} />
+    case 'edit':
+      return <IconEdit size={size} />
+    case 'search':
+      return <IconSearch size={size} />
+    case 'web':
+      return <IconGlobe size={size} />
+    case 'fetch':
+      return <IconGlobe size={size} />
+    case 'ask':
+      return <IconUser size={size} />
+    case 'schedule':
+      return <IconCalendar size={size} />
+    case 'goal':
+      return <IconStar size={size} />
+    case 'spawn':
+      return <IconCopy size={size} />
+    case 'skill':
+      return <IconList size={size} />
+    case 'image':
+      return <IconChart size={size} />
+    case 'shell':
+      return <IconArrowRight size={size} />
+    case 'list':
+      return <IconList size={size} />
+    case 'trash':
+      return <IconTrash size={size} />
+    case 'move':
+      return <IconFolder size={size} />
+    case 'download':
+      return <IconDownload size={size} />
+    case 'check':
+      return <IconCheck size={size} />
+    default:
+      return <IconInfo size={size} />
+  }
+}
+
 export function Disclosure({
   title,
+  subtitle,
   children,
-  defaultOpen = false
+  defaultOpen = false,
+  leading
 }: {
   title: string
+  subtitle?: string
   children: React.ReactNode
   defaultOpen?: boolean
+  leading?: React.ReactNode
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div className="disclosure" data-open={open}>
       <button className="disclosure__head" onClick={() => setOpen((v) => !v)}>
-        <span className="disclosure__caret">▶</span>
-        <span>{title}</span>
+        <span className="disclosure__caret">
+          <IconChevronDown size={14} />
+        </span>
+        {leading !== undefined ? <span className="disclosure__leading">{leading}</span> : null}
+        <span className="disclosure__title">{title}</span>
+        {subtitle !== undefined && subtitle !== '' ? (
+          <span className="disclosure__subtitle">{subtitle}</span>
+        ) : null}
       </button>
       {open ? <div className="disclosure__body">{children}</div> : null}
     </div>
   )
 }
 
-/** 工具调用行：名称 + 状态 + 结果展开 */
+/** 工具调用行：单行摘要 + 点开看参数/结果 */
 export function ToolCallRow({ call }: { call: ToolCallRecordDto }) {
   const [open, setOpen] = useState(false)
-  const state =
-    call.status === 'error' ? 'error' : call.status === 'running' ? 'running' : 'ok'
-  const label = state === 'error' ? '失败' : state === 'running' ? '执行中' : '完成'
-
-  let argsPreview = ''
-  try {
-    const parsed: unknown = JSON.parse(call.argsJson || '{}')
-    argsPreview = JSON.stringify(parsed)
-  } catch {
-    argsPreview = call.argsJson
-  }
-  if (argsPreview.length > 90) {
-    argsPreview = argsPreview.slice(0, 90) + '…'
-  }
+  const status = toolStatus(call)
+  const summary = toolArgsSummary(call.argsJson)
 
   return (
-    <div>
-      <button className="tool" onClick={() => setOpen((v) => !v)} style={{ width: '100%' }}>
-        <span className="disclosure__caret" style={{ transform: open ? 'rotate(90deg)' : 'none' }}>
-          ▶
+    <div className="tool" data-state={status.state}>
+      <button className="tool__head" onClick={() => setOpen((v) => !v)}>
+        <span className="tool__icon">
+          <IconForKind kind={toolIconKind(call.name)} />
         </span>
-        <span className="tool__name">{call.name}</span>
-        <span className="tool__status" data-state={state}>
-          {label}
-        </span>
-        <span className="tool__status" style={{ flex: 1, textAlign: 'left' }}>
-          {argsPreview}
+        <span className="tool__name">{toolDisplayName(call.name)}</span>
+        {summary !== '' ? <span className="tool__args">{summary}</span> : null}
+        {status.state !== 'ok' ? (
+          <span className="tool__status" data-state={status.state}>
+            {status.label}
+          </span>
+        ) : null}
+        <span className="tool__caret">
+          <IconChevronDown size={14} />
         </span>
       </button>
       {open ? (
-        <pre>
-          {call.result !== ''
-            ? call.result.length > 6000
-              ? call.result.slice(0, 6000) + '\n…(已截断)'
-              : call.result
-            : '(尚无输出)'}
-        </pre>
+        <div className="tool__body">
+          <div className="io">
+            <div className="io__label">参数</div>
+            <pre className="io__pre">{call.argsJson !== '' ? call.argsJson : '(无)'}</pre>
+          </div>
+          <div className="io">
+            <div className="io__label" data-error={status.state === 'error'}>
+              {status.state === 'error' ? '错误' : '结果'}
+            </div>
+            <pre className="io__pre">
+              {call.result !== ''
+                ? call.result.length > 6000
+                  ? `${call.result.slice(0, 6000)}\n…(已截断)`
+                  : call.result
+                : status.state === 'running'
+                  ? '(执行中…)'
+                  : '(尚无输出)'}
+            </pre>
+          </div>
+        </div>
       ) : null}
     </div>
   )

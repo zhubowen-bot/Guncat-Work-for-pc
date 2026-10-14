@@ -6,6 +6,7 @@ import type {
   ApiProfileDto,
   AppInfoDto,
   AppSettingsDto,
+  ChatRegenerateRequest,
   ChatSendRequest,
   ConversationDto,
   ConversationSummaryDto,
@@ -38,6 +39,7 @@ export interface GuncatApi {
   chat: {
     send(request: ChatSendRequest): Promise<void>
     abort(conversationId: string): Promise<void>
+    regenerate(request: ChatRegenerateRequest): Promise<void>
     patchMessage(conversationId: string, messageId: string, content: string): Promise<void>
   }
   work: {

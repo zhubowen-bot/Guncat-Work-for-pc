@@ -7,6 +7,7 @@ import type {
   ApiProfileDto,
   AppInfoDto,
   AppSettingsDto,
+  ChatRegenerateRequest,
   ChatSendRequest,
   ConversationDto,
   ConversationSummaryDto,
@@ -50,6 +51,9 @@ const api = {
     send: (request: ChatSendRequest): Promise<void> => ipcRenderer.invoke(INVOKE.chatSend, request),
     abort: (conversationId: string): Promise<void> =>
       ipcRenderer.invoke(INVOKE.chatAbort, conversationId),
+    /** 重新生成最后一条回答（丢弃它后面已产出的 assistant 消息后再跑一次） */
+    regenerate: (request: ChatRegenerateRequest): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.chatRegenerate, request),
     /** 交互模式：把控件状态写回消息正文（尾标记）并持久化 */
     patchMessage: (
       conversationId: string,

@@ -5,9 +5,225 @@ import { createElement } from 'react'
 import { GuncatUiBlock } from '@renderer/guncat-ui/GuncatUiBlock'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { docxFileName } from '@renderer/fileName'
+import {
+  WORK_AGENT_ID,
+  INTERACTIVE_AGENT_ID,
+  agentIdForMode,
+  agentOfConversation,
+  buildAgentList,
+  conversationMeta,
+  conversationTitle,
+  engineIdOfConversation,
+  formatTimeLabel,
+  modeForAgentId
+} from '@renderer/conversations'
+import {
+  formatDuration,
+  formatStats,
+  groupTurns,
+  processTitle,
+  toolArgsSummary,
+  toolDisplayName,
+  toolIconKind,
+  toolStatus,
+  turnStats
+} from '@renderer/turns'
+import {
+  IconBrain,
+  IconClose,
+  IconDownload,
+  IconInteractive,
+  IconMic,
+  IconSend,
+  IconSettings,
+  IconStopCircle,
+  IconTrash,
+  IconWork
+} from '@renderer/icons'
+import { AgentItem, ConvItem } from '@renderer/components/Sidebar'
+import { TurnBlock } from '@renderer/components/Timeline'
+import type { MessageDto } from '@ipc/contract'
 
 /** 导出文件名推导 —— 纯函数，可直接断言 */
 export { docxFileName }
+
+/** 会话列表与引擎选择的纯函数（对应原版 DswSidebar.getConvTitle / selectAgent） */
+export {
+  WORK_AGENT_ID,
+  INTERACTIVE_AGENT_ID,
+  agentIdForMode,
+  agentOfConversation,
+  buildAgentList,
+  conversationMeta,
+  conversationTitle,
+  engineIdOfConversation,
+  formatTimeLabel,
+  modeForAgentId
+}
+
+/** 回合归组与工具行展示的纯函数（对应原版 buildWorkTimeline / WorkStepFormat） */
+export {
+  formatDuration,
+  formatStats,
+  groupTurns,
+  processTitle,
+  toolArgsSummary,
+  toolDisplayName,
+  toolIconKind,
+  toolStatus,
+  turnStats
+}
+
+export { renderIcons }
+
+/**
+ * 侧栏条目 + 工作模式单个回合的 SSR 渲染。
+ *
+ * 为什么渲染这两个「纯 props 组件」而不是整页：
+ *   zustand v5 在 SSR 里刻意读 getInitialState()（保证水合一致），
+ *   所以整页 SSR 只会看到 store 的初始值，塞不进夹具状态。
+ *   把布局里最需要钉住的两块（会话条目、回合归组）做成 props 驱动，
+ *   就能在无头环境里断言「标题落到 DOM 上了没有」「一个任务下是不是只有一个过程区」——
+ *   恰好就是用户报障的第 2 条和第 5 条。
+ */
+export function renderShell(running = false): string {
+  const engines = buildAgentList(AGENT_FIXTURE)
+  const now = new Date(2024, 8, 10, 15, 30, 0).getTime()
+
+  const convRows = renderToStaticMarkup(
+    createElement(
+      'div',
+      null,
+      createElement(ConvItem, {
+        summary: {
+          id: 'conv-a',
+          title: '做一个季度销售复盘',
+          agentId: 'guncat-3.1-flash',
+          mode: 'work',
+          updatedAt: new Date(2024, 8, 10, 9, 5, 0).getTime(),
+          messageCount: 3,
+          lastPreview: '这是最终答复'
+        },
+        engines,
+        active: true,
+        now,
+        onSelect: () => {},
+        onDelete: () => {}
+      }),
+      // 移植早期的脏数据：标题被写成了引擎名
+      createElement(ConvItem, {
+        summary: {
+          id: 'conv-b',
+          title: '轻简模式',
+          agentId: 'guncat-3.1-flash',
+          mode: 'chat',
+          updatedAt: 0,
+          messageCount: 0,
+          lastPreview: ''
+        },
+        engines,
+        active: false,
+        now,
+        onSelect: () => {},
+        onDelete: () => {}
+      }),
+      createElement(AgentItem, { agent: engines[0], active: false, onSelect: () => {} }),
+      createElement(AgentItem, { agent: engines[1], active: true, onSelect: () => {} })
+    )
+  )
+
+  const timeline = renderToStaticMarkup(
+    createElement(
+      'div',
+      { className: 'loop-timeline' },
+      createElement(TurnBlock, {
+        turn: groupTurns(SHELL_MESSAGES)[0],
+        running,
+        interactiveMode: false,
+        lastAssistantId: 'm3',
+        onEditToInput: () => {}
+      })
+    )
+  )
+
+  return convRows + timeline
+}
+
+const AGENT_FIXTURE = [
+  {
+    id: 'guncat-3.1-flash',
+    name: '轻简模式',
+    description: '日常聊天智能体',
+    shortDescription: 'Guncat 3.1-Flash',
+    icon: '',
+    category: '通用智能体',
+    prompt: ''
+  }
+]
+
+function shellMessage(
+  id: string,
+  role: string,
+  content: string,
+  extra: Record<string, unknown> = {}
+): MessageDto {
+  return {
+    id,
+    role,
+    content,
+    displayContent: '',
+    reasoning: '',
+    attachments: [],
+    toolCalls: [],
+    timestamp: 0,
+    tokenSpeed: -1,
+    cacheHitRate: -1,
+    ...extra
+  } as MessageDto
+}
+
+/** 一个用户请求 + 两轮 assistant（工具行只在第一轮）+ 最终答复 */
+const SHELL_MESSAGES: MessageDto[] = [
+  shellMessage('m0', 'user', '做一个季度销售复盘'),
+  shellMessage('m1', 'assistant', '先把数据读进来', {
+    reasoning: '需要先看原始数据',
+    toolCalls: [
+      {
+        id: 't1',
+        name: 'read_file',
+        argsJson: '{"path":"sales.csv"}',
+        result: 'ok',
+        status: 'ok',
+        startedAt: 0,
+        finishedAt: 0,
+        diff: ''
+      }
+    ]
+  }),
+  shellMessage('m2', 'assistant', '这是中间结论'),
+  shellMessage('m3', 'assistant', '这是最终答复', { tokenSpeed: 20, cacheHitRate: 0.5 })
+]
+
+/** 把全部图标渲染成 HTML：断言统一规格（viewBox / currentColor / 无 emoji） */
+function renderIcons(): string {
+  return renderToStaticMarkup(
+    createElement(
+      'div',
+      null,
+      createElement(IconWork, { size: 20 }),
+      createElement(IconInteractive, { size: 20 }),
+      createElement(IconMic, {}),
+      createElement(IconSend, {}),
+      createElement(IconStopCircle, {}),
+      createElement(IconDownload, {}),
+      createElement(IconTrash, {}),
+      createElement(IconSettings, {}),
+      createElement(IconClose, {}),
+      createElement(IconBrain, {})
+    )
+  )
+}
+
 
 const PROGRAM = [
   '$amount = 30',

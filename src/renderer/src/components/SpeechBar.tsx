@@ -1,5 +1,6 @@
 // 朗读控制条：对应鸿蒙版可拖动的朗读控制条（这里固定在底部，桌面端不需要拖动）。
 import { useSpeech } from '../speech/speechStore'
+import { IconClose, IconPause, IconPlay, IconSpeaker } from '../icons'
 
 export function SpeechBar() {
   const speaking = useSpeech((s) => s.speaking)
@@ -20,15 +21,21 @@ export function SpeechBar() {
 
   return (
     <div className="speech-bar">
-      <span className="speech-bar__icon">🔊</span>
+      <span className="speech-bar__icon">
+        <IconSpeaker size={16} />
+      </span>
+
+      <button
+        className="icon-btn"
+        title={paused ? '继续朗读' : '暂停朗读'}
+        onClick={() => (paused ? resume() : pause())}
+      >
+        {paused ? <IconPlay size={16} /> : <IconPause size={16} />}
+      </button>
 
       <div className="speech-bar__progress">
         <div className="speech-bar__progress-fill" style={{ width: `${progress * 100}%` }} />
       </div>
-
-      <button className="btn btn--ghost btn--sm" onClick={() => (paused ? resume() : pause())}>
-        {paused ? '继续' : '暂停'}
-      </button>
 
       <label className="speech-bar__field" title="语速">
         <span>倍速</span>
@@ -60,8 +67,8 @@ export function SpeechBar() {
         </label>
       ) : null}
 
-      <button className="btn btn--ghost btn--sm" onClick={stop}>
-        关闭
+      <button className="icon-btn" title="关闭朗读" onClick={stop}>
+        <IconClose size={15} />
       </button>
     </div>
   )

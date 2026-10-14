@@ -202,6 +202,18 @@ export interface WorkRunRequest {
   webSearchEnabled: boolean
 }
 
+/**
+ * 重新生成最后一条回答（对应原版消息操作行的「重答」）。
+ *
+ * 语义：把最后一条用户消息之后的 assistant 消息全部丢弃（那次失败的/被中止的输出
+ * 就地消失，而不是在它下面再叠一条），然后用同一个问题重跑一次。
+ */
+export interface ChatRegenerateRequest {
+  conversationId: string
+  thinkingEnabled: boolean
+  webSearchEnabled: boolean
+}
+
 export interface ConversationRef {
   conversationId: string
 }
@@ -229,6 +241,11 @@ export type GuncatEvent =
   | { type: 'conversation:created'; conversation: ConversationDto }
   | { type: 'conversation:deleted'; conversationId: string }
   | { type: 'conversation:title'; conversationId: string; title: string }
+  /**
+   * 会话内容被整体改写（目前只有「重新生成」：末尾若干条消息被丢弃）。
+   * 与 message:added/patched 这类增量事件不同，渲染进程收到它应当用整份会话替换本地投影。
+   */
+  | { type: 'conversation:sync'; conversation: ConversationDto }
   | { type: 'message:added'; conversationId: string; message: MessageDto }
   | { type: 'message:patched'; conversationId: string; messageId: string; patch: Partial<MessageDto> }
   | { type: 'tool:started'; conversationId: string; messageId: string; call: ToolCallRecordDto }

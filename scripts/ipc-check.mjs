@@ -92,6 +92,7 @@ const required = [
   'conversation:get',
   'chat:send',
   'chat:abort',
+  'chat:regenerate',
   'chat:patchMessage',
   'work:run',
   'work:abort',
@@ -180,6 +181,13 @@ check('conversations:load 起始为空', convList0.length === 0)
 
 const created = await inv('conversations:create', agents[0].id, 'interactive')
 check('conversations:create 返回会话', created.id !== '' && created.mode === 'interactive')
+// 事故（用户实测）：建会话时把「引擎名」写进了标题，而标题推导的守卫只认 ''/'新对话'，
+// 于是侧栏里每条会话都顶着同一个引擎名。标题必须留空，只由首条用户消息推导。
+check(
+  'conversations:create 的标题是空的（标题只由首条用户消息推导）',
+  created.title === '',
+  `title="${created.title}"`
+)
 check('创建事件已推送', events.some((e) => e.type === 'conversation:created'), `${events.length} 个事件`)
 
 const fetched = await inv('conversation:get', created.id)
@@ -208,6 +216,58 @@ check(
   'chat:send 必然产生终态事件（不挂起）',
   events.some((e) => e.type === 'turn:finished' || e.type === 'notice'),
   events.map((e) => e.type).join(',')
+)
+
+// 标题推导：首条用户消息必须把空标题填上（这是侧栏标题正确的另一半）
+const renamedAfterSend = await inv('conversation:get', created.id)
+check(
+  '已改名的会话不会被首条消息改题',
+  renamedAfterSend.title === '改名后的对话',
+  `title="${renamedAfterSend.title}"`
+)
+
+const convTitle = await inv('conversations:create', agents[0].id, 'chat')
+events.length = 0
+await inv('chat:send', {
+  conversationId: convTitle.id,
+  text: '季度复盘怎么做',
+  mode: 'chat',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const titled = await inv('conversation:get', convTitle.id)
+check(
+  '首条用户消息推出会话标题',
+  titled.title === '季度复盘怎么做',
+  `title="${titled.title}"`
+)
+
+// --- 「重答」：丢掉末尾的 assistant 之后重跑 ---
+// INVOKE.chatRegenerate 在契约里早已声明，但一直没有处理器；这里既验证通道可用，
+// 也验证「删掉旧回答」是靠 conversation:sync 整份同步表达的（增量事件表达不了删除）。
+events.length = 0
+await inv('chat:regenerate', {
+  conversationId: convTitle.id,
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+check(
+  'chat:regenerate 推送了整份会话同步事件',
+  events.some((e) => e.type === 'conversation:sync'),
+  events.map((e) => e.type).join(',')
+)
+check(
+  'chat:regenerate 必然产生终态事件（不挂起）',
+  events.some((e) => e.type === 'turn:finished' || e.type === 'notice'),
+  events.map((e) => e.type).join(',')
+)
+const afterRegen = await inv('conversation:get', convTitle.id)
+check(
+  '重新生成后末尾仍是一条用户消息 + 一条 assistant（旧回答没有叠在里面）',
+  afterRegen.messages.length === 2 &&
+    afterRegen.messages[0].role === 'user' &&
+    afterRegen.messages[1].role === 'assistant',
+  afterRegen.messages.map((m) => m.role).join(',')
 )
 
 // --- 未配置 API Key 时必须明确报错 ---
