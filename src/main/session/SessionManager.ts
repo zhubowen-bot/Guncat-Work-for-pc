@@ -922,6 +922,11 @@ export class SessionManager {
         })
       } else {
         this.emit({ type: 'turn:finished', conversationId: conv.id, messageId: assistantMsg.id, status: 'ok' })
+        // 首轮交付后用 LLM 生成会话标题（原版 maybeGenerateTitle 的触发条件：
+        // 最终答复非空且本轮没有被中止）。失败静默，不阻塞任何东西。
+        if (streamed !== '') {
+          this.maybeGenerateTitle(conv, SessionManager.lastUserText(conv), streamed)
+        }
       }
     }
   }
@@ -1129,6 +1134,73 @@ export class SessionManager {
       handle.busy = false
       this.finishRunStats(conv.id)
       await this.persist()
+      // 整轮跑完且没被中止时，用最终答复生成会话标题（原版在 turn_end 之后调用；
+      // 失败静默、每会话只试一次）
+      if (failure === '' && !handle.abort.aborted) {
+        const finalAnswer: string = SessionManager.lastAssistantText(conv)
+        if (finalAnswer !== '') {
+          this.maybeGenerateTitle(conv, SessionManager.lastUserText(conv), finalAnswer)
+        }
+      }
+    }
+  }
+
+  // ===== 会话标题（LLM 生成） =====
+
+  /** 已经排过标题生成任务的会话（原版 titleJobs）：每会话一次，避免每轮都调一次模型 */
+  private titleJobs: Set<string> = new Set()
+
+  /** 取最后一条用户消息的正文（生成标题时的输入之一） */
+  private static lastUserText(conv: Conversation): string {
+    for (let i = conv.messages.length - 1; i >= 0; i--) {
+      if (conv.messages[i].role === 'user') {
+        return conv.messages[i].content
+      }
+    }
+    return ''
+  }
+
+  /** 取最后一条非空助手答复（工作模式下正文在最后一条 assistant 上） */
+  private static lastAssistantText(conv: Conversation): string {
+    for (let i = conv.messages.length - 1; i >= 0; i--) {
+      const msg: Message = conv.messages[i]
+      if (msg.role === 'assistant' && msg.content.trim() !== '') {
+        return msg.content
+      }
+    }
+    return ''
+  }
+
+  private maybeGenerateTitle(conv: Conversation, userText: string, answerText: string): void {
+    if (this.titleJobs.has(conv.id)) {
+      return
+    }
+    this.titleJobs.add(conv.id)
+    // 刻意不 await：标题是锦上添花，绝不能拖住「本轮结束」的收尾
+    void this.generateTitle(conv, userText, answerText)
+  }
+
+  private async generateTitle(
+    conv: Conversation,
+    userText: string,
+    answerText: string
+  ): Promise<void> {
+    const config: ApiConfig | null = await StorageManager.loadApiConfig(this.ctx()).catch(
+      (): ApiConfig | null => null
+    )
+    if (config === null || config.apiKey === '') {
+      return
+    }
+    try {
+      const title: string = await AgentLoopService.generateSessionTitle(config, userText, answerText)
+      if (title === '' || this.find(conv.id) === undefined) {
+        return
+      }
+      conv.title = title
+      await this.persist()
+      this.emit({ type: 'conversation:title', conversationId: conv.id, title })
+    } catch {
+      // 标题生成失败静默（与原版一致）：不能因为一个装饰性字段把整轮标成失败
     }
   }
 

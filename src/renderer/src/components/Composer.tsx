@@ -80,9 +80,11 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
 
   function submit(): void {
     const value = text.trim()
-    if ((value === '' && attachments.length === 0) || running) {
+    if (value === '' && attachments.length === 0) {
       return
     }
+    // 执行中按回车也要有意义（对齐原版 sendMessage）：工作模式会变成插话，
+    // 其他形态由 store 提示「AI 正在回复中，请稍候」。所以这里不再因为 running 直接吞掉输入。
     onSend(value, attachments.map((a) => a.path))
     setText('')
     setAttachments([])

@@ -608,6 +608,17 @@ export const useStore = create<State>((set, get) => {
         set({ settingsOpen: true })
         return
       }
+      // 正在生成时的两条分支（对齐原版 sendMessage 的守卫顺序）：
+      //   工作模式 → 直接变成插话（用户不必先找那颗「插话」按钮，输入框回车即可）；
+      //   其他形态 → 一问一答没有「下一轮」可挂，提示等待。
+      if (get().running) {
+        if (get().mode === 'work') {
+          await get().steer(text)
+          return
+        }
+        get().pushNotice('warn', 'AI 正在回复中，请稍候')
+        return
+      }
       let activeId = get().activeId
       if (activeId === null) {
         const conv = await get().createConversation()

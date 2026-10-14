@@ -241,16 +241,16 @@ check(
   `title="${renamedAfterSend.title}"`
 )
 
-const convTitle = await inv('conversations:create', agents[0].id, 'chat')
+const convTitleGen = await inv('conversations:create', agents[0].id, 'chat')
 events.length = 0
 await inv('chat:send', {
-  conversationId: convTitle.id,
+  conversationId: convTitleGen.id,
   text: '季度复盘怎么做',
   mode: 'chat',
   thinkingEnabled: false,
   webSearchEnabled: false
 })
-const titled = await inv('conversation:get', convTitle.id)
+const titled = await inv('conversation:get', convTitleGen.id)
 check(
   '首条用户消息推出会话标题',
   titled.title === '季度复盘怎么做',
@@ -262,7 +262,7 @@ check(
 // 也验证「删掉旧回答」是靠 conversation:sync 整份同步表达的（增量事件表达不了删除）。
 events.length = 0
 await inv('chat:regenerate', {
-  conversationId: convTitle.id,
+  conversationId: convTitleGen.id,
   thinkingEnabled: false,
   webSearchEnabled: false
 })
@@ -276,7 +276,7 @@ check(
   events.some((e) => e.type === 'turn:finished' || e.type === 'notice'),
   events.map((e) => e.type).join(',')
 )
-const afterRegen = await inv('conversation:get', convTitle.id)
+const afterRegen = await inv('conversation:get', convTitleGen.id)
 check(
   '重新生成后末尾仍是一条用户消息 + 一条 assistant（旧回答没有叠在里面）',
   afterRegen.messages.length === 2 &&
@@ -980,6 +980,89 @@ check(
   '当前智能体 / 当前会话也落盘（原版每次切换都会写）',
   prefsDto['guncat_current_agent'] === 'interactive' && prefsDto['guncat_current_conv'] === 'conv-x'
 )
+
+// --- 会话标题由 LLM 生成（原版 maybeGenerateTitle；端口此前 generateSessionTitle 零调用点） ---
+const titleBodies = []
+const titleServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    titleBodies.push(raw)
+    // 标题请求与普通轮次走同一个接口：按系统提示词区分，便于断言「第二轮调用的是标题生成」
+    const isTitle = raw.includes('会话标题生成器')
+    const content = isTitle ? '「季度复盘」' : '已完成季度复盘整理'
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { content } }] }) + '\n\n')
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => titleServer.listen(0, '127.0.0.1', () => resolve()))
+const titlePort = titleServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(titlePort),
+  apiKey: 'sk-title-test',
+  model: 'title-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convTitleLlm = await inv('conversations:create', agents[0].id, 'work')
+events.length = 0
+await inv('work:run', {
+  conversationId: convTitleLlm.id,
+  text: '帮我整理季度复盘',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+// 标题生成是 fire-and-forget（不能拖住轮次收尾），所以要等一小会儿。
+// 注意：发送时主进程会先推一条**派生标题**（首条用户消息推导）的 conversation:title，
+// 所以要专门等「LLM 生成的那一条」，不能一看到 conversation:title 就收工。
+for (let i = 0; i < 150; i++) {
+  const seen = events.some((e) => e.type === 'conversation:title' && e.title === '季度复盘')
+  if (seen) {
+    break
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+const titleEvent = events.find((e) => e.type === 'conversation:title' && e.title === '季度复盘')
+check(
+  '首轮交付后用 LLM 生成会话标题（generateSessionTitle 此前零调用点）',
+  titleEvent !== undefined && titleEvent.title === '季度复盘',
+  JSON.stringify(titleEvent ?? null)
+)
+check(
+  '标题里的引号/句号被剥掉（原版对模型输出做同样的清洗）',
+  titleEvent !== undefined && !/[「」"'.。]/.test(titleEvent.title),
+  String(titleEvent?.title)
+)
+check(
+  '标题确实落盘到会话上（侧栏标题会跟着变）',
+  (await inv('conversation:get', convTitleLlm.id))?.title === '季度复盘'
+)
+const titleCallsAfterFirst = titleBodies.filter((b) => b.includes('会话标题生成器')).length
+await inv('work:run', {
+  conversationId: convTitleLlm.id,
+  text: '再补充一版',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+await new Promise((resolve) => setTimeout(resolve, 300))
+check(
+  '标题每个会话只生成一次（原版 titleJobs 的去重；否则每轮都白花一次模型调用）',
+  titleCallsAfterFirst === 1 &&
+    titleBodies.filter((b) => b.includes('会话标题生成器')).length === 1,
+  `标题请求 ${titleBodies.filter((b) => b.includes('会话标题生成器')).length} 次`
+)
+titleServer.closeAllConnections?.()
+titleServer.close()
 
 // --- 产物汇总（审计 P2-8）：一轮工作产出了哪些文件 ---
 //
