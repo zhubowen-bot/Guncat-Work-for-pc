@@ -23,6 +23,7 @@ export { collectFileArgs } from '@main/intake'
 export { resolveTranscriptionUrl, loadAsrConfig, transcribeAudio } from '@main/asr'
 export { __invoke, __channels, __events, __calls, __setOpenDialog, __reset } from 'electron'
 export { initAppPaths, clearTempDir } from '@core/platform/appPaths'
+export { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
 `
 )
 
@@ -106,6 +107,7 @@ const required = [
   'app:info',
   'app:rendererStage',
   'settings:saveString',
+  'settings:searchEngines',
   'intake:import',
   'intake:pickFiles',
   'message:exportDocx',
@@ -337,6 +339,63 @@ await inv('settings:saveString', 'reader_rate', '1.7')
 const settings4 = await inv('settings:load')
 check('字符串偏好可保存', settings4.prefs?.reader_voice === 'Microsoft Xiaoxiao', settings4.prefs?.reader_voice)
 check('语速偏好可保存', settings4.prefs?.reader_rate === '1.7')
+
+// --- 协议路径后缀补全开关（用户报障类：这个字段以前根本没进 DTO，保存时被静默重置） ---
+// 事故形状：渲染层看不到 autoSuffix，fromApiConfigDto 每次都把它写成默认 true ——
+// 用户（或从原版迁移过来的配置）关掉它以后，只要在桌面端点一次「保存」，设置就被悄悄丢掉。
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'https://gateway.example.com/custom',
+  apiKey: 'sk-test',
+  model: 'test-model',
+  temperature: 0.2,
+  topP: 0.9,
+  maxTokens: 1234,
+  extraParams: '{"enable_search":true}',
+  autoSuffix: false
+})
+const settingsSuffix = await inv('settings:load')
+check(
+  '关掉「协议路径后缀补全」后能原样读回（此前会被静默重置成 true）',
+  settingsSuffix.apiConfig?.autoSuffix === false,
+  String(settingsSuffix.apiConfig?.autoSuffix)
+)
+check('其它字段没被这次往返弄丢', settingsSuffix.apiConfig?.maxTokens === 1234 && settingsSuffix.apiConfig?.extraParams === '{"enable_search":true}')
+
+await inv('settings:saveApiConfig', { ...settingsSuffix.apiConfig, autoSuffix: true })
+check('重新打开该开关也生效', (await inv('settings:load')).apiConfig?.autoSuffix === true)
+
+// --- 本地联网搜索：引擎目录 + 配置落盘并立即生效 ---
+// 原版这套配置由 SettingsPanel 编辑、ChatViewModel 落盘并 bind() 给工具层；
+// 桌面端此前既没读也没下发，LocalWebSearch.bind() 从来没有调用者 —— 配置形同不存在。
+const engines = await inv('settings:searchEngines')
+check(
+  '主进程报出本地搜索的引擎目录（渲染层不必自己维护一份引擎表）',
+  Array.isArray(engines) && engines.length >= 6 && engines[0].id === 'bing',
+  (engines ?? []).map((e) => e.id).join(', ')
+)
+check(
+  '引擎目录标出了各自要不要 Key / BaseUrl',
+  engines.some((e) => e.id === 'tavily' && e.needsApiKey === true) &&
+    engines.some((e) => e.id === 'bing' && e.needsApiKey === false) &&
+    engines.some((e) => e.id === 'exa' && e.supportsBaseUrl === true)
+)
+
+const searchPrefKey = 'guncat_local_search_config'
+await inv('settings:saveString', searchPrefKey, JSON.stringify({ engine: 'tavily', maxResults: 3, tavilyApiKey: 'tvly-x' }))
+const settingsSearch = await inv('settings:load')
+check(
+  '本地搜索配置按同一个键名往返（渲染层与主进程的键名必须一致）',
+  settingsSearch.prefs?.[searchPrefKey] !== undefined &&
+    settingsSearch.prefs[searchPrefKey].includes('tavily'),
+  settingsSearch.prefs?.[searchPrefKey]
+)
+check(
+  '加载设置时会把配置 bind 给工具层（否则用户在界面里配的引擎永不生效）',
+  mod.LocalWebSearch.currentSettings().engine === 'tavily' &&
+    mod.LocalWebSearch.currentSettings().maxResults === 3,
+  mod.LocalWebSearch.currentSettings().engine
+)
 
 // --- 命令行文件收件：argv 解析 ---
 const intakeDir = path.join(dataRoot, 'inbox')

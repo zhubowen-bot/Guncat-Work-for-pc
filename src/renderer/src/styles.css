@@ -1943,6 +1943,34 @@ select {
   margin-top: 4px;
 }
 
+/* 勾选行（协议路径后缀补全 / 先行解析附件）：标题 + 一段解释文字 */
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 10px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.check input {
+  margin-top: 2px;
+  flex: none;
+}
+
+.check span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.check em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
 /* ===== 朗读控制条 ===== */
 
 .speech-bar {

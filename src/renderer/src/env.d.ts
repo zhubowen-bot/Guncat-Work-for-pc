@@ -13,6 +13,7 @@ import type {
   GuncatEvent,
   MultimodalConfigDto,
   RendererStage,
+  SearchEngineDto,
   WorkspaceEntryDto,
   WorkRunRequest
 } from '@ipc/contract'
@@ -25,6 +26,8 @@ export interface GuncatApi {
     saveMultimodalConfig(dto: MultimodalConfigDto): Promise<void>
     saveFlag(key: string, value: boolean): Promise<void>
     saveString(key: string, value: string): Promise<void>
+    /** 本地联网搜索的引擎目录（渲染层据此渲染选项，不必自己维护一份引擎表） */
+    searchEngines(): Promise<SearchEngineDto[]>
   }
   agents: {
     list(): Promise<AgentDto[]>

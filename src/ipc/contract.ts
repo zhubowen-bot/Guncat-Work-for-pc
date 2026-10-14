@@ -11,7 +11,8 @@ export const INVOKE = {
   settingsSaveFlag: 'settings:saveFlag',
   /** 字符串型偏好（朗读音色/语速等） */
   settingsSaveString: 'settings:saveString',
-
+  /** 本地联网搜索的引擎目录（渲染层据此渲染选项，不必自己维护一份引擎表） */
+  settingsSearchEngines: 'settings:searchEngines',
   /** 智能体 */
   agentsList: 'agents:list',
 
@@ -91,6 +92,15 @@ export interface ApiConfigDto {
   topP: number
   maxTokens: number
   extraParams: string
+  /**
+   * 是否自动补全协议路径后缀（/chat/completions、/responses、/v1/messages…）。
+   * 关闭后严格按填写的 Base URL 发起请求，适合非标准路径的自建网关/代理。
+   *
+   * 对齐原版 SettingsPanel 的「协议路径后缀补全」开关。此前这个字段**没有进 DTO**，
+   * 后果是静默的：渲染层看不到它，而 fromApiConfigDto 每次都把它重置成默认的 true ——
+   * 用户（或从原版迁移过来的配置）关掉它以后，只要在桌面端点一次「保存」，设置就被悄悄丢掉。
+   */
+  autoSuffix: boolean
 }
 
 export interface ApiProfileDto {
@@ -105,6 +115,21 @@ export interface MultimodalConfigDto {
   apiKey: string
   model: string
   preparseEnabled: boolean
+}
+
+/**
+ * 本地联网搜索的引擎目录（由主进程给出，见 settings:searchEngines）。
+ *
+ * 为什么不让渲染层直接 import LocalWebSearch 里的常量与判断函数：
+ * 那个模块依赖 `@kit.NetworkKit`（真正的网络实现只在主进程侧），
+ * 而渲染层的 vite 配置里根本没有 `@kit.*` 别名 —— 引进来会直接构建失败。
+ * 由主进程把「有哪些引擎、各自要不要 Key/BaseUrl」报出来，既避免重复定义，也不会漂移。
+ */
+export interface SearchEngineDto {
+  id: string
+  label: string
+  needsApiKey: boolean
+  supportsBaseUrl: boolean
 }
 
 export interface AppSettingsDto {

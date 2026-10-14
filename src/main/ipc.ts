@@ -47,6 +47,25 @@ export function registerIpcHandlers(session: SessionManager): void {
   ipcMain.handle(INVOKE.settingsSaveString, async (_e, key: string, value: string) => {
     await session.saveString(key, value)
   })
+  // 本地联网搜索的引擎目录。渲染层不 import LocalWebSearch（那个模块依赖 @kit.NetworkKit，
+  // 而渲染层的构建里没有 @kit.* 别名），改为在这里把引擎表报过去 —— 单一事实来源仍在 core。
+  ipcMain.handle(INVOKE.settingsSearchEngines, async () => {
+    const search = await import('@core/service/LocalWebSearch')
+    const ids: string[] = [
+      search.SEARCH_ENGINE_BING,
+      search.SEARCH_ENGINE_BRAVE,
+      search.SEARCH_ENGINE_TAVILY,
+      search.SEARCH_ENGINE_EXA,
+      search.SEARCH_ENGINE_METASO,
+      search.SEARCH_ENGINE_FIRECRAWL
+    ]
+    return ids.map((id) => ({
+      id,
+      label: search.searchEngineLabel(id),
+      needsApiKey: search.searchEngineNeedsApiKey(id),
+      supportsBaseUrl: search.searchEngineSupportsBaseUrl(id)
+    }))
+  })
 
   // ===== 智能体 =====
   ipcMain.handle(INVOKE.agentsList, async () => session.listAgents())

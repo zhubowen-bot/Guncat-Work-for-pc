@@ -30,7 +30,10 @@ const api = {
     saveFlag: (key: string, value: boolean): Promise<void> =>
       ipcRenderer.invoke(INVOKE.settingsSaveFlag, key, value),
     saveString: (key: string, value: string): Promise<void> =>
-      ipcRenderer.invoke(INVOKE.settingsSaveString, key, value)
+      ipcRenderer.invoke(INVOKE.settingsSaveString, key, value),
+    /** 本地联网搜索的引擎目录（渲染层据此渲染选项） */
+    searchEngines: (): Promise<import('../ipc/contract').SearchEngineDto[]> =>
+      ipcRenderer.invoke(INVOKE.settingsSearchEngines)
   },
 
   agents: {

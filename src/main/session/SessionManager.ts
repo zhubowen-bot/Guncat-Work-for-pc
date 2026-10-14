@@ -32,6 +32,7 @@ import { Constants } from '@core/common/Constants'
 import { generateMessageId } from '@core/common/Utils'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { GuncatUiRuntime, GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
+import { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
 
 import type {
   AgentDto,
@@ -87,6 +88,9 @@ export class SessionManager {
     } catch {
       this.conversations = []
     }
+    // 本地联网搜索配置同样在启动时绑定一次：渲染层虽然会在 init 里读一次设置，
+    // 但那是一次 IPC 往返，理论上可以在它之前就跑起一轮工作 —— 那时工具会拿到默认配置。
+    await this.bindLocalSearchConfig(ctx)
     this.loaded = true
   }
 
@@ -115,6 +119,10 @@ export class SessionManager {
     const multimodalConfig: MultimodalConfig = await StorageManager.loadMultimodalConfig(ctx).catch(
       (): MultimodalConfig => MultimodalConfig.default()
     )
+    // 本地联网搜索：把持久化的配置**绑定**给工具层。
+    // LocalWebSearch.settings 是进程级单例，不 bind 的话永远停在默认值（Bing / 不限额以外全是空），
+    // 用户配的引擎与 Key 一律不生效 —— 原版在 ChatViewModel.init 里做了这一步，桌面端漏了。
+    await this.bindLocalSearchConfig(ctx)
     return {
       apiConfig: apiConfig === null ? null : SessionManager.toApiConfigDto(apiConfig),
       apiProfiles: apiProfiles.map((p) => ({
@@ -164,7 +172,11 @@ export class SessionManager {
     'reader_enabled',
     'asr_baseUrl',
     'asr_apiKey',
-    'asr_model'
+    'asr_model',
+    // 本地联网搜索配置（整体 JSON）。原版由 SettingsPanel 编辑、ChatViewModel 落盘；
+    // 桌面端此前既没读也没下发，LocalWebSearch.bind() 从来没有调用者 ——
+    // 结果是「本地联网搜索」那套配置（引擎 / 各引擎 Key / maxResults）在桌面上形同不存在。
+    Constants.LS_KEY_LOCAL_SEARCH_CONFIG
   ]
 
   private async loadStringPrefs(): Promise<Record<string, string>> {
@@ -180,6 +192,36 @@ export class SessionManager {
       }
     }
     return out
+  }
+
+  /**
+   * 读持久化的本地联网搜索配置并绑定给工具层。
+   * 读取失败（首次运行 / JSON 坏了）时绑定默认配置而不是不绑 —— 不绑会让工具停在
+   * 「进程启动时的默认值」上，行为随调用顺序变化，比明确用默认值更难排查。
+   */
+  private async bindLocalSearchConfig(ctx: Context): Promise<void> {
+    let settings: SearchEngineSettings = new SearchEngineSettings()
+    try {
+      const json: string = await StorageManager.loadString(
+        ctx,
+        Constants.LS_KEY_LOCAL_SEARCH_CONFIG,
+        ''
+      )
+      settings = SearchEngineSettings.parse(json)
+    } catch {
+      // 用默认配置
+    }
+    LocalWebSearch.bind(settings)
+  }
+
+  /** 保存本地联网搜索配置（同时立即生效，不必重启） */
+  async saveLocalSearchConfig(json: string): Promise<void> {
+    await StorageManager.saveString(
+      this.ctx(),
+      Constants.LS_KEY_LOCAL_SEARCH_CONFIG,
+      json
+    )
+    LocalWebSearch.bind(SearchEngineSettings.parse(json))
   }
 
   // ===== 对话 =====
@@ -925,7 +967,8 @@ export class SessionManager {
       temperature: config.temperature ?? 0,
       topP: config.topP ?? 0,
       maxTokens: config.maxTokens ?? 0,
-      extraParams: config.extraBody
+      extraParams: config.extraBody,
+      autoSuffix: config.autoSuffix
     }
   }
 
@@ -939,6 +982,9 @@ export class SessionManager {
     config.topP = dto.topP > 0 ? dto.topP : null
     config.maxTokens = dto.maxTokens > 0 ? dto.maxTokens : null
     config.extraBody = dto.extraParams
+    // 只认显式的 false：老渲染层不带这个字段时不能把它当成「关掉」
+    // （默认开启，见 ApiConfig.autoSuffix 的说明）
+    config.autoSuffix = dto.autoSuffix !== false
     return config
   }
 
