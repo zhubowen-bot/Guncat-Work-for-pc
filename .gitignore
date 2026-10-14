@@ -25,6 +25,10 @@ workspaces/
 # 无头冒烟验证的中间产物
 .smoke/
 
+# esbuild 的临时目录（Windows 上系统 TEMP 会报 Access is denied，故固定到项目内）
+.tmp/
+.npm-cache/
+
 # editor / os
 .vscode/*
 !.vscode/extensions.json

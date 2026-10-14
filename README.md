@@ -5,33 +5,42 @@
 
 ## 怎么启动
 
+> 本项目用 **npm**（不是 pnpm）。装依赖：`npm install`
+
 ### 给用户：双击就能开
 
 打包一次，然后把整个文件夹拷给对方，**双击里面的 `Guncat Work.exe` 即可**，
 不需要装 Node、不需要命令行：
 
 ```bash
-pnpm install
-pnpm dist          # 产出 release/Guncat Work/
+npm install
+npm run dist       # 产出 release/Guncat Work/
 ```
 
 产物：
 
 ```
 release/Guncat Work/
-├── Guncat Work.exe      ← 双击这个
+├── Guncat Work.exe            ← 双击这个
+├── 创建桌面快捷方式.cmd        ← 想放桌面就双击一次（带应用图标）
+├── 诊断启动.cmd                ← 起不来时双击它，会留下日志
 ├── 使用说明.txt
-└── resources/           ← 应用代码 + 随包资源（不要单独移动）
+└── resources/                 ← 应用代码 + 随包资源（不要单独移动）
 ```
 
 首次打开后，点左下角「设置」填入接入方式、Base URL、API Key 与模型，即可开始对话。
 数据（对话历史、沙箱工作区、配置）存在 `%APPDATA%\Guncat Work`，不在程序目录里。
 
+**如果双击后窗口没有出现**：双击 `诊断启动.cmd`，它会带日志启动并留下两份日志 ——
+程序目录下的 `启动日志.txt`（Electron 自身输出与退出码）与
+`%APPDATA%\Guncat Work\logs\startup.log`（应用逐里程碑的启动日志）。
+把这两份发出来即可定位。
+
 ### 给开发：改代码即时生效
 
 ```bash
-pnpm install
-pnpm dev           # 主进程 + 渲染进程热更新
+npm install
+npm run dev        # 主进程 + 渲染进程热更新
 ```
 
 ## 两个形态
@@ -51,28 +60,46 @@ pnpm dev           # 主进程 + 渲染进程热更新
 
 ### 关于打包
 
-`pnpm dist` 用的是仓库自带的组装脚本，而不是 electron-builder。原因很具体：
-本机的 pnpm 依赖收集器拿不到 `pnpm list --json` 的输出，electron-builder 会在打包中途
+`npm run dist` 用的是仓库自带的组装脚本，而不是 electron-builder。原因很具体：
+electron-builder 的 pnpm 依赖收集器拿不到 `pnpm list --json` 的输出，会在打包中途
 报 `No JSON content found in output`。而本应用的运行时代码已被 vite 全部打进 `out/`，
 **打包时本来就没有 node_modules 需要收集** —— 那一步是多余的。
 自带的脚本按 Electron 标准应用目录结构直接组装，结果更可控也更快。
 
 `electron-builder.yml` 保留在仓库里，供将来需要**签名安装包 / 自动更新**时使用。
 
+### 关于构建期的两个坑（已固化处理）
+
+1. **esbuild 的临时目录**：Windows 上 esbuild 会在系统 `TEMP` 里建临时文件再删除，
+   本机环境下这一步会报 `Access is denied`，构建在 `vite:esbuild-transpile` 阶段直接失败。
+   现在统一把 `TMP/TEMP` 指到项目内的 `.tmp`（见 `scripts/esbuild-aliases.mjs`
+   与 `scripts/build.mjs`）。**这很可能也是之前 pnpm 反复报错的同源原因。**
+2. **构建入口**：`npm run build` 走 `scripts/build.mjs` 包装脚本而不是直接调 `electron-vite`，
+   为的就是在启动子进程前把上面的临时目录设好；用 Node 包装而不是 `set TMP=... &&`，
+   是为了不依赖 cmd/bash 语法。
+
+### 应用图标
+
+取自鸿蒙原项目：`AppScope/resources/base/media/layered_image.json` 里分层图标的
+background 与 foreground **都指向 `cat_avatar.png`**，所以它才是真正的应用图标。
+由 `scripts/make-icon.py` 生成两种格式：`app-icon.png`（256²，窗口与任务栏图标）
+与 `app-icon.ico`（7 种尺寸，桌面快捷方式用）。
+
 ## 验证
 
-一条命令跑完全部：**`pnpm verify`**（= typecheck + build + smoke）。
+一条命令跑完全部：**`npm run verify`**（= typecheck + smoke，smoke 内部会先构建）。
 
 | 层 | 命令 | 覆盖 |
 | --- | --- | --- |
-| 类型 | `pnpm typecheck` | `src/core`（移植内核）+ `src/main` + `src/preload` + `src/renderer` |
-| 构建 | `pnpm build` | main / preload / renderer 三端产物 |
-| 内核 | `pnpm smoke:core` | 105 项：智能体加载、45 个工具、37 项技能、沙箱工作区、`run_js` 沙箱、数据管道、持久化、三协议端点、**Office 工具链端到端**（生成→读回→算子编辑）、**技能系统工具**、**交互模式全链路**（解析 / `$绑定`重算 / 动作回传 / 状态尾标记 / 表单打包） |
-| 渲染 | `pnpm smoke:render` | 26 项：用 `react-dom/server` 把一份覆盖主要组件的界面程序渲染成 HTML 并逐项断言 |
-| 契约 | `pnpm smoke:ipc` | 55 项：用 electron 替身把渲染进程会调用的**每个 IPC 通道**真实 invoke 一遍（注册完整性、设置往返、会话生命周期、事件推送、越界与目录穿越拒绝、护栏提示、**文件收件**、**导出 Word**、**语音转写配置与端点拼接**） |
-| 全部 | `pnpm smoke` | 上面三套一起跑（186 项） |
+| 类型 | `npm run typecheck` | `src/core`（移植内核）+ `src/main` + `src/preload` + `src/renderer` |
+| 构建 | `npm run build` | main / preload / renderer 三端产物 |
+| 内核 | `npm run smoke:core` | 105 项：智能体加载、45 个工具、37 项技能、沙箱工作区、`run_js` 沙箱、数据管道、持久化、三协议端点、**Office 工具链端到端**（生成→读回→算子编辑）、**技能系统工具**、**交互模式全链路**（解析 / `$绑定`重算 / 动作回传 / 状态尾标记 / 表单打包） |
+| 渲染 | `npm run smoke:render` | 26 项：用 `react-dom/server` 把一份覆盖主要组件的界面程序渲染成 HTML 并逐项断言 |
+| 契约 | `npm run smoke:ipc` | 55 项：用 electron 替身把渲染进程会调用的**每个 IPC 通道**真实 invoke 一遍（注册完整性、设置往返、会话生命周期、事件推送、越界与目录穿越拒绝、护栏提示、**文件收件**、**导出 Word**、**语音转写配置与端点拼接**） |
+| 启动 | `npm run smoke:startup` | 19 项：用 electron 替身跑**真实入口** `src/main/index.ts`，断言单实例锁 → whenReady → 建窗口 → 注册 IPC 依次发生，且 **preload 路径与 index.html 都指向真实存在的文件**、数据目录已建、全程无异常 |
+| 全部 | `npm run smoke` | 上面四套一起跑（205 项） |
 
-`pnpm smoke` 把风险最高的移植内核拉到纯 Node 下按真实调用链跑一遍，
+`npm run smoke` 把风险最高的移植内核拉到纯 Node 下按真实调用链跑一遍，
 并用 esbuild 施加与 `electron.vite.config.ts` **完全相同**的别名规则 ——
 验证的是构建产物真实依赖的那套解析规则，而不是另起一套近似配置。
 
@@ -82,11 +109,14 @@ pnpm dev           # 主进程 + 渲染进程热更新
 
 ## 已知环境限制
 
-在某些受限的桌面会话里，Electron 进程会被宿主作业对象拒绝启动
-（`electron.exe --version` 直接返回 `STATUS_BREAKPOINT`），此时 `pnpm dev` / `pnpm build`
-产出都无法打开窗口。这是宿主环境限制而非代码问题 ——
-同一台机器上的其他 Electron 应用可以正常启动。
-此时用 `pnpm smoke` 仍然可以完整验证业务内核与界面渲染。
+**本机的 Electron 二进制无法启动任何 GUI 进程**：`electron.exe --version` 直接返回
+`STATUS_BREAKPOINT`（同一个二进制在别处可用，已核对过文件大小与重新下载后的副本一致，
+因此不是二进制损坏）。这意味着在本会话里 `npm run dev` 与打包产物都打不开窗口 ——
+是宿主进程环境的限制，不是代码问题；同一台机器上的其他 Electron 应用运行正常。
+
+为此启动链路与 IPC 契约都做了无头验证（见上表「启动」「契约」两行），
+并且应用会在 `%APPDATA%\Guncat Work\logs\startup.log` 逐里程碑写启动日志，
+产物里也附了 `诊断启动.cmd`。
 
 ## 目录结构
 

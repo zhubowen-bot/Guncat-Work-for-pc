@@ -1,7 +1,9 @@
-// Electron 主窗口：单窗口 + 深色标题栏 + 外链走系统浏览器。
+// Electron 主窗口：单窗口 + 外链走系统浏览器 + 应用图标。
 import { BrowserWindow, shell } from 'electron'
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resource } from '@core/platform/appPaths'
 
 const __dirname: string = path.dirname(fileURLToPath(import.meta.url))
 
@@ -9,6 +11,20 @@ let mainWindow: BrowserWindow | null = null
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow
+}
+
+/**
+ * 应用图标（取自鸿蒙原项目的 cat_avatar）。
+ * 打包态落在 resources/resources/ 下，与会话资源同处一地。
+ * 取不到就交给 Electron 用默认图标，不能让窗口因为图标起不来。
+ */
+function resolveIcon(): string | undefined {
+  try {
+    const file: string = resource('app-icon.png')
+    return fs.existsSync(file) ? file : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export function createMainWindow(): BrowserWindow {
@@ -21,12 +37,13 @@ export function createMainWindow(): BrowserWindow {
     autoHideMenuBar: true,
     backgroundColor: '#f5f5f7',
     title: 'Guncat Work',
+    icon: resolveIcon(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.mjs'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      // 渲染进程需要 Web Speech API（朗读/语音输入，阶段四）
+      // 渲染进程需要 Web Speech API（朗读/语音输入）
       spellcheck: false
     }
   })

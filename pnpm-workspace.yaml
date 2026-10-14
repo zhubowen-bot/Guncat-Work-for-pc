@@ -1,6 +1,0 @@
-allowBuilds:
-  electron: true
-  electron-winstaller: true
-  esbuild: true
-# 依赖已就绪时不要在每次 run 前重新校验（受限沙箱不允许管道 stdio 派生子进程）
-verifyDepsBeforeRun: false

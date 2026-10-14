@@ -8,20 +8,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "start": "electron-vite preview",
+    "dev": "node scripts/build.mjs dev",
+    "build": "node scripts/build.mjs build",
+    "start": "node scripts/build.mjs preview",
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "verify": "npm run typecheck && npm run build && npm run smoke",
-    "smoke": "node scripts/run-smoke.mjs && node scripts/render-check.mjs && node scripts/ipc-check.mjs",
+    "verify": "npm run typecheck && npm run smoke",
+    "smoke": "npm run build && node scripts/run-smoke.mjs && node scripts/render-check.mjs && node scripts/ipc-check.mjs && node scripts/startup-check.mjs",
     "smoke:core": "node scripts/run-smoke.mjs",
     "smoke:render": "node scripts/render-check.mjs",
     "smoke:ipc": "node scripts/ipc-check.mjs",
+    "smoke:startup": "node scripts/startup-check.mjs",
     "dump:components": "node scripts/dump-components.mjs",
-    "dist": "electron-vite build && node scripts/package-portable.mjs",
-    "dist:dir": "node scripts/package-portable.mjs"
+    "dist": "npm run build && node scripts/package-portable.mjs",
+    "dist:only": "node scripts/package-portable.mjs"
   },
   "//dependencies": "本应用的运行时代码全部由 vite 打进 out/，因此没有 runtime dependencies —— 这也是 electron-builder 能干净出包的前提。下面这些包只参与构建。",
   "devDependencies": {

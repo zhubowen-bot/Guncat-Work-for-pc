@@ -98,13 +98,56 @@ if (fs.existsSync(exeSource)) {
   step(`可执行文件 → ${appName}.exe`)
 }
 
-// ===== 6. 简短说明 =====
+// ===== 6. 双击即用的辅助入口 =====
+// 诊断启动：带日志启动，失败时能留下证据（而不是只有一句「打不开」）
+fs.writeFileSync(
+  path.join(outDir, '诊断启动.cmd'),
+  [
+    '@echo off',
+    'chcp 65001 >nul',
+    'cd /d "%~dp0"',
+    'set LOG=%~dp0启动日志.txt',
+    'echo ===== Guncat Work 诊断启动 ===== > "%LOG%"',
+    'echo 时间: %date% %time% >> "%LOG%"',
+    'echo 系统: %OS% %PROCESSOR_ARCHITECTURE% >> "%LOG%"',
+    'echo ------------------------------------------ >> "%LOG%"',
+    'echo 正在带日志启动，请稍候…',
+    '"Guncat Work.exe" --enable-logging >> "%LOG%" 2>&1',
+    'echo. >> "%LOG%"',
+    'echo 进程退出码: %ERRORLEVEL% >> "%LOG%"',
+    'echo.',
+    'echo 启动流程已结束。',
+    'echo   · 本目录下的「启动日志.txt」：Electron 自身的输出与退出码',
+    'echo   · %APPDATA%\\Guncat Work\\logs\\startup.log：应用逐里程碑的启动日志',
+    'echo 若窗口没有出现，请把这两个文件发出来。',
+    'pause'
+  ].join('\r\n'),
+  'utf8'
+)
+
+// 桌面快捷方式（带应用图标；Windows 快捷方式只认 .ico）
+fs.writeFileSync(
+  path.join(outDir, '创建桌面快捷方式.cmd'),
+  [
+    '@echo off',
+    'chcp 65001 >nul',
+    'powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut([Environment]::GetFolderPath(\'Desktop\') + \'\\Guncat Work.lnk\'); $lnk.TargetPath = \'%~dp0Guncat Work.exe\'; $lnk.WorkingDirectory = \'%~dp0\'; $lnk.IconLocation = \'%~dp0resources\\resources\\app-icon.ico\'; $lnk.Description = \'Guncat Work\'; $lnk.Save()"',
+    'echo.',
+    'echo 已尝试在桌面创建「Guncat Work」快捷方式。',
+    'pause'
+  ].join('\r\n'),
+  'utf8'
+)
+step('写入 诊断启动.cmd 与 创建桌面快捷方式.cmd')
+
+// ===== 7. 简短说明 =====
 fs.writeFileSync(
   path.join(outDir, '使用说明.txt'),
   [
     'Guncat Work（电脑版）',
     '',
     '双击本目录下的「Guncat Work.exe」即可启动，无需安装、无需命令行。',
+    '想放到桌面就从「创建桌面快捷方式.cmd」双击一次，会生成带图标的快捷方式。',
     '',
     '首次使用：',
     '  1. 打开应用后点左下角「设置」',
@@ -120,7 +163,13 @@ fs.writeFileSync(
     '  🛠 工作模式  多轮工具循环 + 沙箱工作区，可直出 PPT / Word / Excel',
     '    聊天模式  纯对话',
     '',
-    '把文件拖进窗口即可导入当前会话的工作区。'
+    '把文件拖进窗口即可导入当前会话的工作区。',
+    '',
+    '如果双击后窗口没有出现：',
+    '  双击本目录的「诊断启动.cmd」，它会带日志启动并留下两个日志文件：',
+    '    · 本目录的「启动日志.txt」',
+    '    · %APPDATA%\\Guncat Work\\logs\\startup.log',
+    '  把这两个文件发出来即可定位问题。'
   ].join('\r\n'),
   'utf8'
 )
