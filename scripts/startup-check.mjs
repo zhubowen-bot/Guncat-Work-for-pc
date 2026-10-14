@@ -391,6 +391,34 @@ check(
   'ASCII 校验器能认出中文（否则这道防线是空的）',
   launch.asciiViolations('@echo off\r\necho 中文提示\r\n').length > 0
 )
+
+// --- 「双击即可用」脚本（本机必需） ---
+// 本机实测：同样带 --no-sandbox，管理员身份运行完全成功，非管理员双击却连第一行 JS
+// 都跑不到（启动日志无新记录）。根因未查明前，靠给 exe 挂 RUNASADMIN 兼容性层来保证
+// 双击可用。该设置按 exe 完整路径匹配且存在 HKCU —— 挪动文件夹或拷给别人就失效，
+// 所以必须由产物自带脚本完成，而不是靠口头说明。
+const enableAdmin = launch.buildEnableAdminCmd('Guncat Work')
+const disableAdmin = launch.buildDisableAdminCmd('Guncat Work')
+check('enable-admin-mode.cmd 是纯 ASCII', launch.asciiViolations(enableAdmin).length === 0)
+check('disable-admin-mode.cmd 是纯 ASCII', launch.asciiViolations(disableAdmin).length === 0)
+check(
+  '提权脚本写 HKCU 的 AppCompatFlags\\Layers',
+  enableAdmin.includes('AppCompatFlags\\Layers'),
+  '（这个键名写错就会静默失效 —— 双击仍然没反应）'
+)
+check('提权脚本设置 ~ RUNASADMIN', enableAdmin.includes('~ RUNASADMIN'))
+check(
+  '提权脚本以 exe 完整路径当值名（路径含空格也必须正确加引号）',
+  enableAdmin.includes('%~dp0Guncat Work.exe')
+)
+check(
+  '提权脚本提醒「挪动文件夹后要重跑」（否则用户会以为是我们修坏了）',
+  enableAdmin.toLowerCase().includes('move this folder')
+)
+check(
+  '撤销脚本删除同一路径的值（必须能还原）',
+  disableAdmin.includes('reg delete') && disableAdmin.includes('%~dp0Guncat Work.exe')
+)
 const asciiProbe = path.join(dataRoot, 'ascii-probe.cmd')
 launch.writeAsciiFile(asciiProbe, compatCmd)
 const probeBytes = fs.readFileSync(asciiProbe)

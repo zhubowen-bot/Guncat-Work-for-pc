@@ -21,6 +21,8 @@ import { fileURLToPath } from 'node:url'
 import {
   buildRunCompatCmd,
   buildRunAsAdminCmd,
+  buildEnableAdminCmd,
+  buildDisableAdminCmd,
   buildDiagnosePs1,
   writeAsciiFile,
   DIAG_MODES
@@ -147,6 +149,20 @@ writeAsciiFile(path.join(outDir, 'run-compat.cmd'), buildRunCompatCmd(appName, C
 writeAsciiFile(path.join(outDir, 'run-as-admin.cmd'), buildRunAsAdminCmd(appName, COMPAT_SWITCHES))
 
 /**
+ * 把「双击即可用」固化到产物里。
+ *
+ * 本机实测（变量已分离）：同样带 --no-sandbox，管理员身份运行完全成功，
+ * 非管理员双击却连第一行 JS 都跑不到（启动日志无新记录）。根因尚未查明。
+ * 在查清之前，最可靠的做法是给 exe 挂上 RUNASADMIN 兼容性层 ——
+ * 让普通双击弹一次 UAC 后以提权身份运行。
+ *
+ * 必须做成脚本：该设置按 exe 完整路径匹配且存在 HKCU，
+ * 一旦挪动文件夹或拷给别人就会失效，用户会以为是我们修坏了。
+ */
+writeAsciiFile(path.join(outDir, 'enable-admin-mode.cmd'), buildEnableAdminCmd(appName))
+writeAsciiFile(path.join(outDir, 'disable-admin-mode.cmd'), buildDisableAdminCmd(appName))
+
+/**
  * 诊断脚本：逐级降级 + 「走到了哪一步」的判定，见 launch-scripts.mjs 的说明。
  * 关键改进除了阶梯本身，还有：
  *   · 每轮独立 --user-data-dir（否则第一轮留下的单实例锁会让第二轮直接失败）；
@@ -209,10 +225,17 @@ fs.writeFileSync(
       '  应用自己的看门狗根本来不及救 —— 只能一启动就把参数带上。',
       '',
       '  需要手动介入时（按优先级）：',
-      '  · run-compat.cmd —— 不提权，直接以 --no-sandbox 启动。先试这个。',
+      '  · enable-admin-mode.cmd —— **本机需要先跑这一个**。',
+      '    本机实测：同样带 --no-sandbox，以管理员身份运行完全成功（界面正常、能产帧），',
+      '    但非管理员双击会连第一行日志都写不出来 —— 失败在「进程能不能起来」这一层，',
+      '    与 Chromium 内部无关，根因尚未查明。',
+      '    这个脚本给 exe 挂上 Windows 的 RUNASADMIN 兼容性层，',
+      '    之后**普通双击就会弹一次 UAC 并以提权身份运行**。',
+      '    代价：每次启动弹一次 UAC。撤销用 disable-admin-mode.cmd。',
+      '    注意：该设置按 exe 的完整路径匹配且存在你的用户配置里 ——',
+      '    **一旦把本文件夹挪位置、或拷给别人，都要重新跑一次这个脚本。**',
+      '  · run-compat.cmd —— 不提权，直接以 --no-sandbox 启动。',
       '  · run-as-admin.cmd —— 以管理员身份启动（会弹 UAC 提权确认）。',
-      '    最后的逃生口：调查显示「必须提权」是误判（那个入口同时做了提权和加参数，',
-      '    真正起作用的只是加参数），所以只在 --no-sandbox 也不管用时才需要试它。',
       '  · diagnose.cmd   —— 诊断，一次跑 6 档（每轮独立用户数据目录），并逐档给出结论。',
       '    第 1 档 --no-sandbox（现在的默认方式）、第 2 档再加 --disable-gpu、',
       '    第 3 档不加参数、第 4 档**故意保留沙箱**用来复现原始崩溃、',

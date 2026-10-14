@@ -126,6 +126,80 @@ export function buildRunAsAdminCmd(appName, switches) {
 }
 
 /**
+ * 让「双击 exe 即可用」被固化到产物里（而不是只存在于某台机器的注册表里）。
+ *
+ * 背景（本机实测，变量已分离）：
+ *   同样一份产物、同样带 --no-sandbox：
+ *     管理员身份运行 → 完全成功（DOM 就绪 / 加载完成 / React 已挂载 / 首帧已产出）
+ *     非管理员双击   → 完全没反应，而且**启动日志里没有新记录**
+ *   启动日志是 main 的第一条语句写的，所以非管理员那次连第一行 JS 都没跑到 ——
+ *   失败在「进程能不能起来」这一层，而非 Chromium 内部。根因尚未查明。
+ *
+ * 在这种前提下，最可靠的做法是给这个 exe 挂上 Windows 的 RUNASADMIN 兼容性层：
+ * 之后普通双击就会弹一次 UAC 并以提权身份运行（等价于右键「以管理员身份运行」）。
+ *
+ * 为什么必须做成脚本而不是口头说明：
+ *   该设置存在 HKCU 里、并且**按 exe 的完整路径**匹配。
+ *   一旦把文件夹挪位置、或者拷给别人，设置就失效 —— 用户会以为是我们修坏了。
+ *
+ * 代价：每次启动都会弹一次 UAC。等非管理员失败的根因查清后，这个脚本就该退休。
+ */
+export function buildEnableAdminCmd(appName) {
+  return (
+    [
+      '@echo off',
+      'setlocal',
+      'cd /d "%~dp0"',
+      'rem Make a plain double-click of the exe ask for elevation (one UAC prompt).',
+      'rem Needed because this build does NOT start when launched unelevated, and the',
+      'rem reason is still unknown. Remove it with disable-admin-mode.cmd once fixed.',
+      'rem ASCII only - see scripts/launch-scripts.mjs for why.',
+      'set "EXE=%~dp0' + appName + '.exe"',
+      'set "KEY=HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers"',
+      'reg add "%KEY%" /v "%EXE%" /t REG_SZ /d "~ RUNASADMIN" /f >nul',
+      'if errorlevel 1 goto failed',
+      'echo.',
+      'echo Done. Double-clicking "%EXE%" will now show a UAC prompt',
+      'echo and start with administrator rights.',
+      'echo.',
+      'echo Note: this is tied to that exact path. If you move this folder,',
+      'echo run this script again.',
+      'echo To undo it, run disable-admin-mode.cmd',
+      'pause',
+      'exit /b 0',
+      ':failed',
+      'echo.',
+      'echo Could not write the registry key. Nothing was changed.',
+      'pause',
+      'exit /b 1',
+      ''
+    ].join('\r\n')
+  )
+}
+
+/** 撤销上面那个兼容性层（还原成普通双击） */
+export function buildDisableAdminCmd(appName) {
+  return (
+    [
+      '@echo off',
+      'setlocal',
+      'cd /d "%~dp0"',
+      'rem Undo enable-admin-mode.cmd.',
+      'rem ASCII only - see scripts/launch-scripts.mjs for why.',
+      'set "EXE=%~dp0' + appName + '.exe"',
+      'set "KEY=HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers"',
+      'reg delete "%KEY%" /v "%EXE%" /f >nul 2>&1',
+      'echo.',
+      'echo Done. "%EXE%" will no longer ask for elevation.',
+      'echo If it does not start that way, run enable-admin-mode.cmd again.',
+      'pause',
+      'exit /b 0',
+      ''
+    ].join('\r\n')
+  )
+}
+
+/**
  * 诊断阶梯：一轮一档，每轮独立用户数据目录，一次跑完就能回答两个问题 ——
  * 「哪一档才真的可用」以及「这一档究竟卡在哪一步」。
  *
