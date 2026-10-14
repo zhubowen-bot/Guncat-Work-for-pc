@@ -61,6 +61,23 @@ export default function App() {
   const workspaceOpen = useStore((s) => s.workspaceOpen)
   const artifacts = useStore((s) => s.artifacts)
   const openTableOcr = useStore((s) => s.openTableOcr)
+  const settings = useStore((s) => s.settings)
+  const reloadSettings = useStore((s) => s.reloadSettings)
+  const profiles = settings?.apiProfiles ?? []
+  const pushNotice = useStore((s) => s.pushNotice)
+
+  /** 顶栏模型胶囊：切配置方案（主进程会把该方案写回运行时生效的配置） */
+  async function switchProfile(profileId: string): Promise<void> {
+    if (profileId === settings?.currentApiProfileId) {
+      return
+    }
+    try {
+      await window.guncat.settings.selectApiProfile(profileId)
+      await reloadSettings()
+    } catch (e) {
+      pushNotice('error', `切换配置失败：${String(e)}`)
+    }
+  }
   // 工作区面板收起时，产物卡的「预览」也要能弹出来 —— 弹层挂在 App 这一层
   // （面板展开时由面板自己渲染，避免两份弹层同时出现）。
   const preview = useWorkspacePreview(active?.id ?? null)
@@ -236,6 +253,23 @@ export default function App() {
                     <option value="low">快速</option>
                   </>
                 )}
+              </select>
+            </label>
+          ) : null}
+          {/* 模型胶囊（对齐原版 ChatPage 输入区左下角那颗）：直接在这儿换配置，
+              不必进设置。原版弹层上半部分就是配置列表 —— 这里用一个下拉等价表达。 */}
+          {profiles.length > 0 ? (
+            <label className="topbar__model" title="当前配置方案（切换即换模型与接入地址）">
+              <select
+                value={settings?.currentApiProfileId ?? ''}
+                disabled={running}
+                onChange={(e) => void switchProfile(e.target.value)}
+              >
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.config.model !== '' ? `${p.config.model} · ${p.name}` : p.name}
+                  </option>
+                ))}
               </select>
             </label>
           ) : null}

@@ -599,6 +599,30 @@ select {
 }
 
 /* 推理强度选择器：与两个开关同排，样式上也是胶囊 */
+/* 模型胶囊（顶栏的配置方案切换）：与推理强度选择器同规格 */
+.topbar__model {
+  display: inline-flex;
+  align-items: center;
+  max-width: 260px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.topbar__model select {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  padding: 1px 2px;
+  outline: none;
+  max-width: 240px;
+}
+
+.topbar__model select:disabled {
+  color: var(--text-faint);
+}
+
 .topbar__effort {
   display: inline-flex;
   align-items: center;
