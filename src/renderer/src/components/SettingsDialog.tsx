@@ -107,6 +107,7 @@ export function SettingsDialog() {
   const [asrModel, setAsrModel] = useState('')
   const [search, setSearch] = useState<SearchDraft>(EMPTY_SEARCH)
   const [engines, setEngines] = useState<SearchEngineDto[]>([])
+  const [profileName, setProfileName] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -122,6 +123,10 @@ export function SettingsDialog() {
     setAsrApiKey(settings?.prefs?.asr_apiKey ?? '')
     setAsrModel(settings?.prefs?.asr_model ?? '')
     setSearch(parseSearchDraft(settings?.prefs?.[LOCAL_SEARCH_PREF_KEY]))
+    const current = (settings?.apiProfiles ?? []).find(
+      (p) => p.id === settings?.currentApiProfileId
+    )
+    setProfileName(current?.name ?? '')
     // 引擎目录来自主进程（单一事实来源在 core 的 LocalWebSearch）
     void window.guncat.settings
       .searchEngines()
@@ -131,6 +136,49 @@ export function SettingsDialog() {
 
   if (!open) {
     return null
+  }
+
+  const profiles = settings?.apiProfiles ?? []
+
+  /** 切换配置方案：主进程会把该方案写回运行时生效的配置，这里只要重新读一次设置 */
+  async function switchProfile(profileId: string): Promise<void> {
+    if (profileId === settings?.currentApiProfileId) {
+      return
+    }
+    try {
+      await window.guncat.settings.selectApiProfile(profileId)
+      await reloadSettings()
+    } catch (e) {
+      pushNotice('error', `切换配置方案失败：${String(e)}`)
+    }
+  }
+
+  async function addProfile(): Promise<void> {
+    try {
+      await window.guncat.settings.addApiProfile()
+      await reloadSettings()
+      pushNotice('info', '已新建配置方案（内容复制自当前方案，改名后保存即可）')
+    } catch (e) {
+      pushNotice('error', `新建配置方案失败：${String(e)}`)
+    }
+  }
+
+  async function removeProfile(): Promise<void> {
+    if (profiles.length <= 1) {
+      pushNotice('warn', '至少要保留一个配置方案')
+      return
+    }
+    const currentId = settings?.currentApiProfileId ?? ''
+    if (currentId === '') {
+      return
+    }
+    try {
+      await window.guncat.settings.deleteApiProfile(currentId)
+      await reloadSettings()
+      pushNotice('info', '已删除当前配置方案')
+    } catch (e) {
+      pushNotice('error', `删除配置方案失败：${String(e)}`)
+    }
   }
 
   function update<K extends keyof ApiConfigDto>(key: K, value: ApiConfigDto[K]): void {
@@ -175,13 +223,19 @@ export function SettingsDialog() {
   async function save(): Promise<void> {
     setSaving(true)
     try {
-      await window.guncat.settings.saveApiConfig(draft)
-      await window.guncat.settings.saveMultimodalConfig({
-        baseUrl: mmBaseUrl,
-        apiKey: mmApiKey,
-        model: mmModel,
-        preparseEnabled: mmPreparse
-      })
+      // 一次性保存当前配置方案（名称 + API 配置 + 多模态配置）。
+      // 走这条而不是分开调 saveApiConfig / saveMultimodalConfig：
+      // 方案才是这几项配置的归属，分开调会让「名称改了但没落到方案上」这类半更新出现。
+      await window.guncat.settings.saveCurrentApiProfile(
+        profileName,
+        draft,
+        {
+          baseUrl: mmBaseUrl,
+          apiKey: mmApiKey,
+          model: mmModel,
+          preparseEnabled: mmPreparse
+        }
+      )
       await window.guncat.settings.saveString('asr_baseUrl', asrBaseUrl)
       await window.guncat.settings.saveString('asr_apiKey', asrApiKey)
       await window.guncat.settings.saveString('asr_model', asrModel)
@@ -215,6 +269,45 @@ export function SettingsDialog() {
         </div>
 
         <div className="dialog__body">
+          {/* 配置方案（对齐原版 SettingsPanel 顶部的「配置方案 / 配置名称」）：
+              可以并存多套 API 配置并在其间一键切换，出错时也能两套轮流试。 */}
+          <div className="field field--row">
+            <div>
+              <label>配置方案</label>
+              <select
+                value={settings?.currentApiProfileId ?? ''}
+                onChange={(e) => void switchProfile(e.target.value)}
+              >
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label>配置名称</label>
+              <input
+                value={profileName}
+                placeholder="未命名配置"
+                onChange={(e) => setProfileName(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="field field--row">
+            <button className="btn" onClick={() => void addProfile()}>
+              新建配置
+            </button>
+            <button
+              className="btn btn--danger"
+              disabled={profiles.length <= 1}
+              title={profiles.length <= 1 ? '至少要保留一个配置方案' : '删除当前配置方案'}
+              onClick={() => void removeProfile()}
+            >
+              删除当前配置
+            </button>
+          </div>
+
           <div className="field">
             <label>接入方式</label>
             <select value={draft.provider} onChange={(e) => update('provider', e.target.value)}>

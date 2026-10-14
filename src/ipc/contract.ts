@@ -13,6 +13,15 @@ export const INVOKE = {
   settingsSaveString: 'settings:saveString',
   /** 本地联网搜索的引擎目录（渲染层据此渲染选项，不必自己维护一份引擎表） */
   settingsSearchEngines: 'settings:searchEngines',
+  /**
+   * 配置方案（多套 API 配置）。原版 SettingsPanel 顶部的「配置方案 / 配置名称」就是它；
+   * 桌面端此前 ApiProfileDto、saveApiProfiles 通道、StorageManager 的读写**全都在**，
+   * 只有渲染层从来没有调用点 —— 用户无法保存/切换第二套配置。
+   */
+  settingsSelectApiProfile: 'settings:selectApiProfile',
+  settingsAddApiProfile: 'settings:addApiProfile',
+  settingsDeleteApiProfile: 'settings:deleteApiProfile',
+  settingsSaveCurrentApiProfile: 'settings:saveCurrentApiProfile',
   /** 智能体 */
   agentsList: 'agents:list',
 
@@ -135,6 +144,8 @@ export interface SearchEngineDto {
 export interface AppSettingsDto {
   apiConfig: ApiConfigDto | null
   apiProfiles: ApiProfileDto[]
+  /** 当前选中的配置方案 id（对齐原版 Constants.LS_KEY_CURRENT_API_PROFILE_ID） */
+  currentApiProfileId: string
   multimodalConfig: MultimodalConfigDto
   flags: Record<string, boolean>
   /** 字符串型偏好（朗读音色/语速等） */

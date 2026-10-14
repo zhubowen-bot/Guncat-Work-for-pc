@@ -113,32 +113,170 @@ export class SessionManager {
     const apiConfig: ApiConfig | null = await StorageManager.loadApiConfig(ctx).catch(
       (): ApiConfig | null => null
     )
-    const apiProfiles: ApiProfile[] = await StorageManager.loadApiProfiles(ctx).catch(
-      (): ApiProfile[] => []
-    )
     const multimodalConfig: MultimodalConfig = await StorageManager.loadMultimodalConfig(ctx).catch(
       (): MultimodalConfig => MultimodalConfig.default()
     )
+    // 配置方案列表（首次运行会把已有的单份配置迁移成「默认配置」，对齐原版 ChatViewModel.init）
+    const { profiles, currentId } = await this.readApiProfiles(ctx)
     // 本地联网搜索：把持久化的配置**绑定**给工具层。
-    // LocalWebSearch.settings 是进程级单例，不 bind 的话永远停在默认值（Bing / 不限额以外全是空），
+    // LocalWebSearch.settings 是进程级单例，不 bind 的话永远停在默认值（Bing / 默认条数），
     // 用户配的引擎与 Key 一律不生效 —— 原版在 ChatViewModel.init 里做了这一步，桌面端漏了。
     await this.bindLocalSearchConfig(ctx)
     return {
       apiConfig: apiConfig === null ? null : SessionManager.toApiConfigDto(apiConfig),
-      apiProfiles: apiProfiles.map((p) => ({
-        id: p.id,
-        name: p.name,
-        config: SessionManager.toApiConfigDto(p.apiConfig),
-        multimodalConfig: SessionManager.toMultimodalDto(p.multimodalConfig)
-      })),
+      apiProfiles: profiles.map((p) => SessionManager.toApiProfileDto(p)),
+      currentApiProfileId: currentId,
       multimodalConfig: SessionManager.toMultimodalDto(multimodalConfig),
       flags: {},
       prefs: await this.loadStringPrefs()
     }
   }
 
+  // ===== 配置方案（多套 API 配置） =====
+
+  /**
+   * 读配置方案列表与当前选中项。
+   *
+   * 首次运行（或从只有「单份配置」的旧版本升级）时，把已有的 apiConfig / multimodalConfig
+   * 迁移成一份名为「默认配置」的方案并落盘 —— 与原版 ChatViewModel.init 的处理一致，
+   * 这样老用户的 Key 不会因为引入了方案机制而消失。
+   */
+  private async readApiProfiles(ctx: Context): Promise<{ profiles: ApiProfile[]; currentId: string }> {
+    let profiles: ApiProfile[] = await StorageManager.loadApiProfiles(ctx).catch(
+      (): ApiProfile[] => []
+    )
+    if (profiles.length === 0) {
+      const legacyApi: ApiConfig = await StorageManager.loadApiConfig(ctx).catch(
+        (): ApiConfig => ApiConfig.default()
+      ) ?? ApiConfig.default()
+      const legacyMm: MultimodalConfig = await StorageManager.loadMultimodalConfig(ctx).catch(
+        (): MultimodalConfig => MultimodalConfig.default()
+      )
+      profiles = [ApiProfile.fromLegacy('默认配置', legacyApi ?? ApiConfig.default(), legacyMm)]
+      await StorageManager.saveApiProfiles(ctx, profiles).catch(() => {
+        // 迁移失败不阻断：本次仍按这份内存里的方案工作
+      })
+    }
+    const saved: string = await StorageManager.loadString(
+      ctx,
+      Constants.LS_KEY_CURRENT_API_PROFILE_ID,
+      ''
+    ).catch((): string => '')
+    const currentId: string = profiles.some((p) => p.id === saved) ? saved : profiles[0].id
+    return { profiles, currentId }
+  }
+
+  /** 当前生效的配置方案（id 对不上时退回第一份，保证永远有一个可用方案） */
+  private async currentProfile(ctx: Context): Promise<ApiProfile> {
+    const { profiles, currentId } = await this.readApiProfiles(ctx)
+    return profiles.find((p) => p.id === currentId) ?? profiles[0]
+  }
+
+  /**
+   * 让某个方案成为运行时生效的配置。
+   *
+   * 关键点：桌面端的聊天/工作轮次都是从**旧的两个键**（guncat_api_config / guncat_mm_config）
+   * 读配置的（见 sendChat / runWork / regenerateChat），所以切换方案必须把方案内容写回那两个键，
+   * 否则界面上切了、真正发请求时用的还是上一套。
+   */
+  private async applyProfile(ctx: Context, profile: ApiProfile): Promise<void> {
+    await StorageManager.saveApiConfig(ctx, profile.apiConfig)
+    await StorageManager.saveMultimodalConfig(ctx, profile.multimodalConfig)
+    await StorageManager.saveString(ctx, Constants.LS_KEY_CURRENT_API_PROFILE_ID, profile.id)
+  }
+
+  /** 把运行时配置回写进当前方案（用户点「保存」时走这条） */
+  private async writeBackToProfile(
+    ctx: Context,
+    apiDto: ApiConfigDto,
+    mmDto: MultimodalConfigDto,
+    name?: string
+  ): Promise<void> {
+    const { profiles, currentId } = await this.readApiProfiles(ctx)
+    const index: number = profiles.findIndex((p) => p.id === currentId)
+    if (index < 0) {
+      return
+    }
+    const profile: ApiProfile = profiles[index]
+    if (name !== undefined && name.trim() !== '') {
+      profile.name = name.trim()
+    }
+    profile.apiConfig = SessionManager.fromApiConfigDto(apiDto)
+    profile.multimodalConfig = SessionManager.fromMultimodalDto(mmDto)
+    await StorageManager.saveApiProfiles(ctx, profiles)
+  }
+
+  async selectApiProfile(profileId: string): Promise<void> {
+    const ctx: Context = this.ctx()
+    const { profiles } = await this.readApiProfiles(ctx)
+    const profile: ApiProfile | undefined = profiles.find((p) => p.id === profileId)
+    if (profile === undefined) {
+      return
+    }
+    await this.applyProfile(ctx, profile)
+  }
+
+  /**
+   * 新建一个配置方案。
+   *
+   * 与原版的一点差异（有意为之）：原版新建的是**空白配置**并立刻应用，
+   * 用户若随后取消编辑，生效的配置就已经是空的了。桌面端改为**复制当前配置**再改名，
+   * 这样任何时刻都有一套能用的配置，不会出现「加了个配置方案，聊天就发不出去了」。
+   */
+  async addApiProfile(): Promise<ApiProfileDto> {
+    const ctx: Context = this.ctx()
+    const { profiles, currentId } = await this.readApiProfiles(ctx)
+    const current: ApiProfile | undefined = profiles.find((p) => p.id === currentId)
+    const created: ApiProfile = ApiProfile.create(`新配置 ${profiles.length + 1}`)
+    if (current !== undefined) {
+      created.apiConfig = current.apiConfig
+      created.multimodalConfig = current.multimodalConfig
+    }
+    profiles.push(created)
+    await StorageManager.saveApiProfiles(ctx, profiles)
+    await this.applyProfile(ctx, created)
+    return SessionManager.toApiProfileDto(created)
+  }
+
+  async deleteApiProfile(profileId: string): Promise<void> {
+    const ctx: Context = this.ctx()
+    const { profiles, currentId } = await this.readApiProfiles(ctx)
+    // 至少留一份：全删掉会让应用没有任何可用配置
+    if (profiles.length <= 1) {
+      return
+    }
+    const remaining: ApiProfile[] = profiles.filter((p) => p.id !== profileId)
+    if (remaining.length === profiles.length) {
+      return
+    }
+    await StorageManager.saveApiProfiles(ctx, remaining)
+    if (profileId === currentId) {
+      // 删掉的正是当前方案：切到剩下的第一份，并把它的内容写回运行时键
+      await this.applyProfile(ctx, remaining[0])
+    }
+  }
+
+  /** 一次性保存当前方案（名称 + API 配置 + 多模态配置）—— 设置面板的「保存」按钮 */
+  async saveCurrentApiProfile(
+    name: string,
+    apiDto: ApiConfigDto,
+    mmDto: MultimodalConfigDto
+  ): Promise<void> {
+    const ctx: Context = this.ctx()
+    await StorageManager.saveApiConfig(ctx, SessionManager.fromApiConfigDto(apiDto))
+    await StorageManager.saveMultimodalConfig(ctx, SessionManager.fromMultimodalDto(mmDto))
+    await this.writeBackToProfile(ctx, apiDto, mmDto, name)
+  }
+
   async saveApiConfig(dto: ApiConfigDto): Promise<void> {
-    await StorageManager.saveApiConfig(this.ctx(), SessionManager.fromApiConfigDto(dto))
+    const ctx: Context = this.ctx()
+    await StorageManager.saveApiConfig(ctx, SessionManager.fromApiConfigDto(dto))
+    // 同步回当前方案：不同步的话「保存」只改了运行时键，
+    // 下次切走再切回来（或重启后按方案应用）就会退回到旧值
+    const mm: MultimodalConfig = await StorageManager.loadMultimodalConfig(ctx).catch(
+      (): MultimodalConfig => MultimodalConfig.default()
+    )
+    await this.writeBackToProfile(ctx, dto, SessionManager.toMultimodalDto(mm))
   }
 
   async saveApiProfiles(profiles: ApiProfileDto[]): Promise<void> {
@@ -154,7 +292,16 @@ export class SessionManager {
   }
 
   async saveMultimodalConfig(dto: MultimodalConfigDto): Promise<void> {
-    await StorageManager.saveMultimodalConfig(this.ctx(), SessionManager.fromMultimodalDto(dto))
+    const ctx: Context = this.ctx()
+    await StorageManager.saveMultimodalConfig(ctx, SessionManager.fromMultimodalDto(dto))
+    const api: ApiConfig | null = await StorageManager.loadApiConfig(ctx).catch(
+      (): ApiConfig | null => null
+    )
+    await this.writeBackToProfile(
+      ctx,
+      SessionManager.toApiConfigDto(api ?? ApiConfig.default()),
+      dto
+    )
   }
 
   async saveFlag(key: string, value: boolean): Promise<void> {
@@ -969,6 +1116,15 @@ export class SessionManager {
       maxTokens: config.maxTokens ?? 0,
       extraParams: config.extraBody,
       autoSuffix: config.autoSuffix
+    }
+  }
+
+  static toApiProfileDto(profile: ApiProfile): ApiProfileDto {
+    return {
+      id: profile.id,
+      name: profile.name,
+      config: SessionManager.toApiConfigDto(profile.apiConfig),
+      multimodalConfig: SessionManager.toMultimodalDto(profile.multimodalConfig)
     }
   }
 

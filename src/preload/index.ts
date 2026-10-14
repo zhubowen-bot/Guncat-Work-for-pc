@@ -25,6 +25,21 @@ const api = {
       ipcRenderer.invoke(INVOKE.settingsSaveApiConfig, dto),
     saveApiProfiles: (profiles: ApiProfileDto[]): Promise<void> =>
       ipcRenderer.invoke(INVOKE.settingsSaveApiProfiles, profiles),
+    /** 配置方案：选中（会同时把该方案写回运行时生效的配置） */
+    selectApiProfile: (profileId: string): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.settingsSelectApiProfile, profileId),
+    /** 配置方案：新建（复制当前配置，返回新方案） */
+    addApiProfile: (): Promise<ApiProfileDto> => ipcRenderer.invoke(INVOKE.settingsAddApiProfile),
+    /** 配置方案：删除（至少保留一份） */
+    deleteApiProfile: (profileId: string): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.settingsDeleteApiProfile, profileId),
+    /** 配置方案：一次性保存当前方案（名称 + API 配置 + 多模态配置） */
+    saveCurrentApiProfile: (
+      name: string,
+      config: ApiConfigDto,
+      multimodal: MultimodalConfigDto
+    ): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.settingsSaveCurrentApiProfile, name, config, multimodal),
     saveMultimodalConfig: (dto: MultimodalConfigDto): Promise<void> =>
       ipcRenderer.invoke(INVOKE.settingsSaveMultimodalConfig, dto),
     saveFlag: (key: string, value: boolean): Promise<void> =>

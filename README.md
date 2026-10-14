@@ -99,11 +99,11 @@ background 与 foreground **都指向 `cat_avatar.png`**，所以它才是真正
 | --- | --- | --- |
 | 类型 | `npm run typecheck` | `src/core`（移植内核）+ `src/main` + `src/preload` + `src/renderer` |
 | 构建 | `npm run build` | main / preload / renderer 三端产物 |
-| 内核 | `npm run smoke:core` | 105 项：智能体加载、45 个工具、37 项技能、沙箱工作区、`run_js` 沙箱、数据管道、持久化、三协议端点、**Office 工具链端到端**（生成→读回→算子编辑）、**技能系统工具**、**交互模式全链路**（解析 / `$绑定`重算 / 动作回传 / 状态尾标记 / 表单打包） |
-| 渲染 | `npm run smoke:render` | 26 项：用 `react-dom/server` 把一份覆盖主要组件的界面程序渲染成 HTML 并逐项断言 |
-| 契约 | `npm run smoke:ipc` | 55 项：用 electron 替身把渲染进程会调用的**每个 IPC 通道**真实 invoke 一遍（注册完整性、设置往返、会话生命周期、事件推送、越界与目录穿越拒绝、护栏提示、**文件收件**、**导出 Word**、**语音转写配置与端点拼接**） |
-| 启动 | `npm run smoke:startup` | 19 项：用 electron 替身跑**真实入口** `src/main/index.ts`，断言单实例锁 → whenReady → 建窗口 → 注册 IPC 依次发生，且 **preload 路径与 index.html 都指向真实存在的文件**、数据目录已建、全程无异常 |
-| 全部 | `npm run smoke` | 上面四套一起跑（205 项） |
+| 内核 | `npm run smoke:core` | 126 项：智能体加载、44 个工具、37 项技能、沙箱工作区、`run_js` 沙箱、数据管道、持久化、三协议端点、**Office 工具链端到端**（生成→读回→算子编辑）、**技能系统工具**、**交互模式全链路**（解析 / `$绑定`重算 / 动作回传 / 状态尾标记 / 表单打包）、**PDF 解析**（文本 / 搜索 / 页面转图）、**SVG 栅格化**（预览 PNG / docx 与 pptx 引用） |
+| 渲染 | `npm run smoke:render` | 128 项：用 `react-dom/server` 把一份覆盖主要组件的界面程序渲染成 HTML 并逐项断言（含工作模式与交互模式各自的编排方式、Markdown 的 LaTeX / 代码块 / mermaid 三条链路、工作区面板的上传入口与文件分类图标） |
+| 契约 | `npm run smoke:ipc` | 76 项：用 electron 替身把渲染进程会调用的**每个 IPC 通道**真实 invoke 一遍（注册完整性、设置往返、会话生命周期、事件推送、越界与目录穿越拒绝、护栏提示、**文件收件与工作区上传**、**导出 Word**、**语音转写配置与端点拼接**、**本地联网搜索配置与绑定**、**协议路径后缀开关往返**） |
+| 启动 | `npm run smoke:startup` | 149 项：用 electron 替身跑**真实入口** `src/main/index.ts`，断言单实例锁 → whenReady → 建窗口 → 注册 IPC 依次发生，且 **preload 路径与 index.html 都指向真实存在的文件**、数据目录已建、全程无异常；另有任务栏身份、菜单栏、窗口图标与打包脚本的图标写入断言 |
+| 全部 | `npm run smoke` | 上面四套 + 端侧增强 27 项 + 语音输入 12 项 + 无 emoji 检查（共 492 项） |
 
 `npm run smoke` 把风险最高的移植内核拉到纯 Node 下按真实调用链跑一遍，
 并用 esbuild 施加与 `electron.vite.config.ts` **完全相同**的别名规则 ——

@@ -23,6 +23,18 @@ export interface GuncatApi {
     load(): Promise<AppSettingsDto>
     saveApiConfig(dto: ApiConfigDto): Promise<void>
     saveApiProfiles(profiles: ApiProfileDto[]): Promise<void>
+    /** 配置方案：选中（会同时把该方案写回运行时生效的配置） */
+    selectApiProfile(profileId: string): Promise<void>
+    /** 配置方案：新建（复制当前配置，返回新方案） */
+    addApiProfile(): Promise<ApiProfileDto>
+    /** 配置方案：删除（至少保留一份） */
+    deleteApiProfile(profileId: string): Promise<void>
+    /** 配置方案：一次性保存当前方案（名称 + API 配置 + 多模态配置） */
+    saveCurrentApiProfile(
+      name: string,
+      config: ApiConfigDto,
+      multimodal: MultimodalConfigDto
+    ): Promise<void>
     saveMultimodalConfig(dto: MultimodalConfigDto): Promise<void>
     saveFlag(key: string, value: boolean): Promise<void>
     saveString(key: string, value: string): Promise<void>

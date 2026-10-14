@@ -38,6 +38,20 @@ export function registerIpcHandlers(session: SessionManager): void {
   ipcMain.handle(INVOKE.settingsSaveApiProfiles, async (_e, profiles: ApiProfileDto[]) => {
     await session.saveApiProfiles(profiles)
   })
+  // 配置方案：选中 / 新建 / 删除 / 一次性保存当前方案（对齐原版 SettingsPanel 的「配置方案」）
+  ipcMain.handle(INVOKE.settingsSelectApiProfile, async (_e, profileId: string) => {
+    await session.selectApiProfile(profileId)
+  })
+  ipcMain.handle(INVOKE.settingsAddApiProfile, async () => session.addApiProfile())
+  ipcMain.handle(INVOKE.settingsDeleteApiProfile, async (_e, profileId: string) => {
+    await session.deleteApiProfile(profileId)
+  })
+  ipcMain.handle(
+    INVOKE.settingsSaveCurrentApiProfile,
+    async (_e, name: string, config: ApiConfigDto, multimodal: MultimodalConfigDto) => {
+      await session.saveCurrentApiProfile(name, config, multimodal)
+    }
+  )
   ipcMain.handle(INVOKE.settingsSaveMultimodalConfig, async (_e, dto: MultimodalConfigDto) => {
     await session.saveMultimodalConfig(dto)
   })

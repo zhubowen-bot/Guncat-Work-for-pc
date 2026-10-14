@@ -108,6 +108,10 @@ const required = [
   'app:rendererStage',
   'settings:saveString',
   'settings:searchEngines',
+  'settings:selectApiProfile',
+  'settings:addApiProfile',
+  'settings:deleteApiProfile',
+  'settings:saveCurrentApiProfile',
   'intake:import',
   'intake:pickFiles',
   'message:exportDocx',
@@ -395,6 +399,72 @@ check(
   mod.LocalWebSearch.currentSettings().engine === 'tavily' &&
     mod.LocalWebSearch.currentSettings().maxResults === 3,
   mod.LocalWebSearch.currentSettings().engine
+)
+
+// --- 配置方案（多套 API 配置）：原版「配置方案 / 配置名称」，桌面端此前渲染层零调用点 ---
+const settingsProfiles = await inv('settings:load')
+check(
+  '首次加载会把已有的单份配置迁移成一份「默认配置」方案（老用户的 Key 不会丢）',
+  Array.isArray(settingsProfiles.apiProfiles) &&
+    settingsProfiles.apiProfiles.length >= 1 &&
+    settingsProfiles.apiProfiles[0].name.length > 0 &&
+    settingsProfiles.currentApiProfileId === settingsProfiles.apiProfiles[0].id,
+  (settingsProfiles.apiProfiles ?? []).map((p) => p.name).join(', ')
+)
+
+const firstProfileId = settingsProfiles.currentApiProfileId
+const added = await inv('settings:addApiProfile')
+check('新建配置方案返回新方案', added !== undefined && added.id !== firstProfileId, added?.name)
+check(
+  '新方案内容复制自当前方案（原版是空白方案，会让「加了配置就发不出请求」）',
+  added?.config?.baseUrl === settingsProfiles.apiConfig?.baseUrl,
+  `${added?.config?.baseUrl}`
+)
+const afterAdd = await inv('settings:load')
+check(
+  '新建后当前方案切到新的那份',
+  afterAdd.currentApiProfileId === added.id && afterAdd.apiProfiles.length === settingsProfiles.apiProfiles.length + 1
+)
+
+await inv('settings:saveCurrentApiProfile', '测试方案', {
+  ...added.config,
+  model: 'profile-model-x',
+  autoSuffix: false
+}, added.multimodalConfig)
+const afterSaveProfile = await inv('settings:load')
+check(
+  '一次性保存方案：名称与配置都落到方案上',
+  afterSaveProfile.apiProfiles.some((p) => p.name === '测试方案' && p.config.model === 'profile-model-x')
+)
+check(
+  '一次性保存方案：运行时生效的配置同步更新（工作轮次读的是旧键）',
+  afterSaveProfile.apiConfig?.model === 'profile-model-x' &&
+    afterSaveProfile.apiConfig?.autoSuffix === false
+)
+
+await inv('settings:selectApiProfile', firstProfileId)
+const afterSelect = await inv('settings:load')
+check('切换方案后运行时配置跟着换', afterSelect.currentApiProfileId === firstProfileId)
+check(
+  '切换方案会把该方案写回运行时键（否则界面切了、发请求还用旧的）',
+  afterSelect.apiConfig?.model !== 'profile-model-x',
+  String(afterSelect.apiConfig?.model)
+)
+
+await inv('settings:deleteApiProfile', added.id)
+const afterProfileDelete = await inv('settings:load')
+check('删除方案生效', !afterProfileDelete.apiProfiles.some((p) => p.id === added.id))
+
+// 删到只剩一份时必须拒绝：一份都不剩会让应用彻底没有可用配置
+const profilesNow = (await inv('settings:load')).apiProfiles
+for (const p of profilesNow.slice(1)) {
+  await inv('settings:deleteApiProfile', p.id)
+}
+const lastProfile = await inv('settings:load')
+await inv('settings:deleteApiProfile', lastProfile.apiProfiles[0].id)
+check(
+  '至少保留一份配置方案（删最后一份会被拒绝）',
+  (await inv('settings:load')).apiProfiles.length === 1
 )
 
 // --- 命令行文件收件：argv 解析 ---
