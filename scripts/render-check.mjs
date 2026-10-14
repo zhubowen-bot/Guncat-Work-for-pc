@@ -1,4 +1,4 @@
-// 交互模式渲染器的无头验证：用 react-dom/server 把界面程序渲染成 HTML 字符串，
+﻿// 交互模式渲染器的无头验证：用 react-dom/server 把界面程序渲染成 HTML 字符串，
 // 断言关键组件确实出现在产物里。
 //
 // 为什么值得做：Electron GUI 在本机跑不起来，但「元素树 → React 组件树」这一段
@@ -620,6 +620,43 @@ check(
 check(
   '损坏的 diff meta 安全退回原始 IO（不让界面因渲染失败而空掉）',
   mod.renderToolRow('edit', '{}', '已写入', '{ 这不是 JSON').includes('io__pre')
+)
+
+// --- 任务统计卡 / 目标卡（审计 P2-10） ---
+//
+// 事故形状：工作区面板只有「N 个文件 / N 个目录 / N 次工具调用」，
+// 且是全会话累计、对应不到原版的「本轮」；全库 elapsed 零命中，
+// GoalService.read 在主进程与渲染层都没有调用点 —— 跑长任务看不到「跑了多久、目标是什么」。
+console.log('\n25. 任务统计卡 / 目标卡')
+const statsHtml = mod.renderTaskStats()
+check(
+  '统计卡四项齐全（任务用时 / 输出速度 / 缓存命中 / 工具轮数）',
+  statsHtml.includes('任务用时') &&
+    statsHtml.includes('输出速度') &&
+    statsHtml.includes('缓存命中') &&
+    statsHtml.includes('工具轮数')
+)
+check('用时按分秒显示', statsHtml.includes('1 分 23 秒'), '83400ms')
+check('速度按字/秒显示', statsHtml.includes('42.4 字/秒'))
+check('缓存命中按百分比显示', statsHtml.includes('81%'))
+check('工具轮数显示', statsHtml.includes('>7<'))
+check(
+  '目标卡显示目标文本、状态与轮次进度',
+  statsHtml.includes('把季度报表补齐并导出') &&
+    statsHtml.includes('推进中') &&
+    statsHtml.includes('第 3 / 40 轮')
+)
+const statsEmpty = mod.renderTaskStatsEmpty()
+check(
+  '还没跑过 / 没有目标时两张卡都不渲染（不留一张全是横杠的空卡）',
+  !statsEmpty.includes('taskstats') && !statsEmpty.includes('taskgoal'),
+  statsEmpty.length + ' 字节'
+)
+const durations = mod.renderDurations()
+check(
+  '任务用时的量级分档正确（无数据 / 秒 / 分秒）',
+  durations[0] === '—' && durations[1] === '8.4 秒' && durations[2] === '1 分 23 秒' && durations[3] === '2 分 5 秒',
+  durations.join(' | ')
 )
 
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)

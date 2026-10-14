@@ -1,4 +1,4 @@
-// 工作区面板（对齐原版 WorkspaceBar：标题 + 上传/导出 + 文件清单 + 底部统计）。
+﻿// 工作区面板（对齐原版 WorkspaceBar：标题 + 上传/导出 + 文件清单 + 底部统计）。
 //
 // 用户报障「工作区上传文件有问题，找不到入口」的根因很具体：
 // 桌面版此前只有「拖拽文件到窗口」这一条导入路径，而拖拽在界面上**没有任何提示**，
@@ -6,6 +6,7 @@
 // 空态文案更是直接写着「工作区为空, 点击"上传"添加文件」。
 // 这里把那个入口补回来，并且空态也给一颗按钮 —— 空工作区恰恰是最需要它的时候。
 import { useState } from 'react'
+import type { ConversationStatsDto, GoalDto } from '@ipc/contract'
 import { useStore } from '../store'
 import {
   IconAudio,
@@ -32,6 +33,84 @@ function formatSize(bytes: number): string {
     return `${(bytes / 1024).toFixed(1)} KB`
   }
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** 目标状态的短标签（对齐原版 GoalService 的四种状态） */
+const GOAL_STATUS_LABEL: Record<string, string> = {
+  active: '推进中',
+  paused: '已暂停',
+  done: '已完成',
+  blocked: '受阻'
+}
+
+/** 任务用时：不足 60 秒给到 0.1 秒，过了给分秒 */
+export function formatTaskDuration(ms: number): string {
+  if (ms <= 0) {
+    return '—'
+  }
+  const seconds = ms / 1000
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)} 秒`
+  }
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.round(seconds - minutes * 60)
+  return `${minutes} 分 ${rest} 秒`
+}
+
+/**
+ * 任务统计卡（对齐原版 DetailsPanelView 的四项：任务用时 / 输出速度 / 缓存命中 / 工具轮数）。
+ * 还没跑过时（轮数为 0）整张卡不显示 —— 一张全是横杠的卡没有信息量。
+ * 速度与命中为「无数据」时显示横杠而不是 0，否则会被误读成「很慢 / 一次都没命中」。
+ */
+export function TaskStatsCard({ stats }: { stats: ConversationStatsDto }) {
+  if (stats.rounds <= 0) {
+    return null
+  }
+  return (
+    <div className="taskstats">
+      <div className="taskstats__item">
+        <span className="taskstats__label">任务用时</span>
+        <span className="taskstats__value">{formatTaskDuration(stats.elapsedMs)}</span>
+      </div>
+      <div className="taskstats__item">
+        <span className="taskstats__label">输出速度</span>
+        <span className="taskstats__value">
+          {stats.speed > 0 ? `${stats.speed.toFixed(1)} 字/秒` : '—'}
+        </span>
+      </div>
+      <div className="taskstats__item">
+        <span className="taskstats__label">缓存命中</span>
+        <span className="taskstats__value">
+          {stats.cacheHit >= 0 ? `${Math.round(stats.cacheHit * 100)}%` : '—'}
+        </span>
+      </div>
+      <div className="taskstats__item">
+        <span className="taskstats__label">工具轮数</span>
+        <span className="taskstats__value">{stats.rounds}</span>
+      </div>
+    </div>
+  )
+}
+
+/** 当前目标卡（对齐原版 DetailsPanelView 的目标卡）；没有目标时整张卡不显示 */
+export function TaskGoalCard({ goal }: { goal: GoalDto | null }) {
+  if (goal === null || goal.objective === '') {
+    return null
+  }
+  return (
+    <div className="taskgoal">
+      <div className="taskgoal__head">
+        <span>当前目标</span>
+        <span className="taskgoal__status" data-status={goal.status}>
+          {GOAL_STATUS_LABEL[goal.status] ?? goal.status}
+        </span>
+      </div>
+      <div className="taskgoal__text">{goal.objective}</div>
+      <div className="taskgoal__meta">
+        第 {goal.rounds} / {goal.maxRounds} 轮
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -126,6 +205,7 @@ export function workspaceFileIcon(path: string, size = 15): React.ReactElement {
 
 export function WorkspacePanel() {
   const workspace = useStore((s) => s.workspace)
+  const stats = useStore((s) => s.stats)
   const activeId = useStore((s) => s.activeId)
   const active = useStore((s) => s.active)
   const running = useStore((s) => s.running)
@@ -223,6 +303,15 @@ export function WorkspacePanel() {
           <span>{`${toolCalls} 次工具调用`}</span>
         </div>
       ) : null}
+
+      {/* 任务统计卡（对齐原版 DetailsPanelView）：任务用时 / 输出速度 / 缓存命中 / 工具轮数。
+          此前桌面端只有上面的文件/目录/工具调用计数，且是**全会话累计**，
+          对应不到原版的「本轮」。这里补的是最近一次任务的真实指标。 */}
+      {stats !== null ? <TaskStatsCard stats={stats} /> : null}
+
+      {/* 当前目标卡（对齐原版 DetailsPanelView 的目标卡）。
+          目标是模型用 create_goal 建的，存在工作区 .goal.json 里。 */}
+      {stats !== null ? <TaskGoalCard goal={stats.goal} /> : null}
 
       <div className="workspace__list">
         {workspace.length === 0 ? (

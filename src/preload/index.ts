@@ -139,6 +139,10 @@ const api = {
   steer: (conversationId: string, text: string): Promise<boolean> =>
     ipcRenderer.invoke(INVOKE.workSteer, conversationId, text),
 
+  /** 会话的任务统计与当前目标（工作区面板的统计卡与目标卡） */
+  stats: (conversationId: string): Promise<import('../ipc/contract').ConversationStatsDto> =>
+    ipcRenderer.invoke(INVOKE.conversationStats, conversationId),
+
   messages: {
     /** 把一条回答导出为 Word */
     exportDocx: (

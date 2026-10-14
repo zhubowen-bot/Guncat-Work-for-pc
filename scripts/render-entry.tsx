@@ -45,7 +45,13 @@ import { AgentItem, ConvItem, Sidebar } from '@renderer/components/Sidebar'
 import { GroupedTurn, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
 import { Composer } from '@renderer/components/Composer'
-import { WorkspacePanel, workspaceFileIcon } from '@renderer/components/WorkspacePanel'
+import {
+  TaskGoalCard,
+  TaskStatsCard,
+  WorkspacePanel,
+  formatTaskDuration,
+  workspaceFileIcon
+} from '@renderer/components/WorkspacePanel'
 import { marqueeText } from '@renderer/components/MessageView'
 import type { MessageDto } from '@ipc/contract'
 
@@ -159,6 +165,51 @@ export function renderToolRow(
       }
     })
   )
+}
+
+/**
+ * 任务统计卡 / 目标卡（原版 DetailsPanelView 的统计卡与目标卡）。
+ * 传进来的是一份「有数据」的统计，便于断言四项指标与目标卡都渲染出来。
+ */
+export function renderTaskStats(): string {
+  return renderToStaticMarkup(
+    createElement(
+      'div',
+      null,
+      createElement(TaskStatsCard, {
+        stats: {
+          elapsedMs: 83400,
+          speed: 42.35,
+          cacheHit: 0.812,
+          rounds: 7,
+          goal: null
+        }
+      }),
+      createElement(TaskGoalCard, {
+        goal: { objective: '把季度报表补齐并导出', status: 'active', rounds: 3, maxRounds: 40 }
+      })
+    )
+  )
+}
+
+/** 还没跑过 / 没有目标时两张卡都不显示（不该出现一张全是横杠的空卡） */
+export function renderTaskStatsEmpty(): string {
+  return renderToStaticMarkup(
+    createElement(
+      'div',
+      null,
+      createElement(TaskStatsCard, {
+        stats: { elapsedMs: 0, speed: -1, cacheHit: -1, rounds: 0, goal: null }
+      }),
+      createElement(TaskGoalCard, { goal: null })
+    )
+  )
+}
+
+/** 任务用时的三种量级（秒 / 分秒 / 无数据） */
+export { formatTaskDuration }
+export function renderDurations(): string[] {
+  return [0, 8400, 83400, 125000].map((ms) => formatTaskDuration(ms))
 }
 
 /**

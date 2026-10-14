@@ -17,6 +17,7 @@ import type {
   AgentMode,
   AppSettingsDto,
   ConversationDto,
+  ConversationStatsDto,
   ConversationSummaryDto,
   GuncatEvent,
   MessageDto,
@@ -69,6 +70,12 @@ interface State {
   webSearchEnabled: boolean
   settings: AppSettingsDto | null
   workspace: WorkspaceEntryDto[]
+  /**
+   * 当前会话的任务统计与目标（工作区面板的统计卡 / 目标卡）。
+   * 原版在 DetailsPanelView 里显示任务用时、输出速度、缓存命中、工具轮数与当前目标；
+   * 桌面端此前只有「N 个文件 / N 个目录 / N 次工具调用」，且是全会话累计。
+   */
+  stats: ConversationStatsDto | null
   notice: Notice | null
   settingsOpen: boolean
   /**
@@ -106,6 +113,7 @@ interface State {
   patchMessageContent(messageId: string, content: string): Promise<void>
   abort(): Promise<void>
   loadWorkspace(): Promise<void>
+  loadStats(): Promise<void>
   deleteWorkspaceEntry(path: string): Promise<void>
   clearWorkspace(): Promise<void>
   exportWorkspace(): Promise<void>
@@ -268,6 +276,7 @@ export const useStore = create<State>((set, get) => {
     webSearchEnabled: false,
     settings: null,
     workspace: [],
+    stats: null,
     notice: null,
     settingsOpen: false,
     workspaceOpen: true,
@@ -278,6 +287,10 @@ export const useStore = create<State>((set, get) => {
         set((state) => applyEvent(state, event))
         if (event.type === 'workspace:changed' && get().activeId === event.conversationId) {
           void get().loadWorkspace()
+        }
+        // 一轮结束：统计卡（用时/速度/命中/轮数）与目标卡都该刷新
+        if (event.type === 'turn:finished' && get().activeId === event.conversationId) {
+          void get().loadStats()
         }
         // 外部文件到达（拖拽 / 命令行 / 系统「打开方式」）→ 导入当前会话工作区
         if (event.type === 'files:pending') {
@@ -321,6 +334,7 @@ export const useStore = create<State>((set, get) => {
         running: false
       })
       await get().loadWorkspace()
+      await get().loadStats()
     },
 
     async createConversation() {
@@ -511,6 +525,19 @@ export const useStore = create<State>((set, get) => {
         set({ workspace: entries })
       } catch {
         set({ workspace: [] })
+      }
+    },
+
+    async loadStats() {
+      const activeId = get().activeId
+      if (activeId === null) {
+        set({ stats: null })
+        return
+      }
+      try {
+        set({ stats: await window.guncat.stats(activeId) })
+      } catch {
+        set({ stats: null })
       }
     },
 

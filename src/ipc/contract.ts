@@ -24,6 +24,8 @@ export const INVOKE = {
    * 不打断当前请求，文本在下一轮开始前并入消息，返回是否被接受。
    */
   workSteer: 'work:steer',
+  /** 会话的任务统计与当前目标（原版 DetailsPanelView 的统计卡 + 目标卡） */
+  conversationStats: 'conversation:stats',
   /**
    * 配置方案（多套 API 配置）。原版 SettingsPanel 顶部的「配置方案 / 配置名称」就是它；
    * 桌面端此前 ApiProfileDto、saveApiProfiles 通道、StorageManager 的读写**全都在**，
@@ -145,6 +147,33 @@ export interface MultimodalConfigDto {
  * 而渲染层的 vite 配置里根本没有 `@kit.*` 别名 —— 引进来会直接构建失败。
  * 由主进程把「有哪些引擎、各自要不要 Key/BaseUrl」报出来，既避免重复定义，也不会漂移。
  */
+/**
+ * 会话的任务统计与当前目标。
+ *
+ * 对齐原版 DetailsPanelView 的统计卡（任务用时 / 输出速度 / 缓存命中 / 工具调用轮数）
+ * 与目标卡（GoalService.read）。桌面端此前全库 `elapsed` 零命中，
+ * `GoalService.read` 在渲染层与主进程也都没有调用点 —— 跑长任务时看不到「跑了多久、目标是什么」。
+ */
+export interface ConversationStatsDto {
+  /** 最近一次任务用时（毫秒；0 = 还没跑过或正在跑） */
+  elapsedMs: number
+  /** 平均输出速度（字符/秒；-1 = 无数据） */
+  speed: number
+  /** 平均缓存命中率（0..1；-1 = 无数据） */
+  cacheHit: number
+  /** 最近一次任务的工具调用轮数 */
+  rounds: number
+  /** 当前目标；没有目标时为 null */
+  goal: GoalDto | null
+}
+
+export interface GoalDto {
+  objective: string
+  status: string
+  rounds: number
+  maxRounds: number
+}
+
 export interface SearchEngineDto {
   id: string
   label: string

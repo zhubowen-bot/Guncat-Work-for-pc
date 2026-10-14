@@ -11,6 +11,7 @@ import type {
   ConversationDto,
   ConversationSummaryDto,
   GuncatEvent,
+  ConversationStatsDto,
   MultimodalConfigDto,
   PickedAttachmentDto,
   RendererStage,
@@ -92,6 +93,8 @@ export interface GuncatApi {
   }
   /** 工作模式执行中插话；返回是否被接受（false 时应改走普通发送） */
   steer(conversationId: string, text: string): Promise<boolean>
+  /** 会话的任务统计与当前目标（工作区面板的统计卡与目标卡） */
+  stats(conversationId: string): Promise<ConversationStatsDto>
   messages: {
     exportDocx(
       conversationId: string,

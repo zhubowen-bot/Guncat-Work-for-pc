@@ -34,6 +34,7 @@ import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { GuncatUiRuntime, GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
 import { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
 import { ScheduleService } from '@core/service/ScheduleService'
+import { GoalService } from '@core/service/GoalService'
 // 附件链路：MultimodalService（先行解析）与 FileUploadService（Files API）此前是零引用的
 // 已移植能力，见 makeAttachments 的说明。
 import { MultimodalService } from '@core/service/MultimodalService'
@@ -48,6 +49,7 @@ import type {
   ChatRegenerateRequest,
   ChatSendRequest,
   ConversationDto,
+  ConversationStatsDto,
   ConversationSummaryDto,
   GuncatEvent,
   MessageDto,
@@ -543,6 +545,73 @@ export class SessionManager {
     return queue
   }
 
+  // ===== 任务统计与当前目标（原版 DetailsPanelView 的统计卡 + 目标卡） =====
+
+  /** 每个会话最近一次任务的计时/速度/命中/轮数 */
+  private runStats: Map<
+    string,
+    { startedAt: number; finishedAt: number; rounds: number; speeds: number[]; hits: number[] }
+  > = new Map()
+
+  private beginRunStats(conversationId: string): void {
+    this.runStats.set(conversationId, {
+      startedAt: Date.now(),
+      finishedAt: 0,
+      rounds: 0,
+      speeds: [],
+      hits: []
+    })
+  }
+
+  private recordRunRound(conversationId: string, speed: number, hit: number): void {
+    const stats = this.runStats.get(conversationId)
+    if (stats === undefined) {
+      return
+    }
+    stats.rounds++
+    if (speed > 0) {
+      stats.speeds.push(speed)
+    }
+    if (hit >= 0) {
+      stats.hits.push(hit)
+    }
+  }
+
+  private finishRunStats(conversationId: string): void {
+    const stats = this.runStats.get(conversationId)
+    if (stats !== undefined && stats.finishedAt === 0) {
+      stats.finishedAt = Date.now()
+    }
+  }
+
+  /**
+   * 会话的任务统计 + 当前目标。
+   * 长度/速度/命中取最近一次任务的平均值（原版统计卡的口径）；
+   * 目标是工作区里的 `.goal.json`，模型用 create_goal 建的。
+   */
+  conversationStats(conversationId: string): ConversationStatsDto {
+    const stats = this.runStats.get(conversationId)
+    const average = (values: number[]): number =>
+      values.length === 0 ? -1 : values.reduce((a, b) => a + b, 0) / values.length
+    const goal = GoalService.read(this.workspaceRoot(conversationId))
+    return {
+      elapsedMs:
+        stats === undefined || stats.finishedAt === 0 ? 0 : stats.finishedAt - stats.startedAt,
+      speed: stats === undefined ? -1 : average(stats.speeds),
+      cacheHit: stats === undefined ? -1 : average(stats.hits),
+      rounds: stats === undefined ? 0 : stats.rounds,
+      goal:
+        goal === null
+          ? null
+          : {
+              objective: goal.objective,
+              status: goal.status,
+              rounds: goal.rounds,
+              maxRounds: goal.maxRounds
+            }
+    }
+  }
+
   // ===== 定时提醒推进 =====
   //
   // 审计发现：ScheduleService.tick 在桌面端**零调用点** ——
@@ -881,6 +950,7 @@ export class SessionManager {
 
     handle.busy = true
     handle.abort = new AbortSignal()
+    this.beginRunStats(conv.id)
 
     let assistantMsg: Message | null = null
     let streamed: string = ''
@@ -940,6 +1010,7 @@ export class SessionManager {
         targetMsg.tokenSpeed = turn.tokenSpeed
         targetMsg.cacheHitRate = turn.cacheHitRate
         targetMsg.toolCalls = turn.toolCalls
+        this.recordRunRound(conv.id, turn.tokenSpeed, turn.cacheHitRate)
 
         // 工具调用先行落到时间线上（执行前后各推一次，UI 可显示"执行中"）
         for (const call of turn.toolCalls) {
@@ -1018,6 +1089,7 @@ export class SessionManager {
       }
     } finally {
       handle.busy = false
+      this.finishRunStats(conv.id)
       await this.persist()
     }
   }

@@ -1890,6 +1890,85 @@ select {
   border-bottom: 1px solid var(--divider);
 }
 
+/* ===== 任务统计卡 / 目标卡（对齐原版 DetailsPanelView） ===== */
+.taskstats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.taskstats__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+}
+
+.taskstats__label {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.taskstats__value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.taskgoal {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.taskgoal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.taskgoal__status {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+}
+
+.taskgoal__status[data-status='active'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.taskgoal__status[data-status='blocked'] {
+  color: var(--warn);
+  background: var(--bg-sunken);
+}
+
+.taskgoal__status[data-status='done'] {
+  color: var(--ok);
+  background: var(--bg-sunken);
+}
+
+.taskgoal__text {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.taskgoal__meta {
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
 .workspace__list {
   flex: 1;
   min-height: 0;

@@ -288,6 +288,11 @@ export function registerIpcHandlers(session: SessionManager): void {
     session.steerWork(conversationId, text)
   )
 
+  // ===== 任务统计与当前目标（原版 DetailsPanelView 的统计卡 + 目标卡） =====
+  ipcMain.handle(INVOKE.conversationStats, async (_e, conversationId: string) =>
+    session.conversationStats(conversationId)
+  )
+
   // ===== 应用信息 =====
   ipcMain.handle(INVOKE.appInfo, async (): Promise<AppInfoDto> => {
     return {

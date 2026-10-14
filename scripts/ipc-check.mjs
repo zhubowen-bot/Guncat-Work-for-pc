@@ -117,6 +117,7 @@ const required = [
   'intake:pickFiles',
   'attachments:pick',
   'work:steer',
+  'conversation:stats',
   'message:exportDocx',
   'asr:transcribe'
 ]
@@ -801,6 +802,58 @@ check(
 )
 steerServer.closeAllConnections?.()
 steerServer.close()
+
+// --- 任务统计与目标卡（审计 P2-10） ---
+//
+// 事故形状：工作区面板只有「N 个文件 / N 个目录 / N 次工具调用」，而且是全会话累计，
+// 对应不到原版的「本轮」；全库 elapsed 零命中，GoalService.read 也没有调用点。
+const convNew = await inv('conversations:create', agents[0].id, 'work')
+const statsBefore = await inv('conversation:stats', convNew.id)
+check(
+  '没跑过时用时为 0、轮数为 0（不编造数字）',
+  statsBefore.elapsedMs === 0 && statsBefore.rounds === 0
+)
+check(
+  '没有 usage 时速度与命中是「无数据」（-1），不是 0 —— 0 会被误读成「很慢 / 一次都没命中」',
+  statsBefore.speed === -1 && statsBefore.cacheHit === -1
+)
+// convEffort 上面跑过三次（那三次的响应体是空的，只留了用时），
+// convSteer 跑过一次带工具调用的完整循环 —— 用后者验轮数。
+const statsAfter = await inv('conversation:stats', convEffort.id)
+check(
+  '跑过之后有真实的任务用时（哪怕这一轮以失败收场，耗时也是事实）',
+  statsAfter.elapsedMs > 0,
+  `${statsAfter.elapsedMs}ms`
+)
+const statsSteer = await inv('conversation:stats', convSteer.id)
+check(
+  '工具轮数按真实轮次累计（带工具调用的那一轮）',
+  statsSteer.rounds >= 1,
+  `${statsSteer.rounds} 轮 / ${statsSteer.elapsedMs}ms`
+)
+
+const goalRoot = session.workspaceRoot(convEffort.id)
+fs.mkdirSync(goalRoot, { recursive: true })
+fs.writeFileSync(
+  path.join(goalRoot, '.goal.json'),
+  JSON.stringify({
+    objective: '把季度报表补齐并导出',
+    status: 'active',
+    rounds: 3,
+    maxRounds: 40,
+    note: '',
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  }),
+  'utf8'
+)
+const statsGoal = await inv('conversation:stats', convEffort.id)
+check(
+  '当前目标从工作区 .goal.json 读出来（GoalService.read 此前在主进程与渲染层都没有调用点）',
+  statsGoal.goal?.objective === '把季度报表补齐并导出' && statsGoal.goal?.rounds === 3,
+  JSON.stringify(statsGoal.goal)
+)
+check('没有目标时不编造（返回 null）', (await inv('conversation:stats', convNew.id)).goal === null)
 
 effortServer.closeAllConnections?.()
 effortServer.close()
