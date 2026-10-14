@@ -27,7 +27,13 @@ await build({
   // react / react-dom / markdown 依赖链里有 CJS 内部 require，
   // 打进 ESM 会失败，交给 Node 自己解析更稳。
   packages: 'external',
-  alias: { ...alias, '@renderer': path.join(root, 'src/renderer/src') },
+  alias: {
+    ...alias,
+    '@renderer': path.join(root, 'src/renderer/src'),
+    // katex 的样式表是「包内的 .css」：packages:'external' 会把它留给 Node，
+    // 而 Node 不认识 .css。显式指到真实文件路径，它就会走下面的 empty loader。
+    'katex/dist/katex.min.css': path.join(root, 'node_modules/katex/dist/katex.min.css')
+  },
   // SSR 不需要样式：把 CSS 置空，避免 Node 解析 CSS
   loader: { '.css': 'empty' },
   logLevel: 'error'
@@ -48,6 +54,17 @@ function check(name, condition, detail = '') {
     failures.push(name)
     console.log(`  ✗ ${name}${detail !== '' ? ' — ' + detail : ''}`)
   }
+}
+
+/** 去掉标签并还原实体：用来断言「渲染产物里的可读文本」 */
+function decode(html) {
+  return html
+    .replace(/<[^>]+>/g, '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
 }
 
 console.log('\n14. 交互模式渲染器（React SSR）')
@@ -441,6 +458,37 @@ check(
   'Markdown 产物里没有箭头 / 装饰符号',
   !/[\u2190-\u21ff\u2300-\u23ff\u2460-\u24ff\u25a0-\u25ff\u2600-\u27bf\u2b00-\u2bff\ufe0f]/.test(mdHtml),
   mdHtml.slice(0, 100)
+)
+
+// --- Markdown 的三项重能力（用户报障：mermaid / 代码块 / LaTeX 都渲染不出来） ---
+console.log('\n20. Markdown 重能力（LaTeX / 代码块 / Mermaid）')
+const mdFeatureHtml = mod.renderMarkdownFeatures()
+check('行内公式走 KaTeX 渲染（不再是裸 $...$）', mdFeatureHtml.includes('class="katex"'))
+check('块级公式单独成块', mdFeatureHtml.includes('katex-display'))
+check(
+  '公式真的被解析成了数学结构（.frac 等 KaTeX 节点）',
+  mdFeatureHtml.includes('mfrac') || mdFeatureHtml.includes('katex-html')
+)
+check('带语言的围栏渲染成代码块（语言标签可见）', mdFeatureHtml.includes('code-block') && mdFeatureHtml.includes('python'))
+check('代码块接了语法高亮（hljs 标记）', mdFeatureHtml.includes('hljs') && mdFeatureHtml.includes('hljs-keyword'))
+check('代码块带复制按钮', mdFeatureHtml.includes('code-block__copy'))
+check(
+  '围栏内的代码原文一字不差（只被加了高亮标签，没有被 Markdown 吃掉字符）',
+  decode(mdFeatureHtml).includes('def hello(name):') &&
+    decode(mdFeatureHtml).includes('return f"hi {name}"')
+)
+check(
+  'mermaid 围栏走 Mermaid 渲染路径（不再是普通代码块）',
+  mdFeatureHtml.includes('mermaid-block')
+)
+check(
+  'mermaid 未出图前给占位而不是空白',
+  mdFeatureHtml.includes('正在绘图')
+)
+check('没有语言标记的围栏仍然渲染成代码块', mdFeatureHtml.includes('没有语言标记的围栏'))
+check(
+  '代码块不受行内代码样式污染（外框由 .code-block 负责）',
+  mdFeatureHtml.includes('code-block__pre')
 )
 
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)

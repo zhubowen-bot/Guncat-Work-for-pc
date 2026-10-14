@@ -120,6 +120,36 @@ export function renderMarkdown(): string {
 }
 
 /**
+ * Markdown 的三项重能力（用户报障：mermaid 画不出、代码块不正常、LaTeX 不渲染）。
+ * 逐项覆盖：行内/块级公式、带语言的围栏代码块（含高亮）、mermaid 围栏、裸围栏。
+ */
+export function renderMarkdownFeatures(): string {
+  const text = [
+    '行内公式 $E = mc^2$ 就写在这里。',
+    '',
+    '$$',
+    '\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
+    '$$',
+    '',
+    '```python',
+    'def hello(name):',
+    '    return f"hi {name}"',
+    '```',
+    '',
+    '```mermaid',
+    'flowchart TD',
+    '  A[开始] --> B[结束]',
+    '```',
+    '',
+    '```',
+    '没有语言标记的围栏',
+    '```',
+    ''
+  ].join('\n')
+  return renderToStaticMarkup(createElement(Markdown, { text }))
+}
+
+/**
  * 侧栏条目 + 工作模式单个回合的 SSR 渲染。
  *
  * 为什么渲染这两个「纯 props 组件」而不是整页：

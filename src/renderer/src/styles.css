@@ -751,6 +751,290 @@ select {
   color: var(--accent);
 }
 
+/* ===== 代码块（对齐原版 RichTextView 的代码块主题与语法高亮配色） ===== */
+
+.code-block {
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--code-bg);
+}
+
+.code-block__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+}
+
+.code-block__lang {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.code-block__copy {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.code-block__copy:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+/* > 子选择器是为了压过 .msg__body pre 的通用外观（这里的外框由 .code-block 负责） */
+.code-block > .code-block__pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 10px 12px;
+  background: transparent;
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.code-block > .code-block__pre code {
+  font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  background: transparent;
+  padding: 0;
+}
+
+/* 语法高亮：逐色取自原版 RichTextView.lightHighlight（浅色 / 暖色，适配浅背景） */
+.hljs {
+  color: #1b2330;
+  background: transparent;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-link {
+  color: #7c3aed;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-function .hljs-title,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-component {
+  color: #0a7aff;
+}
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-promise {
+  color: #0891b2;
+}
+
+.hljs-number,
+.hljs-constant,
+.hljs-attr-name,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-property {
+  color: #ea580c;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-attr-value,
+.hljs-meta .hljs-string {
+  color: #16a34a;
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-params,
+.hljs-subst {
+  color: #1b2330;
+}
+
+.hljs-operator,
+.hljs-punctuation,
+.hljs-brace {
+  color: #475569;
+}
+
+.hljs-tag,
+.hljs-name,
+.hljs-selector-tag {
+  color: #dc2626;
+}
+
+.hljs-doctag,
+.hljs-meta,
+.hljs-comment,
+.hljs-quote {
+  color: #94a3b8;
+}
+
+.hljs-decorator,
+.hljs-meta .hljs-keyword {
+  color: #7c3aed;
+}
+
+.hljs-addition {
+  color: #16a34a;
+}
+
+.hljs-deletion {
+  color: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* 深色：逐色取自原版 RichTextView.darkHighlight（高饱和暖色，适配深背景） */
+  .hljs {
+    color: #edf0f5;
+  }
+
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal,
+  .hljs-section,
+  .hljs-link,
+  .hljs-decorator,
+  .hljs-meta .hljs-keyword {
+    color: #c4b5fd;
+  }
+
+  .hljs-title,
+  .hljs-title.function_,
+  .hljs-function .hljs-title,
+  .hljs-built_in,
+  .hljs-builtin-name,
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-component {
+    color: #409cff;
+  }
+
+  .hljs-type,
+  .hljs-class .hljs-title,
+  .hljs-promise {
+    color: #67e8f9;
+  }
+
+  .hljs-number,
+  .hljs-constant,
+  .hljs-attr-name,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo,
+  .hljs-property {
+    color: #fdba74;
+  }
+
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-selector-class,
+  .hljs-selector-id,
+  .hljs-attr-value,
+  .hljs-meta .hljs-string {
+    color: #86efac;
+  }
+
+  .hljs-variable,
+  .hljs-template-variable,
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-params,
+  .hljs-subst {
+    color: #edf0f5;
+  }
+
+  .hljs-operator,
+  .hljs-punctuation,
+  .hljs-brace {
+    color: #cbd5e1;
+  }
+
+  .hljs-tag,
+  .hljs-name {
+    color: #fca5a5;
+  }
+
+  .hljs-doctag,
+  .hljs-meta,
+  .hljs-comment,
+  .hljs-quote {
+    color: #64748b;
+  }
+
+  .hljs-addition {
+    color: #86efac;
+  }
+
+  .hljs-deletion {
+    color: #fca5a5;
+  }
+}
+
+/* ===== Mermaid ===== */
+
+.mermaid-block__canvas {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  overflow-x: auto;
+  text-align: center;
+}
+
+.mermaid-block__canvas svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-block--pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.mermaid-block__error {
+  font-size: 12px;
+  color: var(--warn);
+  margin-bottom: 4px;
+}
+
+/* ===== LaTeX（KaTeX） ===== */
+
+.msg__body .katex-display {
+  margin: 10px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+.msg__body .katex {
+  font-size: 1.02em;
+}
+
+
 .msg__stats {
   font-size: 11px;
   color: var(--text-faint);
