@@ -14,8 +14,24 @@
 | 三 | Office 生成器接入工具链 + 技能系统 | ✅ 已完成（生成→读回→算子编辑端到端验证） |
 | 四 | 端侧增强：朗读 / 语音输入 / 文件收件 / 导出 Word | ✅ 已完成 |
 
-验证方式见 [README 的验证矩阵](../README.md#验证)：`pnpm typecheck` / `pnpm build` /
-`pnpm smoke`（内核 105 项 + 渲染 26 项 + 契约 55 项）。
+验证方式见 [README 的验证矩阵](../README.md#验证)：`npm run typecheck` / `npm run build` /
+`npm run smoke`（内核 126 项 + 渲染 128 项 + 契约 69 项 + 启动链路 149 项 + 端侧 20 项 + 语音 12 项）。
+
+### 阶段五：平台适配层的两个「后端缺席」补完
+
+阶段一到四把接口都搭好了，但有两处平台后端一直没人装，症状都被包装成了「文件坏了」：
+
+| 能力 | 桌面端做法 | 说明 |
+| --- | --- | --- |
+| PDF 解析（`parse_document` / `search_pdf` / `pdf_to_images`） | ✅ PDF.js（`pdfjs-dist`）+ `@napi-rs/canvas` | 见 `platform/native/pdfBackend.ts`。此前 `PdfDocument.loadDocument` 看到 `backend === null` 就返回 `PARSE_ERROR_FORMAT`，而它的文案是「PDF 格式解析失败(文档结构损坏)」—— 于是**任何** PDF、任何来源都得到同一句话。两处平台差异：PDF.js 全异步（新开 `loadDocumentAsync` + `PdfPage.prepare()`，不动移植调用链）、主进程没有 canvas（渲染页面靠 `@napi-rs/canvas`）。 |
+| SVG 栅格化（`write_svg` 的预览 PNG、docx/pptx 引用 svg） | ✅ `@napi-rs/canvas` 的 `loadImage`（底层 resvg） | 见 `platform/native/svgRaster.ts`。此前走 Electron 的 `nativeImage`，而它**只解码位图**（PNG/JPEG），喂 SVG 必然失败 —— 所以源码存得下、预览 PNG 出不来，两条引用路径跟着一起失败。 |
+
+两者的随包数据（PDF 的 standard_fonts / cmaps / wasm）与不能进 bundle 的依赖
+（`pdfjs-dist`、`@napi-rs/canvas`）由 `scripts/package-portable.mjs` 放进产物，
+它们是这个项目里唯一的运行时 `node_modules` 内容。缺任何一块都不会「报文件损坏」：
+文本抽取退化成缺字体度量，渲染退化成一条明确的「缺渲染能力」提示。
+
+---
 
 ### 阶段四：哪些照搬、哪些必须换思路
 
@@ -41,9 +57,8 @@
 技能系统（`list_skills` / `load_skill`）只依赖 `resourceManager.getRawFileContent`，
 已映射到随包 `resources/` 目录，37 项技能与参考文档均可按需加载。
 
-**仍未完成**：PDF 解析（`parse_document`）后端。接口已在 `platform/kit/PDFKit.ts` 就位，
-但 PDF.js 的 `getDocument()` 是异步的、而端口代码的取文本链路是同步的，
-需要一次针对性的异步改造，尚未动手；当前会返回清晰报错而非静默失败。
+**已完成**：PDF 解析后端（`parse_document` / `search_pdf` / `pdf_to_images`）已接上 PDF.js，
+见本节上方的「阶段五」。另见 `platform/kit/PDFKit.ts` 与 `platform/native/pdfBackend.ts`。
 
 ---
 
@@ -112,8 +127,10 @@ src/
 | `@kit.BasicServicesKit`（zlib） | `platform/kit/BasicServicesKit.ts` | ⚠️ 名字叫 zlib，实际语义是「把 zip 解包到目录」（docx/xlsx/pptx 都是 zip），因此用 `fflate.unzipSync` 而不是 `zlib.inflate`；已加防目录穿越校验 |
 | `@kit.AbilityKit`（common） | `platform/kit/AbilityKit.ts` | `context.filesDir/cacheDir/tempDir` 由 `appPaths` 提供，**保持 `<filesDir>/workspaces/<会话ID>` 等全部子路径结构不变**；`resourceManager.getRawFileContent()` 映射到随包 `resources/` 目录 |
 | `@kit.ArkData`（preferences） | `platform/kit/ArkData.ts` | 落成 `<filesDir>/preferences/<name>.json`，保留「`put` 不落盘、`flush` 才落盘」的语义 |
-| `@kit.ImageKit`（image） | `platform/kit/ImageKit.ts` | 用 Electron 内置 `nativeImage` 实现解码/缩放/重编码，**零额外原生依赖** |
-| `@kit.PDFKit`（pdfService） | `platform/kit/PDFKit.ts` | ⚠️ **接口已就位、后端待接**（阶段三）。PDF.js 的 `getDocument()` 是异步的，而端口代码的取文本链路是同步的，因此保留 `setPdfBackend()` 注入点 |
+| `@kit.ImageKit`（image） | `platform/kit/ImageKit.ts` | 用 Electron 内置 `nativeImage` 实现解码/缩放/重编码。**但它只认位图**（PNG/JPEG/WebP），SVG 栅格化与 PDF 页面渲染改由 `platform/native/canvas.ts`（`@napi-rs/canvas`）承担 |
+| `@kit.PDFKit`（pdfService） | `platform/kit/PDFKit.ts` + `platform/native/pdfBackend.ts` | ✅ 后端已接 PDF.js。新增 `loadDocumentAsync` 与 `PdfPage.prepare()` 承载「PDF.js 全异步」这条平台差异；渲染页面用 `@napi-rs/canvas`（主进程没有 canvas）。`setPdfBackend()` 注入点保留，便于测试注入假后端 |
+| （无对应 kit）SVG 栅格化 | `platform/native/svgRaster.ts` | 上游交给设备图片引擎；桌面端 `nativeImage` 解码不了 SVG，改用 `@napi-rs/canvas` 的 `loadImage`（底层 resvg） |
+| （无对应 kit）图像后端 | `platform/native/canvas.ts` | PDF 渲染与 SVG 栅格化共用的 canvas 加载器：惰性 `require`、补 PDF.js 需要的浏览器全局、缺模块时给统一可读提示 |
 | `@kit.PerformanceAnalysisKit`（hilog） | `platform/kit/PerformanceAnalysisKit.ts` | 归一 `%{public}s` 格式串后走 console |
 
 ### 编译器设置对齐
@@ -167,6 +184,9 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 | `core/service/SubagentService.ts` | 同上（`abortPoller`，2 处哨兵比较） | 同上 |
 | `core/service/JsCodeService.ts` | ① `timer` 类型同上；② `JsRunOptions` 里新增 `timeoutMs` 透传 | ①同上；②让 vm 按调用方预算硬中断（见 4.1） |
 | `core/service/FileUploadService.ts` | `stringToBuffer()` 返回值加 `as ArrayBuffer` | TS 的 `Uint8Array.buffer` 类型是 `ArrayBufferLike`（含 `SharedArrayBuffer`） |
+| `core/service/PdfTextExtractor.ts` | 三处 `doc.loadDocument(abs)` → `await doc.loadDocumentAsync(abs)`；取每页文本/渲染前 `await page.prepare()`；`renderOnePage` 由同步的 `getAreaPixelMapWithOptions`/`getPagePixelMap` 改为 `await page.renderToPixelMap(w,h)` | 桌面端的 PDF 后端（PDF.js）全程异步，鸿蒙侧那条同步原生链在 Node 下不存在。差异只落在这两个入口上，其余移植逻辑不变 |
+| `core/service/WorkToolRunner.ts` | `rasterizeSvgFile` 去掉「写临时规整文件 → `image.createImageSource` 解码 → 清理」那一圈，改为 `rasterizeSvgToPng()`；参数去掉 `cacheDir` | Electron 的 `nativeImage` 只解码位图，SVG 必须走 `@napi-rs/canvas`；改动同时消掉了临时文件与 cacheDir 依赖 |
+| `core/platform/kit/PDFKit.ts` | 新增 `PdfBackend.openAsync?`、`PdfPageBackend.prepare?`、`PdfDocument.loadDocumentAsync`、`PdfPage.prepare()`；两个同步渲染方法改为抛出「请用异步 renderToPixelMap」 | 承载上述异步差异；平台适配层本来就不是逐字移植的部分 |
 
 > 除上表外，`src/core/` 下**没有**对上游逻辑做过任何语义修改。
 

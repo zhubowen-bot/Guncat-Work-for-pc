@@ -5,9 +5,11 @@
 // 用户不可能猜到。原版 WorkspaceBar 的头部就有一颗看得见的「上传」按钮，
 // 空态文案更是直接写着「工作区为空, 点击"上传"添加文件」。
 // 这里把那个入口补回来，并且空态也给一颗按钮 —— 空工作区恰恰是最需要它的时候。
+import { useState } from 'react'
 import { useStore } from '../store'
 import {
   IconAudio,
+  IconClose,
   IconCode,
   IconDot,
   IconDownload,
@@ -135,6 +137,31 @@ export function WorkspacePanel() {
   const pickFiles = useStore((s) => s.pickWorkspaceFiles)
   const pushNotice = useStore((s) => s.pushNotice)
 
+  // 文件预览。workspace:read 这条 IPC 一直在（主进程侧做了 2MB 上限与越界校验），
+  // 但渲染层此前从来没有调用点 —— 原版 WorkspaceBar 是点一下文件就能看内容的。
+  const [preview, setPreview] = useState<{
+    path: string
+    text: string
+    truncated: boolean
+  } | null>(null)
+  const [previewLoading, setPreviewLoading] = useState('')
+
+  async function openPreview(path: string): Promise<void> {
+    if (activeId === null) {
+      return
+    }
+    setPreviewLoading(path)
+    try {
+      const result = await window.guncat.workspace.read(activeId, path)
+      setPreview({ path, text: result.text, truncated: result.truncated })
+    } catch (e) {
+      // 主进程对二进制/超限文件会给出可读原因，这里原样呈现
+      pushNotice('warn', String(e instanceof Error ? e.message : e))
+    } finally {
+      setPreviewLoading('')
+    }
+  }
+
   const toolCalls = (active?.messages ?? []).reduce((sum, m) => sum + m.toolCalls.length, 0)
   const files = workspace.filter((e) => !e.isDirectory).length
   const dirs = workspace.length - files
@@ -221,11 +248,25 @@ export function WorkspacePanel() {
               <span className="file-item__icon">
                 {entry.isDirectory ? <IconFolder size={15} /> : workspaceFileIcon(entry.path)}
               </span>
-              <span className="file-item__name" title={entry.path}>
-                {entry.path}
-              </span>
+              {entry.isDirectory ? (
+                <span className="file-item__name" title={entry.path}>
+                  {entry.path}
+                </span>
+              ) : (
+                // 点文件名看内容（对齐原版 WorkspaceBar 的 previewWorkspaceFile）
+                <button
+                  className="file-item__name file-item__name--link"
+                  title={`${entry.path}\n点击预览内容`}
+                  disabled={running}
+                  onClick={() => void openPreview(entry.path)}
+                >
+                  {entry.path}
+                </button>
+              )}
               {entry.isDirectory ? null : (
-                <span className="file-item__size">{formatSize(entry.size)}</span>
+                <span className="file-item__size">
+                  {previewLoading === entry.path ? '读取中…' : formatSize(entry.size)}
+                </span>
               )}
               <button
                 className="icon-btn file-item__del"
@@ -254,6 +295,26 @@ export function WorkspacePanel() {
             <IconTrash size={14} />
             清空工作区
           </button>
+        </div>
+      ) : null}
+
+      {/* 预览用弹层而不是挤在面板里：工作区只有 300 多像素宽，正文根本读不了 */}
+      {preview !== null ? (
+        <div className="preview-overlay" onClick={() => setPreview(null)}>
+          <div className="preview" onClick={(e) => e.stopPropagation()}>
+            <div className="preview__head">
+              <strong title={preview.path}>{preview.path}</strong>
+              {preview.truncated ? <span className="preview__tag">已截断</span> : null}
+              <button
+                className="icon-btn"
+                title="关闭预览"
+                onClick={() => setPreview(null)}
+              >
+                <IconClose size={15} />
+              </button>
+            </div>
+            <pre className="preview__body">{preview.text}</pre>
+          </div>
         </div>
       ) : null}
     </aside>

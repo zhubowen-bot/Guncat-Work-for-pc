@@ -1738,6 +1738,88 @@ select {
   flex: none;
 }
 
+/* 文件行里可点击预览的文件名（原版 WorkspaceBar 点文件即预览） */
+.file-item__name--link {
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.file-item__name--link:hover:not(:disabled) {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.file-item__name--link:disabled {
+  cursor: default;
+}
+
+/* ===== 工作区文件预览弹层 ===== */
+
+.preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 100%);
+  max-height: 100%;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.preview__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.preview__head strong {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview__tag {
+  flex: none;
+  font-size: 10px;
+  color: var(--warn);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1px 6px;
+}
+
+.preview__body {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  background: var(--code-bg);
+  font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .workspace__foot {
   border-top: 1px solid var(--divider);
   padding: 8px;

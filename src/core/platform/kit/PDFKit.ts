@@ -1,20 +1,16 @@
 // 平台适配层：鸿蒙 `@kit.PDFKit` 的等价实现（Node 侧）
 //
-// ⚠️ 阶段状态：**接口已就位，后端待接**（阶段三补齐）
+// 落地状态：**后端已接**，实现在 core/platform/native/pdfBackend.ts（PDF.js / pdfjs-dist）。
+// 后端不在这里直接 import 的原因：PDF.js 体积不小，且只在真的打开 PDF 时才需要 ——
+// 由 core/platform/native/pdfBackend.ts 的 installPdfJsBackend() 在应用启动时注入。
 //
-// 鸿蒙侧 pdfService 提供「同步加载 + 按页取文本/版面对象/渲染成图」的完整能力，
-// 桌面端最合适的后端是 PDF.js（pdfjs-dist）——它的文本抽取与页面渲染质量都很高。
-// 但 PDF.js 的 `getDocument()` 是**异步**的，而端口代码里
-//   loadDocument() → getPageCount() → getPage(i).getTextContent()
-// 是一条同步调用链（见 service/PdfTextExtractor.ts）。
+// 与鸿蒙侧的两处平台差异（详见 pdfBackend.ts 的说明）：
+//   1. 异步 —— 鸿蒙是同步原生调用；PDF.js 从打开到取内容全是异步的。
+//      因此这里多开了一个 loadDocumentAsync 入口，并把「页内容要等」显式化成 PdfPage.prepare()。
+//   2. 渲染 —— 主进程没有 DOM/canvas，PDF.js 的页面渲染依赖 @napi-rs/canvas。
 //
-// 因此这里分两步走：
-//   1. 本文件先按鸿蒙签名把类型与结构完整搭好，默认后端返回 PARSE_ERROR_FORMAT，
-//      使 PDF 路径在桌面上「报错清晰」而不是「静默崩」；
-//   2. 阶段三接入 pdfjs-dist 时，把 PdfTextExtractor 的取文本路径改成异步
-//      （这是平台差异导致的一次性改动，其余调用方不受影响）。
-//
-// 想提前启用后端，调用 setPdfBackend() 注入实现即可。
+// 其余语义与鸿蒙完全一致：加密归因 PARSE_ERROR_PASSWORD、扫描件返回空文本、
+// searchKey 不可用时由 PdfTextExtractor 逐页子串扫描兜底。
 import type { image } from './ImageKit'
 
 export namespace pdfService {
@@ -128,7 +124,7 @@ export namespace pdfService {
 
   let backend: PdfBackend | null = null
 
-  /** 阶段三接入 PDF.js 后由 bootstrap 调用；也便于测试注入假后端 */
+  /** 由 bootstrap 调用（见 core/platform/native/pdfBackend.ts 的 installPdfJsBackend）；也便于测试注入假后端 */
   export function setPdfBackend(next: PdfBackend | null): void {
     backend = next
   }
@@ -161,18 +157,21 @@ export namespace pdfService {
       return this.inner.getHeight()
     }
 
-    /** 对齐鸿蒙的 getPagePixelMap(默认分辨率) */
+    /**
+     * 对齐鸿蒙的 getPagePixelMap(默认分辨率)。
+     * 桌面端请改用异步的 renderToPixelMap —— 主进程里没有同步可用的像素路径。
+     */
     getPagePixelMap(): image.PixelMap {
-      throw new Error('PDF 页面渲染尚未在桌面端启用（阶段三）')
+      throw new Error('桌面端请使用异步的 renderToPixelMap（主进程没有同步像素路径）')
     }
 
-    /** 对齐鸿蒙的 getAreaPixelMapWithOptions */
+    /** 对齐鸿蒙的 getAreaPixelMapWithOptions。同上，桌面端走 renderToPixelMap。 */
     getAreaPixelMapWithOptions(
       _matrix: PdfMatrix,
       _width: number,
       _height: number
     ): image.PixelMap {
-      throw new Error('PDF 页面渲染尚未在桌面端启用（阶段三）')
+      throw new Error('桌面端请使用异步的 renderToPixelMap（主进程没有同步像素路径）')
     }
 
     async renderToPixelMap(width: number, height: number): Promise<image.PixelMap> {
