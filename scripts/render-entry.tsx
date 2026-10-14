@@ -41,8 +41,9 @@ import {
   IconWork
 } from '@renderer/icons'
 import { AgentItem, ConvItem } from '@renderer/components/Sidebar'
-import { TurnBlock } from '@renderer/components/Timeline'
+import { GroupedTurn, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
+import { marqueeText } from '@renderer/components/MessageView'
 import type { MessageDto } from '@ipc/contract'
 
 /** 导出文件名推导 —— 纯函数，可直接断言 */
@@ -76,6 +77,40 @@ export {
 }
 
 export { renderIcons }
+
+/**
+ * 工作模式的单回合渲染（原版 section='full'）：思考条 / 正文 / 工具行**逐轮直接陈列**，
+ * 不做整回合收纳。这与交互模式的 GroupedTurn 是两套布局，必须分别钉住。
+ */
+export function renderWorkTurn(running = false): string {
+  return renderToStaticMarkup(
+    createElement(WorkTurn, {
+      turn: groupTurns(SHELL_MESSAGES)[0],
+      running,
+      onEditToInput: () => {}
+    })
+  )
+}
+
+/** 交互模式的单回合渲染（原版 section='grouped'）：整个回合收进一条活动折叠栏。
+ *  pendingBody=true 模拟「正文还没开始输出」的流式中间态 —— 此时折叠栏默认展开。 */
+export function renderGroupedTurn(running = false, pendingBody = false): string {
+  let messages = SHELL_MESSAGES
+  if (pendingBody) {
+    messages = SHELL_MESSAGES.map((m) => (m.id === 'm3' ? { ...m, content: '', displayContent: '' } : m))
+  }
+  return renderToStaticMarkup(
+    createElement(GroupedTurn, {
+      turn: groupTurns(messages)[0],
+      running,
+      lastAssistantId: 'm3',
+      onEditToInput: () => {}
+    })
+  )
+}
+
+/** 思考跑马灯取文本末尾 400 字并压成单行（原版 getMarqueeText） */
+export { marqueeText }
 
 /** Markdown 渲染：断言脚注回跳不是第三方默认的「↩」符号 */
 export function renderMarkdown(): string {
@@ -144,11 +179,9 @@ export function renderShell(running = false): string {
     createElement(
       'div',
       { className: 'loop-timeline' },
-      createElement(TurnBlock, {
+      createElement(WorkTurn, {
         turn: groupTurns(SHELL_MESSAGES)[0],
         running,
-        interactiveMode: false,
-        lastAssistantId: 'm3',
         onEditToInput: () => {}
       })
     )

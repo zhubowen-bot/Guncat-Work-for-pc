@@ -8,7 +8,8 @@ import { WorkspacePanel } from './components/WorkspacePanel'
 import { SettingsDialog } from './components/SettingsDialog'
 import { SpeechBar } from './components/SpeechBar'
 import { MODE_HINT, agentById } from './conversations'
-import { IconAgent, IconBrain, IconClose, IconGlobe } from './icons'
+import { AgentGlyph } from './components/AgentGlyph'
+import { IconBrain, IconClose, IconGlobe } from './icons'
 
 function Notice() {
   const notice = useStore((s) => s.notice)
@@ -195,15 +196,18 @@ export default function App() {
             {active === null || active.messages.length === 0 ? (
               <div className="empty">
                 <div className="empty__hero">
-                  <IconAgent size={52} />
+                  {/* 新会话空态图标 = **当前智能体自己的标识**（侧栏引擎区同一枚）：
+                      交互模式是画框加星火、工作模式是机器人、聊天智能体是它的原图。
+                      电脑版没有原版的启动飞入动画，这里就没有必要再借用应用头像。 */}
+                  <AgentGlyph agent={engine} size={48} title={engine?.name ?? 'Guncat Work'} />
                 </div>
                 <h1>{engine?.name ?? 'Guncat Work'}</h1>
                 <p>
                   {mode === 'chat'
                     ? '三协议流式对话。配置好 API 后直接开始。'
                     : mode === 'interactive'
-                      ? '说一句话，拿到一个能拖、能点、能改参数并即时重算的界面。'
-                      : '描述任务，工作模式会自主拆解、调用工具，并把产物落在右侧工作区。'}
+                      ? '回答即界面，可视可交互。适用于生活中的大部分场景。'
+                      : '数十种工具和技能，端到端交付成果。适用于对质量要求较高的复杂长程任务。'}
                 </p>
                 <p className="empty__hint">
                   {mode === 'chat'

@@ -4,15 +4,13 @@
 import { useState } from 'react'
 import type { AgentDto, ConversationSummaryDto } from '@ipc/contract'
 import {
-  INTERACTIVE_AGENT_ID,
   MODE_LABEL,
-  WORK_AGENT_ID,
   conversationMeta,
   conversationTitle
 } from '../conversations'
 import { useStore } from '../store'
+import { APP_ICON_SRC, AgentGlyph } from './AgentGlyph'
 import {
-  IconAgent,
   IconChat,
   IconInteractive,
   IconPlus,
@@ -22,44 +20,13 @@ import {
   IconWork
 } from '../icons'
 
-const VIRTUAL_ICON: Record<string, typeof IconWork> = {
-  [WORK_AGENT_ID]: IconWork,
-  [INTERACTIVE_AGENT_ID]: IconInteractive
-}
-
 /**
- * 随包资源（智能体头像等）经 app:// 暴露在 /res/ 前缀下，见 src/main/protocol.ts。
- * 原图是 1024² 的 PNG、10 张，本来就在产物里；若拷进渲染层资源会白白多 2.3MB。
- */
-const RESOURCE_BASE = 'app://guncat/res/'
-
-/**
- * 智能体头像（原版用 rawfile 里的 PNG）。
- * 虚拟引擎（工作/交互）用 SVG 形态图标；真实智能体用 agents.json 里的 icon 原图；
- * 图取不到时退回名字首字 —— 头像不该成为界面起不来的原因。
+ * 智能体头像：三种形态的判定统一收在 AgentGlyph（虚拟引擎 SVG / 真实智能体原图 / 首字兜底）。
+ * 这里只负责给虚拟引擎补上侧栏专用的字号类。
  */
 function AgentAvatar({ agent }: { agent: AgentDto }) {
-  const Virtual = VIRTUAL_ICON[agent.id]
-  const [broken, setBroken] = useState(false)
-  if (Virtual !== undefined) {
-    return <Virtual size={20} className="agent-item__glyph" />
-  }
-  if (agent.icon !== '' && !broken) {
-    return (
-      <img
-        className="agent-avatar agent-avatar--img"
-        src={RESOURCE_BASE + agent.icon}
-        alt=""
-        title={agent.name}
-        onError={() => setBroken(true)}
-      />
-    )
-  }
-  return (
-    <span className="agent-avatar" title={agent.name}>
-      {agent.name.slice(0, 1)}
-    </span>
-  )
+  const virtual = agent.id === 'work' || agent.id === 'interactive'
+  return <AgentGlyph agent={agent} size={20} className={virtual ? 'agent-item__glyph' : undefined} />
 }
 
 /**
@@ -181,7 +148,9 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
-        <IconAgent size={26} className="sidebar__logo" />
+        {/* 品牌行图标 = 原版 DswSidebar 的 Image($r('app.media.cat_avatar'))：28vp 圆形。
+            这里用原图而不是自绘 SVG —— 品牌标识不该是「画得像」的替代品。 */}
+        <img className="sidebar__logo" src={APP_ICON_SRC} alt="Guncat Work" title="Guncat Work" />
         <div className="sidebar__brand-text">
           <span>Guncat Work</span>
           <small>{MODE_LABEL[mode] ?? ''}</small>

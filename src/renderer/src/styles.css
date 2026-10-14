@@ -168,9 +168,14 @@ select {
   color: var(--text);
 }
 
+/* 品牌行图标：原版 DswSidebar 的 28vp 圆形 Image($r('app.media.cat_avatar')) */
 .sidebar__logo {
-  color: var(--accent);
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  object-fit: cover;
   flex: none;
+  background: var(--accent-soft);
 }
 
 .sidebar__brand-text {
@@ -618,17 +623,16 @@ select {
   min-width: 0;
 }
 
+/* 助手头像 = 原版 ChatBubbleView.buildAIMessage 的 38vp 圆形原图 */
 .avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 17px;
+  display: inline-block;
+  width: 38px;
+  height: 38px;
+  border-radius: 19px;
+  object-fit: cover;
   background: var(--accent-soft);
-  color: var(--accent);
   flex: none;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .bubble {
@@ -1044,6 +1048,127 @@ select {
   gap: 8px;
   color: var(--text-muted);
   font-size: 12.5px;
+}
+
+.answer--done {
+  background: transparent;
+  padding-left: 2px;
+  color: var(--text-faint);
+}
+
+/* ===== 思考条（原版 ChatBubbleView.buildReasoningBar / WorkTurnView.buildThinking） =====
+   折叠态下标题右侧那一行是**思考文本的末尾 400 字**，随流式增量实时更新 ——
+   这是「思考从第一个字开始就要看得见」在界面上的落点。 */
+.thinking {
+  border-radius: 10px;
+}
+
+.thinking__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 10px 4px 2px;
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.thinking__head:hover {
+  background: var(--bg-sunken);
+  border-radius: 10px;
+}
+
+.thinking__leading {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  flex: none;
+}
+
+.thinking__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  flex: none;
+  white-space: nowrap;
+}
+
+.thinking__marquee {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.thinking__gap {
+  flex: 1;
+}
+
+.thinking__caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  flex: none;
+  transition: transform 0.15s;
+}
+
+.thinking[data-open='true'] .thinking__caret {
+  transform: rotate(180deg);
+}
+
+.thinking__body {
+  padding: 4px 12px 8px 24px;
+  font-size: 12px;
+  color: var(--text-muted);
+  max-height: 320px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.65;
+}
+
+.spinner--sm {
+  width: 11px;
+  height: 11px;
+  border-width: 1.5px;
+  flex: none;
+}
+
+/* 工作模式：每一轮 assistant 都是一个直接陈列的块（思考条 → 正文 → 工具行）。
+   刻意不做整回合收纳 —— 步骤的先后本身就是信息。 */
+.work-round {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.work-round__tools {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* 流式光标（原版 WorkTurnView 的 2×14 品牌色竖条） */
+.stream-cursor {
+  width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  background: var(--accent);
+  animation: cursor-blink 1s steps(2, start) infinite;
+}
+
+@keyframes cursor-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
 }
 
 .spinner {

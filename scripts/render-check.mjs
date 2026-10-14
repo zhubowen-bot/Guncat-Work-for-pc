@@ -78,9 +78,37 @@ check('下拉框已渲染', html.includes('<select'))
 check('按钮文案已渲染', html.includes('重算'))
 check('界面块本身不吞正文（正文由外层渲染）', !html.includes('说明文字在前'))
 
-// 裸程序（无围栏）也应可渲染；只读态应带置灰标记
+// 裸程序（无围栏）也应可渲染；不可交互**只体现为控件禁用，不整块蒙灰**
 const bareHtml = mod.renderBare()
-check('裸程序（无围栏）可渲染', bareHtml.includes('季度销售复盘') && bareHtml.includes('class="gui gui--stale"'))
+check('裸程序（无围栏）可渲染', bareHtml.includes('季度销售复盘') && bareHtml.includes('class="gui"'))
+check(
+  '不可交互时不再整块蒙灰（去掉 gui--stale，用户报障）',
+  !bareHtml.includes('gui--stale') && !bareHtml.includes('历史界面')
+)
+check('不可交互时控件仍然真的禁用', bareHtml.includes('disabled'))
+
+// --- 工作模式 vs 交互模式的编排方式（用户报障：两者不该长一样） ---
+// 工作模式 = 逐轮直接陈列（思考条 / 正文 / 工具行都在时间线上）；交互模式 = 回合收进一条活动折叠栏。
+const workHtml = mod.renderWorkTurn(false)
+const groupedHtml = mod.renderGroupedTurn(false)
+check(
+  '工作模式：每个助手轮都是直接陈列的块',
+  workHtml.includes('work-round') && workHtml.split('work-round').length - 1 >= 2
+)
+check('工作模式：思考条在正文之前出现', workHtml.includes('thinking__head'))
+check('工作模式：不把整回合收进单一活动折叠栏', !workHtml.includes('disclosure__title'))
+check('交互模式：整回合收进一条活动折叠栏', groupedHtml.includes('disclosure__title'))
+
+// --- 思考必须从第一个字开始就可见（跑马灯取末尾 400 字，压成单行） ---
+check(
+  '思考跑马灯：换行被压平',
+  !/[\r\n\t]/.test(mod.marqueeText('第一行\n第二行\t第三行'))
+)
+check(
+  '思考跑马灯：长文本取末尾 400 字（新内容始终可见）',
+  mod.marqueeText('甲'.repeat(600) + '尾部锚点').endsWith('尾部锚点') &&
+    mod.marqueeText('甲'.repeat(600)).length === 401
+)
 
 // MessageView 的组合方式：正文 Markdown + 界面块，两者都要在
 const composedHtml = mod.renderComposed()
@@ -341,31 +369,66 @@ check(
 check('引擎条目渲染出工作模式与交互模式', shell.includes('agent-item') && shell.includes('工作模式') && shell.includes('交互模式'))
 check('引擎条目带选中态（原版 sidebar_item_active）', shell.includes('data-active="true"'))
 check('任务卡渲染用户请求', shell.includes('task-card') && shell.includes('做一个季度销售复盘'))
+
+// --- 工作模式：逐轮直接陈列（用户报障：工作模式不该和交互模式一样） ---
 check(
-  '一个任务下只有一个「过程」折叠区（修复前是每条 assistant 各挂一条工具折叠条）',
-  (shell.match(/disclosure__title">过程/g) ?? []).length === 1,
-  `${(shell.match(/disclosure__title">过程/g) ?? []).length} 个过程区`
+  '工作模式：每一轮 assistant 都直接陈列成块（不是收进一条折叠栏）',
+  (shell.match(/class="work-round"/g) ?? []).length === 3,
+  `${(shell.match(/class="work-round"/g) ?? []).length} 轮`
+)
+check('工作模式：整回合**不**收进单一活动折叠栏', !shell.includes('disclosure__title'))
+check(
+  '工作模式：中间轮的正文也在时间线上（步骤顺序不会被糊掉）',
+  shell.includes('先把数据读进来') && shell.includes('这是中间结论')
 )
 check(
-  '过程区标题把轮数与工具次数写清楚',
-  shell.includes('过程') && shell.includes('3 轮') && shell.includes('1 次工具调用')
+  '工作模式：工具行直接陈列，参数摘要可见；细节仍要点开才出',
+  shell.includes('Read') && shell.includes('sales.csv') && !shell.includes('io__label')
 )
-check('中间轮不单独成块（只有最终答复有 answer 块）', (shell.match(/class="answer"/g) ?? []).length === 1)
+check(
+  '工作模式：有思考的那一轮挂着思考条',
+  (shell.match(/thinking__head/g) ?? []).length === 1
+)
 check('最终答复是主体并带操作行', shell.includes('这是最终答复') && shell.includes('重答'))
 check('统计行口径与原版一致（字符/秒 + 缓存命中）', shell.includes('20.0 字符/秒') && shell.includes('缓存命中 50%'))
+
+// --- 交互模式：整个回合收进一条活动折叠栏 ---
+const groupedShell = mod.renderGroupedTurn(false)
+const groupedRunning = mod.renderGroupedTurn(true)
+// 流式中间态：正文还没开始输出 —— 此时活动折叠栏应当默认展开
+const groupedPending = mod.renderGroupedTurn(true, true)
 check(
-  '过程区收起时不渲染工具细节（点开才展开）',
-  !shell.includes('sales.csv'),
+  '交互模式：一个回合只有一个活动折叠区（修复前是每条 assistant 各挂一条工具折叠条）',
+  (groupedShell.match(/disclosure__title/g) ?? []).length === 1,
+  `${(groupedShell.match(/disclosure__title/g) ?? []).length} 个活动折叠区`
+)
+check(
+  '交互模式：折叠栏摘要写清思考轮数与工具数',
+  groupedShell.includes('思考') && groupedShell.includes('1 个工具')
+)
+check(
+  '交互模式：中间轮不单独成块（只有最终答复有 answer 块）',
+  (groupedShell.match(/class="answer"/g) ?? []).length === 1
+)
+check(
+  '交互模式：过程区收起时不渲染工具细节',
+  !groupedShell.includes('sales.csv') && !groupedShell.includes('这是中间结论'),
   '细节应只在展开后出现'
 )
 check(
-  '执行中的过程区默认展开，工具行与中间轮正文都在',
-  shellRunning.includes('sales.csv') && shellRunning.includes('这是中间结论') && shellRunning.includes('Read')
+  '交互模式：正文未开始前默认展开，工具行与中间轮正文都在',
+  groupedPending.includes('sales.csv') &&
+    groupedPending.includes('这是中间结论') &&
+    groupedPending.includes('Read')
+)
+check(
+  '交互模式：跑完才写「已完成」，跑动中写「正在处理…」',
+  groupedShell.includes('已完成') && groupedPending.includes('正在处理…')
 )
 check(
   '渲染出来的 DOM 里没有 emoji / 装饰符号',
   !/[\u2190-\u21ff\u2300-\u23ff\u2460-\u24ff\u25a0-\u25ff\u2600-\u27bf\u2b00-\u2bff\ufe0f\u{1f000}-\u{1faff}]/u.test(
-    shell + shellRunning
+    shell + shellRunning + groupedShell + groupedRunning
   )
 )
 

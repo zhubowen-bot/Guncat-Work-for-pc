@@ -129,9 +129,11 @@ function GuncatUiSegment({
       refresh,
       send: onSend,
       openUrl: openExternal,
-      stale: !interactive
+      // 原版 interactive() = complete && !locked：程序没写完之前控件同样不可用，
+      // 但不可用只体现为「控件自身的禁用态」，整块不蒙灰。
+      stale: !interactive || !complete
     }),
-    [state, refresh, onSend, interactive]
+    [state, refresh, onSend, interactive, complete]
   )
 
   if (root === null) {
@@ -147,15 +149,17 @@ function GuncatUiSegment({
   }
 
   return (
-    <div className={`gui${interactive ? '' : ' gui--stale'}`}>
-      {!interactive ? (
+    // 注意：这里**不给整块界面蒙灰、也不挂「历史界面（只读）」横幅**。
+    // 原版 GuncatUiView 只有一个 `locked` 语义（interactive() = complete && !locked），
+    // 它做的仅仅是 `.enabled(false)` 与个别控件自身的 0.5 透明度；
+    // 整块 0.62 透明 + 只读横幅是桌面端自己加的，用户看到的是
+    // 「还没生成完就蒙了一层灰、下一条消息一出来上一条立刻变灰」——纯属多余。
+    <div className="gui">
+      {/* 唯一的脚注：输出被截断、界面没写完（原版 '界面未写完，以上为已生成的部分'） */}
+      {truncated ? (
         <div className="gui__banner">
-          <span>历史界面（只读）</span>
+          <span>界面未写完，以上为已生成的部分</span>
           {title !== '' ? <span>· {title}</span> : null}
-        </div>
-      ) : !complete ? (
-        <div className="gui__banner">
-          <span>{truncated ? '界面未写完（输出被截断）' : '界面生成中…'}</span>
         </div>
       ) : null}
 

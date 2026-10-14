@@ -80,18 +80,34 @@ export function Disclosure({
   subtitle,
   children,
   defaultOpen = false,
-  leading
+  leading,
+  open: controlledOpen,
+  onToggle
 }: {
   title: string
   subtitle?: string
   children: React.ReactNode
   defaultOpen?: boolean
   leading?: React.ReactNode
+  /** 受控开合：给定时完全以它为准（派生状态由调用方算，如原版 activityOpenNow） */
+  open?: boolean
+  onToggle?: (next: boolean) => void
 }) {
-  const [open, setOpen] = useState(defaultOpen)
+  const [uncontrolled, setUncontrolled] = useState(defaultOpen)
+  const open = controlledOpen ?? uncontrolled
   return (
     <div className="disclosure" data-open={open}>
-      <button className="disclosure__head" onClick={() => setOpen((v) => !v)}>
+      <button
+        className="disclosure__head"
+        onClick={() => {
+          const next = !open
+          if (onToggle !== undefined) {
+            onToggle(next)
+          } else {
+            setUncontrolled(next)
+          }
+        }}
+      >
         <span className="disclosure__caret">
           <IconChevronDown size={14} />
         </span>

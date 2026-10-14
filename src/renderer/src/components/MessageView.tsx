@@ -4,20 +4,21 @@
 //   助手侧：思考条 → 工具行 → 正文/界面 → 操作行 → 统计行；用户侧：气泡 + 编辑/复制）。
 // 工作 / 交互模式不使用这里的整条气泡，而是由 Timeline 把一个用户请求下的多轮
 // 组装成「任务卡 + 过程 + 最终答复」，这里只提供可复用的助手正文与操作行。
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { MessageDto } from '@ipc/contract'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
 import { Markdown } from './Markdown'
 import { Disclosure, ToolCallRow } from './Disclosure'
 import { GuncatUiBlock } from '../guncat-ui/GuncatUiBlock'
+import { APP_ICON_SRC } from './AgentGlyph'
 import { docxFileName } from '../fileName'
 import { useSpeech, speechTextOf } from '../speech/speechStore'
 import { useStore } from '../store'
 import { formatStats } from '../turns'
 import {
-  IconAgent,
   IconBrain,
+  IconChevronDown,
   IconCopy,
   IconDownload,
   IconEdit,
@@ -27,8 +28,10 @@ import {
 
 interface Props {
   message: MessageDto
-  /** 是否允许交互（只有最新一轮的界面可操作，历史界面置灰） */
+  /** 是否允许交互（只有最新一轮的界面可操作；历史界面控件禁用，但**不蒙灰**） */
   interactive: boolean
+  /** 这条消息是否正在流式生成 */
+  streaming?: boolean
   /** 是否是这一回合的最终答复（操作行只挂在最终答复上） */
   showActions?: boolean
   onEditToInput?: (text: string) => void
@@ -45,14 +48,59 @@ function useBody(message: MessageDto): { body: string; text: string; hasUi: bool
   return { body, text: hasUi && parts !== null ? parts.textOnly : body, hasUi }
 }
 
-/** 深度思考条（原版 buildReasoningBar）：默认收起，标题右侧给字数 */
-function ReasoningBlock({ reasoning }: { reasoning: string }) {
+/**
+ * 思考条（原版 ChatBubbleView.buildReasoningBar / WorkTurnView.buildThinking 同款）。
+ *
+ * 关键点是「跑马灯」：折叠态下标题右侧那一行显示的是**思考文本的末尾 400 字**，
+ * 随流式增量每帧更新 —— 这样思考从第一个字开始就能看见在长，而不是等一段想完了才整段蹦出来。
+ * （桌面端早先的实现只在展开后显示完整思考，且工作模式把当前轮的思考整个丢掉，
+ * 于是用户看到的就是「第一段思考完了，一下子蹦出来完的」。）
+ *
+ * 展开态显示完整思考文本；跑动中的标题给一个转圈，完成后固定缀「· 持续了几秒」。
+ */
+export function ThinkingBar({
+  reasoning,
+  streaming,
+  workMode = false
+}: {
+  reasoning: string
+  streaming: boolean
+  workMode?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const tail = marqueeText(reasoning)
   return (
-    <Disclosure title="思考" subtitle={`${reasoning.length} 字`} leading={<IconBrain size={14} />}>
-      <div className="reasoning">{reasoning}</div>
-    </Disclosure>
+    <div className="thinking" data-open={open}>
+      <button className="thinking__head" onClick={() => setOpen((v) => !v)}>
+        <span className="thinking__leading">
+          <IconBrain size={13} />
+        </span>
+        <span className="thinking__label">
+          {(workMode ? '思考' : '深度思考') + (streaming ? '' : ' · 持续了几秒')}
+        </span>
+        {streaming ? <span className="spinner spinner--sm" /> : null}
+        {streaming && !open && tail !== '' ? (
+          <span className="thinking__marquee" title={tail}>
+            {tail}
+          </span>
+        ) : (
+          <span className="thinking__gap" />
+        )}
+        <span className="thinking__caret">
+          <IconChevronDown size={13} />
+        </span>
+      </button>
+      {open ? <div className="thinking__body reasoning">{reasoning}</div> : null}
+    </div>
   )
 }
+
+/** 思考跑马灯取文本末尾 400 字并压成单行（原版 getMarqueeText 口径） */
+export function marqueeText(raw: string): string {
+  const tail = raw.length > 400 ? `…${raw.slice(raw.length - 400)}` : raw
+  return tail.replace(/[\r\n\t]+/g, ' ').trim()
+}
+
 
 /** 工具调用列表（可折叠；工作/交互模式由 Timeline 决定是否默认展开） */
 export function ToolList({ calls }: { calls: MessageDto['toolCalls'] }) {
@@ -196,10 +244,19 @@ export function AssistantBody({
 }
 
 /** 聊天模式下的一条消息 */
-export function MessageView({ message, interactive, showActions = true, onEditToInput }: Props) {
+export function MessageView({
+  message,
+  interactive,
+  streaming = false,
+  showActions = true,
+  onEditToInput
+}: Props) {
   const { body, text } = useBody(message)
   const isUser = message.role === 'user'
   const pushNotice = useStore((s) => s.pushNotice)
+  // 原版 ChatBubbleView：思考条在「流式中」或「已有思考内容」时出现；
+  // 关掉深度思考时不挂空的思考条（否则那条永远不填内容，看起来像卡住）。
+  const thinkingExpected = useStore((s) => s.thinkingEnabled)
 
   if (isUser) {
     return (
@@ -260,11 +317,16 @@ export function MessageView({ message, interactive, showActions = true, onEditTo
   // 原版 ChatBubbleView 的助手侧层级：头像 + 一列（思考条 → 工具行 → 气泡正文 → 操作行）
   return (
     <div className="msg msg--assistant">
-      <span className="avatar" title="Guncat">
-        <IconAgent size={18} />
-      </span>
+      {/* 头像 = 原版 ChatBubbleView.buildAIMessage 的 Image($r('app.media.cat_avatar'))：
+          38vp 圆形原图，不是自绘 SVG。 */}
+      <img className="avatar" src={APP_ICON_SRC} alt="" title="Guncat Work" />
       <div className="msg__col">
-        {hasReasoning ? <ReasoningBlock reasoning={message.reasoning} /> : null}
+        {hasReasoning || (streaming && thinkingExpected) ? (
+          <ThinkingBar
+            reasoning={message.reasoning}
+            streaming={streaming && message.toolCalls.length === 0}
+          />
+        ) : null}
         {message.toolCalls.length > 0 ? (
           <Disclosure title="工具调用" subtitle={`${message.toolCalls.length} 次`}>
             <ToolList calls={message.toolCalls} />

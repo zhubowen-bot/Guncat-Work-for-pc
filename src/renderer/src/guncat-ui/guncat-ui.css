@@ -9,9 +9,7 @@
   margin: 10px 0;
 }
 
-.gui--stale {
-  opacity: 0.62;
-}
+/* 刻意没有 `.gui--stale`：整块界面蒙灰是桌面端自加的，原版只有控件级禁用态。 */
 
 .gui__banner {
   display: flex;

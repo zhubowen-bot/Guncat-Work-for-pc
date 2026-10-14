@@ -94,18 +94,11 @@ export function IconChat(props: IconProps) {
   )
 }
 
-/** 智能体 / 品牌：猫头像（应用头像同源） */
-export function IconAgent(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M5.2 7.2 6.4 3.4l3.1 2.2h5l3.1-2.2 1.2 3.8v7.6a4.4 4.4 0 0 1-4.4 4.4H9.6a4.4 4.4 0 0 1-4.4-4.4V7.2Z" />
-      <circle cx="9.6" cy="12" r="1.05" />
-      <circle cx="14.4" cy="12" r="1.05" />
-      <path d="M11 15.4h2" />
-      <path d="M2.8 11.6h2M19.2 11.6h2" />
-    </Svg>
-  )
-}
+// 注意：这里**没有**「品牌大猫」图标，也不应该有。
+// 应用标识（侧栏品牌行、聊天助手头像、空态封面）一律用原版 app.media.cat_avatar 的原图，
+// 经 app:// 的 /res/ 提供，统一入口是 components/AgentGlyph 的 APP_ICON_SRC。
+// 早先版本在这里自绘了一只描边猫当品牌标识，既不是原版形态也丢了原图细节，
+// 是用户一眼就看出来的「不对齐」—— 不再提供这种替代品。
 
 // ===== 朗读 / 语音 =====
 
