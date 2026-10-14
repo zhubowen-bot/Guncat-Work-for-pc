@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
+import { reportStage } from './bootReport'
 import { Sidebar } from './components/Sidebar'
 import { Composer } from './components/Composer'
 import { MessageView } from './components/MessageView'
@@ -63,6 +64,26 @@ export default function App() {
     void init()
     // 只在挂载时初始化一次：init 内部已订阅事件并做幂等处理
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 启动诊断：把「React 挂载成功」与「浏览器真的产出了一帧」分开上报。
+  //
+  // 理由：主进程能自己观察到的最后一站是「页面加载完成」。用户机器上那一站是正常的，
+  // 窗口却什么都没有 —— 说明失败发生在这之后。有了这两个信号，日志就能把
+  //   DOM 就绪 / 加载完成 / React 已挂载 / 已产出首帧
+  // 四个状态分开；缺哪一步，问题就锁定在哪一步：
+  //   · 缺 mounted      → 界面产物没跑起来（脚本/CSP/React 抛异常，后者会走 error 上报）
+  //   · 有 mounted 无 painted → React 进 DOM 了，但合成器产不出帧（光栅化被关掉等）
+  useEffect(() => {
+    reportStage('mounted')
+    // requestAnimationFrame 只在浏览器真要产出下一帧时回调 ——
+    // 它恰好是「能不能画出来」最接近的可用信号。
+    const handle = window.requestAnimationFrame(() => {
+      reportStage('painted')
+    })
+    return () => {
+      window.cancelAnimationFrame(handle)
+    }
   }, [])
 
   // 流式输出时保持滚动到底部

@@ -10,6 +10,12 @@ type Handler = (...args: unknown[]) => unknown
 const handlers = new Map<string, Handler>()
 const sentEvents: Array<{ channel: string; payload: unknown }> = []
 const calls: Array<{ fn: string; args: unknown[] }> = []
+/** app.setPath 覆盖过的路径 */
+const paths: Record<string, string> = {}
+/** app.commandLine.appendSwitch 记录（兼容模式那条路要靠它断言） */
+const switches = new Map<string, string>()
+/** 建出来的窗口实例：验证需要往 webContents 上发事件（dom-ready / did-finish-load） */
+const windows: BrowserWindow[] = []
 
 export const ipcMain = {
   handle(channel: string, handler: Handler): void {
@@ -41,14 +47,38 @@ export function __calls(): Array<{ fn: string; args: unknown[] }> {
   return calls
 }
 
+/** 记录过的 Chromium 开关 —— 用于断言兼容模式到底加了哪几条 */
+export function __switches(): Record<string, string> {
+  return Object.fromEntries(switches)
+}
+
+/** 建出来的窗口（含 webContents），验证时用它模拟渲染进程事件 */
+export function __windows(): BrowserWindow[] {
+  return windows
+}
+
+export function __paths(): Record<string, string> {
+  return paths
+}
+
 export function __reset(): void {
   handlers.clear()
   sentEvents.length = 0
   calls.length = 0
+  switches.clear()
+  windows.length = 0
+  for (const key of Object.keys(paths)) {
+    delete paths[key]
+  }
+}
+
+interface Listener {
+  fn: (...a: unknown[]) => void
+  once: boolean
 }
 
 class FakeWebContents {
-  private listeners: Map<string, Array<(...a: unknown[]) => void>> = new Map()
+  private listeners: Map<string, Listener[]> = new Map()
 
   send(channel: string, payload: unknown): void {
     sentEvents.push({ channel, payload })
@@ -60,22 +90,37 @@ class FakeWebContents {
 
   on(event: string, cb: (...a: unknown[]) => void): this {
     const list = this.listeners.get(event) ?? []
-    list.push(cb)
+    list.push({ fn: cb, once: false })
     this.listeners.set(event, list)
     calls.push({ fn: 'webContents.on', args: [event] })
     return this
   }
 
+  /**
+   * 注意：once 必须**追加**一个一次性的监听器，而不是替换掉同名的 on 监听器。
+   * 真实 Electron 两者共存；早期替身写成 set() 会把先注册的 on 监听器挤掉，
+   * 于是「窗口注册的 did-finish-load 处理器」在验证里根本不会触发 —— 验证就成了空转。
+   */
   once(event: string, cb: (...a: unknown[]) => void): this {
-    this.listeners.set(event, [cb])
+    const list = this.listeners.get(event) ?? []
+    list.push({ fn: cb, once: true })
+    this.listeners.set(event, list)
     calls.push({ fn: 'webContents.once', args: [event] })
     return this
   }
 
   /** 测试用：模拟页面加载完成 */
   emit(event: string): void {
-    for (const cb of this.listeners.get(event) ?? []) {
-      cb()
+    const list = [...(this.listeners.get(event) ?? [])]
+    for (const listener of list) {
+      if (listener.once) {
+        const current = this.listeners.get(event) ?? []
+        this.listeners.set(
+          event,
+          current.filter((item) => item !== listener)
+        )
+      }
+      listener.fn()
     }
   }
 }
@@ -88,6 +133,7 @@ export class BrowserWindow {
   constructor(options: Record<string, unknown> = {}) {
     this.options = options
     calls.push({ fn: 'new BrowserWindow', args: [options] })
+    windows.push(this)
   }
 
   static getAllWindows(): BrowserWindow[] {
@@ -126,7 +172,13 @@ export class BrowserWindow {
 }
 
 export const app = {
-  isPackaged: false,
+  /**
+   * 打包态由环境变量控制：启动链路里有几条只在「win32 打包态」生效的逻辑
+   * （自我重启带 --no-sandbox、默认开 Chromium 日志），必须能被无头验证覆盖。
+   */
+  get isPackaged(): boolean {
+    return process.env.GUNCAT_STUB_PACKAGED === '1'
+  },
   getName(): string {
     return 'Guncat Work'
   },
@@ -134,7 +186,18 @@ export const app = {
     return '0.1.0-test'
   },
   getPath(name: string): string {
-    return name === 'userData' ? '/tmp/guncat-test-userdata' : '/tmp'
+    if (paths[name] !== undefined) {
+      return paths[name]
+    }
+    if (name === 'userData') {
+      // 允许指向临时目录：兼容模式那条路会往 userData 里写标记文件
+      return process.env.GUNCAT_STUB_USERDATA ?? '/tmp/guncat-test-userdata'
+    }
+    return '/tmp'
+  },
+  setPath(name: string, value: string): void {
+    paths[name] = value
+    calls.push({ fn: 'app.setPath', args: [name, value] })
   },
   getAppPath(): string {
     return process.cwd()
@@ -145,6 +208,21 @@ export const app = {
   },
   quit(): void {
     calls.push({ fn: 'app.quit', args: [] })
+  },
+  exit(code: number): void {
+    calls.push({ fn: 'app.exit', args: [code] })
+  },
+  relaunch(options: unknown): void {
+    calls.push({ fn: 'app.relaunch', args: [options] })
+  },
+  disableHardwareAcceleration(): void {
+    calls.push({ fn: 'app.disableHardwareAcceleration', args: [] })
+  },
+  commandLine: {
+    appendSwitch(name: string, value?: string): void {
+      switches.set(name, value ?? '')
+      calls.push({ fn: 'app.commandLine.appendSwitch', args: [name, value ?? ''] })
+    }
   },
   whenReady(): Promise<void> {
     calls.push({ fn: 'app.whenReady', args: [] })

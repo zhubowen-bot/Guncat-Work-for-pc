@@ -1,0 +1,548 @@
+!!""##$$%%&&''(())**++,,--..//00112233445566778899::;;<<==>>??@@
+"C:\Users\a1519\Documents\Guncat-Work-for-web\release\Guncat Work-0.1.0\Guncat Work.exe"
+#+3;CScs
+%H:%M:%S
+%SystemRoot%\Debug\UserMode
+%SystemRoot%\Debug\UserMode\gpmc.log
+%SystemRoot%\Debug\UserMode\gpsvc.bak
+%SystemRoot%\Debug\UserMode\gpsvc.log
+%SystemRoot%\System32\mswsock.dll
+%SystemRoot%\System32\winrnr.dll
+%SystemRoot%\system32\imageres.dll,-112
+%SystemRoot%\system32\imageres.dll,-183
+%SystemRoot%\system32\imageres.dll,-184
+%SystemRoot%\system32\mswsock.dll
+%SystemRoot%\system32\napinsp.dll
+%SystemRoot%\system32\nlansp_c.dll
+%SystemRoot%\system32\wshbth.dll
+%d %d %d %d
+%ls %ls
+%m/%d/%y
+(x86)\W
+-0.1.0\Guncat Work_un.dmp
+-0.1.0\Guncat Work_un.rpt
+-1-5-21-1678
+-1678012
+-OPENHARMON
+-web\release\Guncat Work-0.1.0\WINMM.dll
+.1.0\Guncat Work.dmp
+.1.0\Guncat Work.rpt
+.Default
+.dll,-571
+.ipv6-literal.net
+0.1.0\Guncat Work_un.dmp
+0.1.0\Guncat Work_un.rpt
+0123456789
+0123456789:;<=>?@ABCDEFGHIJKLMNOPQRS
+0\Guncat Work_un.dmp
+0\Guncat Work_un.rpt
+1.0.0.0
+1.0.0.3
+13.4.0.7351
+16.8.0.5415
+2\mswsock.dll,-60100
+2\mswsock.dll,-60101
+3++S++
+54a1971845be4bf096584cbba4ac1412@u.sogou.com
+59f8a17
+82BD0E67-9FEA-4748-8672-D5EFE5B779B0
+93971-1585
+;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;<local>
+;LC_TIME=C
+=AMD64
+@%SystemRoot%\System32\mswsock.dll,-60100
+@%SystemRoot%\System32\mswsock.dll,-60101
+@%SystemRoot%\System32\mswsock.dll,-60102
+@%SystemRoot%\System32\mswsock.dll,-60200
+@%SystemRoot%\System32\mswsock.dll,-60201
+@%SystemRoot%\System32\mswsock.dll,-60202
+@%SystemRoot%\System32\winrnr.dll,-1000
+@%SystemRoot%\System32\wshqos.dll,-100
+@%SystemRoot%\System32\wshqos.dll,-101
+@%SystemRoot%\System32\wshqos.dll,-102
+@%SystemRoot%\System32\wshqos.dll,-103
+@%SystemRoot%\system32\napinsp.dll,-1000
+@%SystemRoot%\system32\nlasvc.dll,-1000
+@%SystemRoot%\system32\shell32.dll,-21769
+@%SystemRoot%\system32\shell32.dll,-21781
+@%SystemRoot%\system32\shell32.dll,-21817
+@%SystemRoot%\system32\windows.storage.dll,-21798
+@%SystemRoot%\system32\wshtcpip.dll,-60103
+@PT_TC_EMPTYHOST
+A Corporatio
+AAAAAAAAAA
+ACSetupSvcPort=23210
+AF_UNIX
+ALLUSERSPROFILE=C:\ProgramData
+APPDATA=C:\Users\a1519\AppData\Roaming
+ASUS-OPENHARMON
+ASUS-OPENHARMON\a1519
+Adapter
+AppleTalk
+C Layer
+C:\Program Files (x86)\SogouInput\16.8.0.5415\Data\
+C:\Program Files (x86)\SogouInput\16.8.0.5415\Data\\crush.dmp
+C:\Program Files (x86)\SogouInput\16.8.0.5415\Data\\crush.rpt
+C:\Program Files (x86)\SogouInput\16.8.0.5415\Data\\crush_tsf.dmp
+C:\Program Files (x86)\SogouInput\16.8.0.5415\Data\\crush_tsf.rpt
+C:\Program Files (x86)\SogouInput\16.8.0.5415\Data\\crush_tsf_un.dmp
+C:\Program Files (x86)\SogouInput\16.8.0.5415\Data\\crush_tsf_un.rpt
+C:\Program Files (x86)\SogouInput\16.8.0.5415\Data\\crush_un.dmp
+C:\Program Files (x86)\SogouInput\16.8.0.5415\Data\\crush_un.rpt
+C:\Program Files (x86)\SogouInput\16.8.0.5415\ImeUtil.exe
+C:\Program Files (x86)\SogouInput\Components\
+C:\Program Files (x86)\SogouInput\Components\Data\
+C:\Program Files (x86)\SogouInput\Components\Data\\crush.dmp
+C:\Program Files (x86)\SogouInput\Components\Data\\crush.rpt
+C:\Program Files (x86)\SogouInput\Components\Data\\crush_un.dmp
+C:\Program Files (x86)\SogouInput\Components\Data\\crush_un.rpt
+C:\Program Files (x86)\SogouInput\Components\PicFace\1.1.0.3184
+C:\Program Files (x86)\SogouInput\Components\systembeautify\1.0.2.2868\systembeautify_bundle64.dll
+C:\Users\a1519\AppData\Local
+C:\Users\a1519\AppData\LocalLow\SogouPY.users\00000001\extension.conf
+C:\Users\a1519\AppData\LocalLow\SogouPy
+C:\Users\a1519\AppData\Local\Temp\
+C:\Users\a1519\AppData\Roaming
+C:\Users\a1519\Documents
+C:\Users\a1519\Documents\Guncat-Work-for-web\release\Guncat Work-0.1.0
+C:\Users\a1519\Documents\Guncat-Work-for-web\release\Guncat Work-0.1.0\
+C:\Users\a1519\Documents\Guncat-Work-for-web\release\Guncat Work-0.1.0\Guncat Work.exe
+C:\Users\a1519\Downloads
+C:\WINDOWS
+C:\WINDOWS\Registration
+C:\WINDOWS\S
+C:\WINDOWS\SYSTEM32\CoreUIComponents.dll
+C:\WINDOWS\SYSTEM32\DPAPI.DLL
+C:\WINDOWS\SYSTEM32\DWrite.dll
+C:\WINDOWS\SYSTEM32\IPHLPAPI.DLL
+C:\WINDOWS\SYSTEM32\MSASN1.dll
+C:\WINDOWS\SYSTEM32\SSPICLI.DLL
+C:\WINDOWS\SYSTEM32\Secur32.dll
+C:\WINDOWS\SYSTEM32\UMPDC.dll
+C:\WINDOWS\SYSTEM32\USERENV.dll
+C:\WINDOWS\SYSTEM32\VERSION.dll
+C:\WINDOWS\SYSTEM32\WINHTTP.dll
+C:\WINDOWS\SYSTEM32\WINMM.dll
+C:\WINDOWS\SYSTEM32\WINSPOOL.DRV
+C:\WINDOWS\SYSTEM32\WINSTA.dll
+C:\WINDOWS\SYSTEM32\WTSAPI32.dll
+C:\WINDOWS\SYSTEM32\apphelp.dll
+C:\WINDOWS\SYSTEM32\cfgmgr32.dll
+C:\WINDOWS\SYSTEM32\dbgcore.DLL
+C:\WINDOWS\SYSTEM32\dbghelp.dll
+C:\WINDOWS\SYSTEM32\dhcpcsvc.DLL
+C:\WINDOWS\SYSTEM32\gpapi.dll
+C:\WINDOWS\SYSTEM32\kernel.appcore.dll
+C:\WINDOWS\SYSTEM32\mscms.dll
+C:\WINDOWS\SYSTEM32\powrprof.dll
+C:\WINDOWS\SYSTEM32\textinputframework.dll
+C:\WINDOWS\SYSTEM32\windows.storage.dll
+C:\WINDOWS\System32\CRYPT32.dll
+C:\WINDOWS\System32\DEVOBJ.dll
+C:\WINDOWS\System32\GDI32.dll
+C:\WINDOWS\System32\IMM32.DLL
+C:\WINDOWS\System32\MMDevApi.dll
+C:\WINDOWS\System32\OLEAUT32.dll
+C:\WINDOWS\System32\RPCRT4.dll
+C:\WINDOWS\System32\SHELL32.dll
+C:\WINDOWS\System32\USER32.dll
+C:\WINDOWS\System32\WINTRUST.dll
+C:\WINDOWS\System32\WS2_32.dll
+C:\WINDOWS\System32\bcryptPrimitives.dll
+C:\WINDOWS\System32\combase.dll
+C:\WINDOWS\System32\fwpuclnt.dll
+C:\WINDOWS\System32\gdi32full.dll
+C:\WINDOWS\System32\msctf.dll
+C:\WINDOWS\System32\msvcp_win.dll
+C:\WINDOWS\System32\msvcrt.dll
+C:\WINDOWS\System32\netprofm.dll
+C:\WINDOWS\System32\npmproxy.dll
+C:\WINDOWS\System32\sechost.dll
+C:\WINDOWS\System32\shcore.dll
+C:\WINDOWS\System32\ucrtbase.dll
+C:\WINDOWS\System32\win32u.dll
+C:\WINDOWS\WinSxS\amd64_microsoft.windows.c..-controls.resources_6595b64144ccf1df_6.0.26100.8941_zh-cn_b39c6ab3f6fa43a4\
+C:\WINDOWS\system32\
+C:\WINDOWS\system32\CatRoot2\
+C:\WINDOWS\system32\CatRoot\
+C:\WINDOWS\system32\SogouPY.ime
+C:\WINDOWS\system32\dataexchange.dll
+C:\WINDOWS\system32\directmanipulation.dll
+C:\WINDOWS\system32\emptyregdb.dat
+C:\WINDOWS\system32\mswsock.dll
+C:\WINDOWS\system32\rsaenh.dll
+C:\WINDOWS\system32\spool\drivers\color
+C:\WINDOWS\system32\spool\drivers\color\sRGB Color Space Profile.icm
+C:\WINDOWS\system32\uxtheme.dll
+C:\Windows\System32\Bcp47Langs.dll
+C:\Windows\System32\CoreMessaging.dll
+C:\Windows\System32\InputHost.dll
+C:\Windows\System32\MsSpellCheck
+C:\Windows\System32\MsSpellCheckingFacility.dll
+C:\Windows\System32\OneCoreUAPCommonProxyStub.dll
+C:\Windows\System32\Windows.Globalization.dll
+C:\Windows\System32\Windows.UI.dll
+C:\Windows\System32\twinapi.appcore.dll
+CLSID\{529A9E6B-6587-4F23-AB9E-9C7D683E3C50}
+COMPUTERNAME=ASUS-OPENHARMON
+CUDA_VISIBLE_DEVICES=GPU-6a97c259-
+CUDA_VISIBLE_DEVICES=GPU-6a97c259-6769-db92-98da-8e08b7b16ea4
+CherryIMEWindowClass
+ChocolateyInstall=C:\ProgramData\chocolatey
+ChocolateyLastPathUpdate=134080380238562979
+Chrome_WidgetWin_1
+ComSpec=C:\WINDOWS\system32\cmd.exe
+CommonProgramFiles(x86)=C:\Program Files (x86)\Common Files
+CommonProgramFiles=C:\Program Files\Common Files
+CommonProgramW6432=C:\Program Files\Common Files
+Control Panel\PowerCfg
+Control Panel\PowerCfg\PowerPolicies
+CopyFiles\ICM
+Corporation
+CurrentPowerPolicy
+D+ncalrpc:[OLEE72E
+DINPUT.DLL
+DISPLAY
+Database
+Database::Data::Version
+DbgHelp
+DevEco Studio=C:\Program Files\Huawei\DevEco Studio\bin;
+Directory
+DiskSpinDownMax
+DiskSpinDownMin
+DriverData=C:\Windows\System32\Drivers\DriverData
+Dummy string
+E72E058A06B095E7612E71259564
+Etc/Unknown
+ExternalObjectOwner
+GlobalPowerPolicy
+Guncat Work
+Guncat Work.exe
+H:mm:ss
+HOMEDRIVE=C:
+HOMEPATH=\Users\a1519
+H\;C:\Progra
+Hyper-V RAW
+ICMData
+ICMDefaultWideColor
+ICMProfile
+ICMProfileAC
+ICMProfileSnapshot
+ICMProfileSnapshotAC
+IChatCom
+IChatComBundle
+IDIA App\NvDLISR;C:\Program
+INDOWS\SYSTEM32\WINSTA.dll
+ISGPetCom
+ISGPetComBundle
+InkAnywhere
+InprocServer32
+Installer
+JAVA_HOME=C:\Program Files\Java\jdk-25
+KBDUS.DLL
+KnownFoldersSettingsProvider
+LOCALAPPDATA=C:\Users\a1519\AppData\Local
+LOGONSERVER=\\ASUS-OPENHARMON
+LastID
+Latn-CN-x-ext.lex
+Local\
+Local\CloudStubAsyncSafeLock
+Local\IpcBufThreadSafeLock
+Local\QQ_PKG_PROCESS_LOCKER_NAME
+Local\Sogou_DelayStartQueueSafeLock
+Local\Sogou_ToolStubAsyncSafeLock
+Local\checksign
+Local\csTimerPerProc
+Local\cs_ExtraUisInit
+Local\cs_FlashUtil
+Local\cs_PureUisInit
+Local\cs_ResourcesInit
+Local\cs_SkinPreviewsInit
+Local\cs_skin
+Local\cs_sogouPreview
+Local\cs_staticPtrLock
+Local\filemap_mutex
+Local\memSogouPicFace20130725.mutex.sogouime
+Local\sgfmPyVRMutex
+Local\sgime_percconfig_critical_section
+Local\sgime_user_lock
+Local\sgime_user_lock_proc
+Local\sgrarecc_data_lock
+Local\sgrarecc_data_lock_proc
+Local\sogoucloudinputagent5415
+Local\statuserenv.mutex.sogouime
+Local\statuserenv.mutex.sogouime.filemap
+Local\statuserenv.mutex.sogouime.proc
+Local\u_1
+Local\userenv.mutex.sogouime
+Local\userenv.mutex.sogouime.filemap
+Local\userenv.mutex.sogouime.proc
+MSAFD L2CAP [Bluetooth]
+MSAFD RfComm [Bluetooth]
+MSAFD Tcpip [RAW/IPv6]
+MSAFD Tcpip [TCP/IP]
+MSAFD Tcpip [TCP/IPv6]
+MSAFD Tcpip [UDP/IP]
+MSAFD Tcpip [UDP/IPv6]
+MainVisual
+Mci Extensions
+MediaPath
+Meiryo
+Microsoft Root Authority
+Microsoft Root Certificate Authority
+Microsoft Root Certificate Authority 2010
+Microsoft Root Certificate Authority 2011
+Microsoft Software Key Storage Provider
+Microsoft Software Printer Driver
+Microsoft Spell Checker Factory Class
+Microsoft Timestamp Root
+Microsoft Wi-Fi Dir
+Module
+MsSpell
+NUMBER_OF_PROCESSORS=16
+Network List Manager
+NwlnkIpx
+NwlnkSpx
+OLEE72E058A06B095E7612E71259564
+OLLAMA_FLASH_ATTENTION=1
+OLLAMA_GPU_LAYER=cuda
+OLLAMA_GPU_MEM_FRACTION=0.9
+OLLAMA_NUM_GPU=999
+OPENHA
+OS=Windows_NT
+OWS\system32\cmd.exe
+O[[\\]]^^__
+Ofy3Iyn1hn
+OneDrive=C:\Users\a1519\OneDrive
+Override
+OverrideUIAReadOnly
+PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC
+PORTPROMPT:
+PROCES
+PROCESSOR_ARCHITECTURE=AMD64
+PROCESSOR_IDENTIFIER=AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD
+PROCESSOR_LEVEL=25
+PROCESSOR_REVISION=7502
+PSModulePath=C:\Program Files\WindowsPowerShell\Modules;C:\WINDOWS\system32\WindowsPowerShell\v1.0\Modules
+PT_TC_ACTIONS
+PT_TC_CACHEDFILEUPDATER_LOCAL
+PT_TC_CACHEDFILEUPDATER_REMOTE
+PT_TC_CAMERA_DCA
+PT_TC_CONTACTPICKER
+PT_TC_CRASHDUMP
+PT_TC_DATA_PACKAGE
+PT_TC_ERROR_REPORT
+PT_TC_FILEOPENPICKER
+PT_TC_FILESAVEPICKER
+PT_TC_GENERIC
+PT_TC_HOSTEDAPPLICATION
+PT_TC_IGNORE_NAV_LEVEL_FOR_CS
+PT_TC_MEDIA_CONTROLS_ACTIVE
+PT_TC_PBM
+PT_TC_PBM_COMMUNICATION
+PT_TC_PLAYTO
+PT_TC_PRINTER_DCA
+PT_TC_PRINTING
+PT_TC_REALTIMECOMM
+PT_TC_SCANNING
+PT_TC_SHARING
+PT_TC_STREAMEDFILE
+PUBLIC=C:\Users\Public
+PatchImagePlaceholder
+Path=C:\Program Files\Common Files\Oracle\Java\javapath;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\Program Files\NVIDIA Corporation\NVIDIA App\NvDLISR;C:\Program Files\dotnet\;C:\Windows\system32\downlevel;C:\Program Files\MATLAB\R2025a\bin;C:\Users\a1519\Downloads\scrcpy-win64-v3.3.3\scrcpy-win64-v3.3.3;C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit\;C:\Program Files\CodeArts Agent\bin;C:\Program Files (x86)\Windows Kits\8.1\Windows Performance Toolkit\;C:\Users\a1519\AppData\Local\Huawei\DevEco Studio\sdk\default\openharmony\toolchains;C:\Program Files\nodejs\;C:\Program Files\Git\cmd;C:\Users\a1519\AppData\Local\Programs\DeepSeek Harness\resources\runtime\cli\bin;C:\Users\a1519\AppData\Local\Microsoft\WindowsApps;C:\Program Files\CodeBlocks\MinGW\bin;C:\Program Files\Java\jdk-25\bin;C:\Program Files\Huawei\DevEco Studio\bin;C:\Users\a1519\AppData\Local\GitHubDesktop\bin;C:\Users\a1519\AppData\Local\GitHubDesktop\app-3.6.2\resources\app\git\cmd;C:\Users\a1519\AppData\Roaming\npm;C:\Users\a1519\AppData\Local\Programs\Ollama;C:\Program Files\Huawei\DevEco Studio\bin;C:\Users\a1519\AppData\Local\Microsoft\WindowsApps
+PicFace64.dll
+Picface.dll
+PrintTicket
+ProfileAssociations\Capture
+ProfileAssociations\Display
+ProfileAssociations\Print
+ProfileEnumMode
+ProgramDat
+ProgramData=C:\ProgramData
+ProgramFiles(x86)=C:\Program Files (x86)
+ProgramFiles=C:\Program Files
+ProgramW6432=C:\Program Files
+Psched
+ROFILE=C:\Users\a1519
+RegisteredProfiles
+Regula
+RlsSvcPort=22112
+SGBizProm_BizCloudFileDownload_WND
+SGBizProm_BizProcessUtil_WND
+SGBizProm_CrossProcess_DATA_YYBTK_2_SG16.8.0.5415_Client
+SOFTWARE\Classes\CLSID
+SOFTWARE\Microsoft\Ole\Extensions
+SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM
+SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM\ICMatchers
+SOFTWARE\Printers\Connections
+SPROFILE
+SYSTEM\CurrentControlSet\Control\Class\
+SYSTEM\Software\Microsoft\TIP\TestResults
+S\fonts\HYZhongHeiTi-197.ttf
+SearchUIAGroupForEdit
+Security=Impersonation Dynamic False
+Sep 20 2026 16:39:05
+Shell::ShellHandwriting::InkAnywhere
+ShellHandwriting
+Shell_TrayWnd
+SimSun
+SoPY_Cand
+SoPY_Comp
+SoPY_Comp2
+SoPY_Component
+SoPY_Hint
+SoPY_PrevieIMode
+SoPY_RichHint
+SoPY_Status
+SoPY_UI
+Softwar
+Software\Microsoft\StorageFolder\ChangeTracking\%s
+Software\Microsoft\StorageLibrary\ChangeTracking\%s\%d
+Software\Microsoft\Windows\CurrentVersion
+Software\Microsoft\Windows\CurrentVersion\Controls Folder\PowerCfg
+Software\Microsoft\Windows\CurrentVersion\Controls Folder\PowerCfg\PowerPolicies
+SogouInput.store.user
+SogouPY.ime
+SogouTSF.ime
+SupportedLanguages
+System
+SystemBeautify
+SystemBeautifyCom
+SystemBeautifyComBundle
+SystemDrive=C:
+SystemRoot=C:\WINDOWS
+System\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\Winmm
+TEMP=C:\Users\a1519\AppData\Local\Temp
+TF_ThreadMgr
+TMP=C:\Users\a1519\AppData\Local\Temp
+Tcpip6
+TextInputServerDefault1
+Thawte Timestamping CA
+ThreadingModel
+USER32
+USERDOMAIN=ASUS-OPENHARMON
+USERDOMAIN_ROAMINGPROFILE=ASUS-OPENHARMON
+USERNAME=a1519
+USERPROFILE=C:\Users\a1519
+UsePerUserProfiles
+VeriSign Time Stamping CA
+Version
+WINDOWNAME
+WinSta0
+WinSta0\Default
+Windows.Devices.Input.PenDevice
+Windows.Internal.ApplicationTargetedFeatureDatabase.ApplicationTargetedFeatureConfig
+Windows.Internal.ApplicationTargetedFeatureDatabase.ApplicationTargetedFeatureConfig\Pro
+Windows.Internal.ApplicationTargetedFeatureDatabase.ApplicationTargetedFeatureQuery
+Windows.Internal.ApplicationTargetedFeatureDatabase.ApplicationTargetedFeatureQueryry
+Windows.UI.ViewManagement.UISettings
+WindowsApps
+YPE=C;LC_MONETARY=C;
+YSTEM32\dbgcore.DLL
+\AppData\Local\Huawei\DevEco Studio\sdk\default\openharmony\toolchains;C:\Program Files\nodejs\;C:\Program Files\Git\cmd;C:\Users\a1519\AppD
+\Device\HarddiskVolume3\Program Files (x86)\SogouInput\Components\PicFace\1.1.0.3184\PicFace64.dll
+\Guncat Work-0.1.0
+\Microsoft\Windows NT\Cu
+\Progr
+\REGISTRY\USER\S-1-5-21-167801206-3664893971-158597298-1001\EUDC\936
+\REGISTRY\USER\S-1-5-21-167801206-3664893971-158597298-1001\Software\SogouInput.store.user\TodayRunTimes
+\SECURITY\LSA_AUTHENTICATION_INITIALIZED
+\System32\Op
+\\.\pipe\sogouCloudImeAgentPipe5415
+\a1519\AppData\Roaming
+__COMPAT_LAYER=DetectorsAdminProtection Installer
+abcABC
+abcdefghijklmnopqrstuvwxyz
+abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
+aliworkbench.exe
+altek PCIe GbE Family Controller
+bin;C:\Users
+cal\Mi
+cat Work-0.1.0\Guncat Work.exe
+cat-Work
+cf1b-0b8e-43ac-920a-69ea1fa8f2f2
+class_SoPY_Hint_TSF
+deUIAReadOnly
+defDEF
+dll,-572
+dulePa
+e\Guncat Work-0.1.0
+es\Guncat Eval-LLM
+face 1
+g\npm;C:\Users\a
+ghiGHI
+gim_bh
+gim_em
+gim_lm
+gim_py
+gim_qr
+gim_sp
+gram Files\N
+gyMdthHmsX
+https://shurufa.sogou.com
+iSGPet
+icm32.dll
+istics
+ja-JP_radstr
+jklJKL
+losePtr
+mnoMNO
+mscms.dll
+mswsock.dll,-60200
+mswsock.dll,-60201
+mswsock.dll,-60202
+netprofm
+neutral
+notify
+ocal\Programs\DeepSeek Harness\resources\runtime\cli\bin;C:\Users\a1519\AppData\Local\Microsoft\WindowsApps;C:\Program Files\CodeBlo
+oleaut32.dll
+oot%\System32\msctf.dll
+ork-0.1.0\Guncat Work.dmp
+ork-0.1.0\Guncat Work.rpt
+ownloads
+pForEdit
+pback Pseudo-Interface 1
+pddwebworkbench.exe
+pet\1.0.2.3152\isgpet_bundle64.dll.2.Manifest
+picFaceIndexVersion
+picFaceMergedCellVersion
+pqrsPQRS
+progress
+qq.exe
+rces\a
+rces\res
+re.DLL
+rgeSdbFi
+rk-0.1.0\Guncat Work.dmp
+rk-0.1.0\Guncat Work.rpt
+s;C:\WINDOWS
+sRGB Color Space Profile.icm
+s\a1519\
+sers\a1519\Downloads
+shell:::{374DE290-123F-4565-9164-39C4925E467B}
+statusiconstatistics
+sti.dll
+systemsettings.exe
+ta\Loc
+tivatableClassId
+tuvTUV
+tware\Microsoft\Direct3D\Direct2D
+v1.0\;C:\WIN
+vices\Winsock2\P
+winRTDesktopBrokerCLSID
+windir=C:\WINDOWS
+wpp.exe
+wps.exe
+wxyzWXYZ
+yyyy/M/d
+zh-Hans-CN
+zh-Hant-HK
+zh-Hant-MO
+zh-Hant-TW
+z{{||}}~~
+{00020420-0000-0000-C000-000000000046}
+{00020424-0000-0000-C000-000000000046}
+{0BE01A9F-E326-43AB-AA9E-7043D5C65E56}
+{155E666C-4196-4AB8-A0E7-348CF168839C}
+{306777B9-90CA-46AC-AF97-3343A0627E8A}
+{4D36E96E-E325-11CE-BFC1-08002BE10318}

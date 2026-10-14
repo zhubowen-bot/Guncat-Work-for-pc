@@ -45,6 +45,12 @@ export const INVOKE = {
 
   /** 应用信息 */
   appInfo: 'app:info',
+  /**
+   * 启动诊断：渲染进程主动上报自己走到了哪一步。
+   * 「页面加载完成」是主进程能自己看到的最远一步；再往里（React 有没有挂载成功、
+   * 有没有真的产出帧）主进程完全看不见 —— 白屏恰恰发生在那段盲区里。
+   */
+  appRendererStage: 'app:rendererStage',
 
   /** 端侧增强：文件收件（拖拽 / 系统「打开方式」/ 命令行参数） */
   intakeImport: 'intake:import',
@@ -55,6 +61,16 @@ export const INVOKE = {
 } as const
 
 export const EVENT = 'guncat:event'
+
+/**
+ * 渲染进程上报的启动阶段。
+ *
+ * 三者都是「白屏」，但原因完全不同，必须分开：
+ *   mounted —— React 挂载成功（界面树已进 DOM）
+ *   painted —— 浏览器已产出首帧
+ *   error   —— React 在挂载/渲染时抛异常（没有这一步，主进程只会看到一片安静）
+ */
+export type RendererStage = 'mounted' | 'painted' | 'error'
 
 // ===== 设置 =====
 

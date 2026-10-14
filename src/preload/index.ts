@@ -12,6 +12,7 @@ import type {
   ConversationSummaryDto,
   GuncatEvent,
   MultimodalConfigDto,
+  RendererStage,
   WorkspaceEntryDto,
   WorkRunRequest
 } from '../ipc/contract'
@@ -82,7 +83,14 @@ const api = {
   },
 
   app: {
-    info: (): Promise<AppInfoDto> => ipcRenderer.invoke(INVOKE.appInfo)
+    info: (): Promise<AppInfoDto> => ipcRenderer.invoke(INVOKE.appInfo),
+    /**
+     * 启动诊断：把「渲染进程走到了哪一步」告诉主进程。
+     * 主进程只能看到「页面加载完成」，再往里是不是真挂载成功、有没有画出帧，
+     * 它一无所知 —— 白屏就发生在那段盲区里。
+     */
+    reportStage: (stage: RendererStage, detail?: string): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.appRendererStage, stage, detail)
   },
 
   /** 端侧增强 */

@@ -13,54 +13,99 @@ import { registerElectronPicker } from './picker'
 import { registerIpcHandlers } from './ipc'
 import { collectFileArgs } from './intake'
 import { SessionManager } from './session/SessionManager'
-import { createMainWindow, getMainWindow, rendererDir, setPendingFlush, setRendererStalledHandler, showLoadError } from './window'
+import { createMainWindow, getMainWindow, rendererDir, setPendingFlush, setRendererStalledHandler, setCompatMode, showLoadError } from './window'
 import { serveRenderer, registerAppScheme } from './protocol'
-import { buildCompatArgs, SAFE_MODE_FLAG, FRESH_PROFILE_FLAG } from './compat'
+import { buildCompatArgs, FRESH_PROFILE_FLAG, isCompatMode } from './compat'
+import {
+  NO_SANDBOX_FLAG,
+  KEEP_SANDBOX_FLAG,
+  chromiumLogPath,
+  hasNoSandboxFlag,
+  isNoSandboxRelaunch,
+  noSandboxRelaunchReason,
+  buildNoSandboxRelaunchArgs,
+  shouldLogChromium
+} from './nosandbox'
 import { resolveAppPaths } from './paths'
-import { bootLog, bootLogPath, bootLogTail, bootFail, installCrashHandlers } from './bootlog'
+import { bootLog, bootLogPath, bootLogTail, bootFail, installCrashHandlers, bootMark } from './bootlog'
+import { isElevated, describeUser, describeBitness, ADMIN_PROBE_DIR } from './elevation'
 import type { GuncatEvent } from '../ipc/contract'
 
 /**
- * 安全模式与自动降级。
+ * 启动顺序（前两步是有硬性要求的，别往下挪）：
  *
- * 实测结论（用户机器）：只有带上
- *   --no-sandbox --disable-gpu --disable-software-rasterizer
- * 并以管理员身份运行时，渲染进程才起得来。
- * 不带这些参数时：主进程一路正常（路径、协议、IPC、窗口全部就绪），
- * 渲染进程发出 did-start-loading 后就没有下文，约 10 秒后主进程触发致命 CHECK 终止。
- *
- * 所以不该要求用户每次手动带参数、更不该要求管理员权限，而是让它自己降级：
- *   正常启动 → 渲染进程超时未就绪 → 带真实 Chromium 参数自动重启（并换干净的 profile）
- * 之后每次启动都直接走这条路（记在标记文件里），不必再白等一次超时。
+ *   0) 单实例锁 —— 必须在自我重启之前拿，否则「应用已在运行」时第二次双击也会白白重启一次。
+ *   1) win32 打包态无条件带上 --no-sandbox —— 通过一次「带真实参数的自我重启」实现，理由见
+ *      nosandbox.ts。崩溃发生在 Chromium 初始化早期，主线程卡在 GPU 进程启动失败的等待路径上，
+ *      进程内的看门狗/自动降级根本来不及跑（实测那几轮一条日志都没留下），
+ *      所以参数必须从启动第一刻就在命令行上。
+ *   2) 兼容（降级）模式：只在看门狗判定渲染进程卡住后由应用自己重启进入，或命令行显式标记。
+ *      它只是第二道防线 —— 第一道是第 1 步。
  */
 
-/** 曾经靠兼容参数起来过就记下来，下次直接照做 */
+/** 曾经降级过一次就记下来，下次不再白等一次超时 */
 function compatMarkerPath(base: string): string {
   return path.join(base, 'safe-mode.marker')
 }
 
-/**
- * 降级后使用独立的用户数据目录（<原目录>-compat）。
- * 理由：反复崩溃会在原目录里留下半初始化的 Chromium 状态（GPUCache / Dawn* 等），
- * 那本身就可能让下一次启动继续崩 —— 换个干净目录才能打破这个循环。
- */
-function applyCompatProfile(fresh: boolean): void {
-  const base: string = app.getPath('userData')
-  const compat: string = `${base}-compat`
-  if (fresh) {
-    try {
-      fs.rmSync(compat, { recursive: true, force: true })
-    } catch {
-      // 删不掉就用现有的
-    }
-  }
-  app.setPath('userData', compat)
+/** Chromium 日志路径（未开启时为空串）—— 启动日志里要注明，出问题时用户才知道去哪找 */
+let chromiumLogFile: string = ''
+
+// ===== 第 0 步：单实例锁 =====
+// 必须在自我重启之前拿：否则应用已经在运行时，第二次双击也会白白多起一个进程
+// （新进程拿不到锁，只会闪一下就退出）。
+const gotLock: boolean = app.requestSingleInstanceLock()
+if (!gotLock) {
+  bootLog('另一个实例已在运行，本次启动退出')
+  app.quit()
 }
 
+// ===== 第 1 步：Chromium 日志 + win32 打包态无条件带上 --no-sandbox =====
+//
+// 为什么必须是「一次带真实参数的自我重启」，而不是 app.commandLine.appendSwitch：
+//   GPU 子进程的启动参数取自命令行；而且实测唯一被证实可用的组合就是命令行带 --no-sandbox。
+//   用 app.relaunch 而不是自己 spawn：relaunch 在本进程退出后才拉起新进程，不会去抢单实例锁。
+// 护栏：命令行已有 --no-sandbox 就绝不重启 —— 这是不做无限重启的唯一开关。
+if (shouldLogChromium({ platform: process.platform, packaged: app.isPackaged, argv: process.argv })) {
+  // 上次调查最大的障碍就是崩溃时 Chromium 什么都没留下：所有失败运行都在日志初始化之前
+  // 就死了，只能靠 %LOCALAPPDATA%\CrashDumps 的转储还原。现在默认落盘。
+  chromiumLogFile = chromiumLogPath(app.getPath('userData'))
+  try {
+    fs.mkdirSync(path.dirname(chromiumLogFile), { recursive: true })
+  } catch {
+    // 建不出来也照样加开关：Chromium 会退回 stderr
+  }
+  app.commandLine.appendSwitch('enable-logging')
+  app.commandLine.appendSwitch('log-file', chromiumLogFile)
+}
+
+const relaunchReason: string | null = gotLock
+  ? noSandboxRelaunchReason({
+      platform: process.platform,
+      packaged: app.isPackaged,
+      argv: process.argv
+    })
+  : null
+if (relaunchReason !== null) {
+  bootMark('BOOT_RELAUNCH_NO_SANDBOX', `带真实参数自我重启一次：${relaunchReason}`)
+  app.relaunch({ args: buildNoSandboxRelaunchArgs(process.argv) })
+  app.exit(0)
+}
+if (isNoSandboxRelaunch(process.argv)) {
+  // 这条是留给「新进程」的：否则用户看到进程闪一下就没了，会以为是 bug。
+  bootMark(
+    'BOOT_RELAUNCH_NO_SANDBOX',
+    '本次进程由自我重启产生：上一次启动的命令行没带 --no-sandbox，重启是预期行为'
+  )
+}
+
+// ===== 第 2 步：兼容（降级）模式：第二道防线 =====
 const freshProfile: boolean = process.argv.includes(FRESH_PROFILE_FLAG)
 
-// 先决定是否走兼容参数：命令行显式要求，或上次留下的标记
-let safeMode: boolean = process.argv.includes(SAFE_MODE_FLAG)
+// 降级来源：
+//   1) 命令行显式标记（应用自己降级重启时带上）
+//   2) 上次留下的标记文件（降级过一次，之后每次启动直接照做，不必再白等一次超时）
+let safeMode: boolean = isCompatMode(process.argv)
 if (!safeMode) {
   try {
     if (fs.existsSync(compatMarkerPath(app.getPath('userData')))) {
@@ -71,16 +116,13 @@ if (!safeMode) {
   }
 }
 
+// 窗口标题要反映真实状态（含「靠标记文件进入降级模式」这条没有命令行参数的路径）
+setCompatMode(safeMode)
+
 if (safeMode) {
-  // 真参数走命令行（见下 relaunch），这里再在进程内加一道，
-  // 覆盖「靠标记文件直接进安全模式」这条没有命令行参数的路径
-  app.disableHardwareAcceleration()
-  app.commandLine.appendSwitch('no-sandbox')
-  app.commandLine.appendSwitch('disable-gpu')
-  app.commandLine.appendSwitch('disable-gpu-compositing')
-  app.commandLine.appendSwitch('disable-software-rasterizer')
-  app.commandLine.appendSwitch('disable-gpu-watchdog')
-  applyCompatProfile(freshProfile)
+  // 进程内再加一道，覆盖「靠标记文件直接进降级模式」这条命令行上没有开关的路径。
+  // 只加这一条：其余开关（--disable-gpu 之类）实测对这次崩溃毫无帮助，却会把界面降成软件渲染。
+  app.commandLine.appendSwitch(NO_SANDBOX_FLAG)
   try {
     fs.mkdirSync(app.getPath('userData'), { recursive: true })
     fs.writeFileSync(compatMarkerPath(app.getPath('userData')), '1')
@@ -96,7 +138,29 @@ bootLog('=== Guncat Work 启动 ===')
 bootLog(`argv: ${process.argv.join(' ')}`)
 bootLog(`electron=${process.versions.electron} node=${process.versions.node} chrome=${process.versions.chrome}`)
 bootLog(`平台=${process.platform} 打包态=${app.isPackaged}`)
-bootLog(`兼容模式=${safeMode} 全新配置目录=${freshProfile}`)
+bootLog(`是否兼容模式=${safeMode}（= 走降级路径，窗口标题会注明）`)
+// 「命令行带没带 --no-sandbox」与「是不是降级模式」是两件事，必须分开记：
+// 前者现在是 win32 打包态的**默认**状态（自我重启一次后生效），后者只在看门狗降级后成立。
+// 第 1 步与第 2 步一旦失灵，这一行就是唯一能指认的地方。
+bootLog(
+  `沙箱开关=${hasNoSandboxFlag(process.argv) ? '命令行已带 --no-sandbox' : '命令行未带 --no-sandbox'}` +
+    ` 自我重启过=${isNoSandboxRelaunch(process.argv)} 保留沙箱=${process.argv.includes(KEEP_SANDBOX_FLAG)}`
+)
+bootMark(
+  'SANDBOX_STATE',
+  `--no-sandbox 生效=${hasNoSandboxFlag(process.argv) || safeMode}（命令行=${hasNoSandboxFlag(process.argv)} 降级=${safeMode} 自我重启=${isNoSandboxRelaunch(process.argv)}）`
+)
+bootLog(`全新配置目录标记=${freshProfile}（标记保留：诊断脚本仍会传，但应用不再自动切用户数据目录）`)
+
+// 启动环境的观测项：排查「加载完成却什么都没有 / 启动即退」时，它们是第一手证据。
+//   是否提权 —— 曾经被当成必要条件（见 elevation.ts 的探测方式与理由）
+//   进程位数 —— 32/64 位混用会以各种奇怪的方式失败
+//   userData —— 崩溃与配置都在这里
+//   Chromium 日志 —— 上次调查最缺的东西：崩溃时 Chromium 一条日志都没留下
+bootLog(`是否提权=${isElevated()}（探测写入 ${ADMIN_PROBE_DIR} 的权限，探测文件立即删除）`)
+bootLog(`用户=${describeUser()} 进程位数=${describeBitness()}`)
+bootLog(`userData 目录=${app.getPath('userData')}`)
+bootLog(`Chromium 日志=${chromiumLogFile !== '' ? chromiumLogFile : '（未开启）'}`)
 bootLog(`日志文件: ${bootLogPath()}`)
 
 /** 待收件的外部文件（窗口还没就绪时先攒着，页面加载完再推） */
@@ -139,10 +203,10 @@ installCrashHandlers((text) => {
   }
 })
 
-// 单实例：第二次启动时聚焦已有窗口，并把它的文件参数接过来
-if (!app.requestSingleInstanceLock()) {
-  bootLog('另一个实例已在运行，本次启动退出')
-  app.quit()
+// 单实例：第二次启动时聚焦已有窗口，并把它的文件参数接过来。
+// 锁已经在文件开头拿到了（第 0 步，必须在自我重启之前）；这里只是用它决定要不要继续。
+if (!gotLock) {
+  // 另一个实例在跑：上面已经 quit 过了，这里什么都不做（新进程也不该去抢锁）
 } else {
   bootLog('单实例锁已获取')
 
@@ -199,21 +263,25 @@ if (!app.requestSingleInstanceLock()) {
         flushPendingIntake()
       })
 
-      // 渲染进程卡住时的自愈：安全模式已试过就如实报错，否则自动用安全模式重启一次
+      // 渲染进程卡住时的自愈（第二道防线）：降级模式已试过就如实报错，否则降级重启一次。
+      // 第一道防线是文件开头的「无条件带 --no-sandbox 自我重启」—— 那一类崩溃（GPU 子进程
+      // 建不出来 → 主进程 FATAL）发生在 Chromium 初始化早期，主线程被占住，
+      // 这里的看门狗根本来不及执行，所以不能指望它。
       setRendererStalledHandler(({ pagePath }: { pagePath: string }) => {
         const window: BrowserWindow | null = getMainWindow()
         if (safeMode) {
-          bootLog('安全模式下渲染进程仍未就绪，不再重试')
+          bootLog('降级模式下渲染进程仍未就绪，不再重试')
           if (window !== null) {
             showLoadError(
               window,
               pagePath,
-              '渲染进程在安全模式下仍未能就绪。请把启动日志发出来：' + bootLogPath()
+              '渲染进程在降级模式下仍未能就绪。请把启动日志发出来：' + bootLogPath()
             )
           }
           return
         }
-        bootLog('→ 自动以兼容模式重启（禁用渲染沙箱 / GPU，并换用干净的用户数据目录）')
+        bootLog('→ 自动以降级模式重启（命令行显式带 --no-sandbox）')
+        bootMark('AUTO_DEGRADE', '→ 自动降级：本次进程将以降级参数重启')
         // 关键：把**真实 Chromium 参数**作为命令行传过去，而不是只传自己的标记。
         // 这正是用户机器上唯一验证成功的那组参数；只靠进程内 appendSwitch 不可靠
         // （沙箱相关开关在进程启动早期就被读取）。

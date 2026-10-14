@@ -62,6 +62,9 @@ function check(name, condition, detail = '') {
 }
 
 const dataRoot = path.join(os.tmpdir(), `guncat-ipc-${Date.now()}`)
+// 启动日志也写到临时目录：注册 IPC 不再触发日志，但「渲染进程阶段上报」会写日志 ——
+// 绝不能因此覆盖用户真实的那份启动日志（排查问题时要看的正是它）。
+process.env.GUNCAT_BOOTLOG_DIR = dataRoot
 mod.initAppPaths({ dataRoot, resourcesRoot: path.resolve('resources') })
 mod.clearTempDir()
 
@@ -100,6 +103,7 @@ const required = [
   'workspace:openInFolder',
   'workspace:exportZip',
   'app:info',
+  'app:rendererStage',
   'settings:saveString',
   'intake:import',
   'message:exportDocx',
@@ -111,6 +115,23 @@ check('preload 用到的通道全部已注册', missing.length === 0, missing.le
 // --- 应用信息 ---
 const info = await inv('app:info')
 check('app:info 返回版本与路径', info.version !== undefined && info.dataRoot === dataRoot, `version=${info.version}`)
+
+// --- 启动诊断：渲染进程上报「走进了哪一步」 ---
+// 这条链路补的是主进程的盲区：它自己最多只能看到「页面加载完成」，
+// 再往里（React 有没有挂载、有没有产出帧、有没有渲染期异常）完全看不见 ——
+// 而本轮白屏恰恰发生在那段盲区里。上报必须落进启动日志才算数。
+await inv('app:rendererStage', 'mounted')
+await inv('app:rendererStage', 'painted')
+await inv('app:rendererStage', 'error', 'ipc-check boom')
+await inv('app:rendererStage', 'nonsense-stage')
+const stageLog = fs.readFileSync(path.join(dataRoot, 'startup.log'), 'utf8')
+check('React 挂载上报落进启动日志', stageLog.includes('[REACT_MOUNTED]'))
+check('首帧上报落进启动日志', stageLog.includes('[FRAME_PAINTED]'))
+check(
+  'React 渲染异常上报落进启动日志（否则白屏没有任何痕迹）',
+  stageLog.includes('[REACT_ERROR]') && stageLog.includes('ipc-check boom')
+)
+check('无法识别的阶段不会被静默丢弃', stageLog.includes('无法识别的渲染进程阶段上报'))
 
 // --- 智能体 ---
 await session.bootstrap()

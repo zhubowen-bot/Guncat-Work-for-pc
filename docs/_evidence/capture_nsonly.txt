@@ -1,0 +1,5 @@
+START 2026/10/14 周三 22:12:54.33 
+
+[57832:1014/221254.502:ERROR:chrome\browser\process_singleton_win.cc:457] Lock file can not be created! Error code: 5
+EXIT=0 
+END 2026/10/14 周三 22:12:54.82 

@@ -14,15 +14,32 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resource } from '@core/platform/appPaths'
-import { bootLog, bootLogPath } from './bootlog'
+import { bootLog, bootLogPath, bootMark } from './bootlog'
 import { rendererUrl } from './protocol'
+import { isCompatMode } from './compat'
 
 const __dirname: string = path.dirname(fileURLToPath(import.meta.url))
 
 /** 诊断模式：只用一张内联页面，判断故障发生在渲染进程还是界面产物加载 */
 export const DIAG_MODE: boolean = process.argv.includes('--guncat-diag')
-/** 兼容模式（禁用渲染沙箱与 GPU）：这台机器上唯一能让渲染进程起来的配置 */
-export const COMPAT_MODE: boolean = process.argv.includes('--guncat-safe-mode')
+
+/**
+ * 兼容模式（禁用渲染沙箱与 GPU）：这台机器上唯一能让渲染进程起来的配置。
+ *
+ * 判定交给 compat.ts 的 isCompatMode：只看 --guncat-safe-mode 标记会漏掉
+ * run-compat.cmd 那条路径（它只传真实 Chromium 开关），日志与窗口标题就会
+ * 给出「兼容模式=false」这个错误结论 —— 用户机器上已经发生过。
+ * index.ts 在启动早期还会用 setCompatMode 覆盖一次（标记文件那条路径）。
+ */
+let compatMode: boolean = isCompatMode(process.argv)
+
+export function setCompatMode(value: boolean): void {
+  compatMode = value
+}
+
+export function isCompatWindow(): boolean {
+  return compatMode
+}
 
 function diagPageUrl(): string {
   const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
@@ -60,7 +77,12 @@ function resolveIcon(): string | undefined {
   }
 }
 
-/** 把渲染进程的生命周期完整记进日志 —— 出问题时这是唯一的线索来源 */
+/**
+ * 把渲染进程的生命周期完整记进日志 —— 出问题时这是唯一的线索来源。
+ *
+ * 每条里程碑都带一个 ASCII 标记（bootMark），诊断脚本靠标记做判定，
+ * 因为脚本本身必须是纯 ASCII（见 package-portable.mjs）。
+ */
 function traceWebContents(window: BrowserWindow, preloadPath: string, pagePath: string): void {
   const wc = window.webContents
 
@@ -69,28 +91,41 @@ function traceWebContents(window: BrowserWindow, preloadPath: string, pagePath: 
 
   wc.on('did-start-loading', () => bootLog('渲染进程: 开始加载'))
   wc.on('did-start-navigation', (_e, url) => bootLog(`渲染进程: 开始导航 ${url}`))
-  wc.on('dom-ready', () => bootLog('渲染进程: DOM 就绪'))
+  wc.on('dom-ready', () => {
+    bootMark('RENDERER_DOM_READY', '渲染进程: DOM 就绪')
+  })
   wc.on('did-finish-load', () => {
-    bootLog('渲染进程: 加载完成')
+    bootMark('RENDERER_FINISH_LOAD', '渲染进程: 加载完成')
     flushPending()
   })
   wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
-    bootLog(`✗ 渲染进程加载失败: code=${code} desc=${desc} url=${url} 主框架=${isMainFrame}`)
+    bootMark(
+      'RENDERER_LOAD_FAILED',
+      `✗ 渲染进程加载失败: code=${code} desc=${desc} url=${url} 主框架=${isMainFrame}`
+    )
   })
   wc.on('did-fail-provisional-load', (_e, code, desc, url) => {
-    bootLog(`✗ 渲染进程预加载失败: code=${code} desc=${desc} url=${url}`)
+    bootMark('RENDERER_PROVISIONAL_FAILED', `✗ 渲染进程预加载失败: code=${code} desc=${desc} url=${url}`)
   })
   wc.on('preload-error', (_e, preloadPath2, error) => {
-    bootLog(`✗ preload 执行出错: ${preloadPath2}\n${error?.stack ?? String(error)}`)
+    bootMark(
+      'RENDERER_PRELOAD_ERROR',
+      `✗ preload 执行出错: ${preloadPath2}\n${error?.stack ?? String(error)}`
+    )
   })
   wc.on('render-process-gone', (_e, details) => {
-    bootLog(`✗ 渲染进程退出: ${JSON.stringify(details)}`)
+    bootMark('RENDERER_GONE', `✗ 渲染进程退出: ${JSON.stringify(details)}`)
   })
-  wc.on('unresponsive', () => bootLog('✗ 渲染进程无响应'))
+  wc.on('unresponsive', () => bootMark('RENDERER_UNRESPONSIVE', '✗ 渲染进程无响应'))
 
   // 渲染进程的 console 只有落进启动日志，才可能看到 CSP / CORS / 脚本加载这类错误。
-  // 注意：Electron 37 起这个事件从「位置参数」改成了「单个事件对象」，
-  // 只按旧签名解构会拿到一堆 undefined —— 那等于把唯一的线索吞掉了。
+  //
+  // 关于签名（已对着 node_modules/electron/electron.d.ts 核过）：
+  //   Electron 38 的类型是 on('console-message', (details: Event<WebContentsConsoleMessageEventParams>,
+  //   level, message, line, sourceId) => void)，而 Event<Params> = { preventDefault, defaultPrevented } & Params，
+  //   也就是说**新形态把参数并进了第一个事件对象**，后面那几个位置参数是废弃的兼容副本。
+  //   这里两种都认；万一两种都不像，也**绝不静默**：把参数的形状原样写进日志。
+  //   曾经的问题正是「认不出来就什么都不记」，于是最该有线索的一次白屏里一条控制台日志都没有。
   wc.on('console-message', (...args: unknown[]) => {
     const first: unknown = args[0]
     if (typeof first === 'object' && first !== null && 'message' in first) {
@@ -100,12 +135,54 @@ function traceWebContents(window: BrowserWindow, preloadPath: string, pagePath: 
         lineNumber?: unknown
         sourceId?: unknown
       }
-      bootLog(`[渲染控制台 ${String(e.level)}] ${String(e.message)} (${String(e.sourceId)}:${String(e.lineNumber)})`)
-    } else {
+      bootLog(
+        `[渲染控制台 ${String(e.level)}] ${String(e.message)} (${String(e.sourceId)}:${String(e.lineNumber)})`
+      )
+      return
+    }
+    if (typeof args[2] === 'string') {
       const [, level, message, line, sourceId] = args
       bootLog(`[渲染控制台 ${String(level)}] ${String(message)} (${String(sourceId)}:${String(line)})`)
+      return
     }
+    bootLog(`[渲染控制台 ???] 事件参数形状无法识别，原样记录以免丢线索: ${describeArgs(args)}`)
   })
+}
+
+/** 把一个事件参数列表描述成一行可读文本（截断，避免日志被大对象撑爆） */
+function describeArgs(args: unknown[]): string {
+  const parts: string[] = args.map((value: unknown, index: number) => {
+    const type: string = typeof value
+    if (value === null) {
+      return `${index}:null`
+    }
+    if (type === 'object') {
+      const keys: string = Object.keys(value as object).join(',')
+      let preview: string = ''
+      try {
+        preview = JSON.stringify(value)
+      } catch {
+        preview = '(无法序列化)'
+      }
+      return `${index}:object{${keys}} ${preview.slice(0, 160)}`
+    }
+    return `${index}:${type}=${String(value).slice(0, 80)}`
+  })
+  return `args=${args.length} [${parts.join(' | ')}]`
+}
+
+/**
+ * 渲染进程主动上报「我还活着」（React 已挂载）时调用。
+ * 看门狗此时必须撤销：渲染进程既然已经走到挂载这一步，再自动重启一次已经毫无意义，
+ * 而且会把用户能看到的界面强行换掉。
+ */
+let stallTimer: ReturnType<typeof setTimeout> | null = null
+
+export function markRendererAlive(): void {
+  if (stallTimer !== null) {
+    clearTimeout(stallTimer)
+    stallTimer = null
+  }
 }
 
 /** 待收件的外部文件（页面还没加载完时先攒着） */
@@ -158,7 +235,7 @@ export function createMainWindow(): BrowserWindow {
     autoHideMenuBar: true,
     backgroundColor: '#f5f5f7',
     // 兼容模式下注明，免得用户以为界面卡顿是程序本身的问题（其实是软件渲染）
-    title: COMPAT_MODE ? 'Guncat Work（兼容模式）' : 'Guncat Work',
+    title: compatMode ? 'Guncat Work（兼容模式）' : 'Guncat Work',
     icon: resolveIcon(),
     webPreferences: {
       preload: preloadPath,
@@ -175,24 +252,25 @@ export function createMainWindow(): BrowserWindow {
   // 看门狗：渲染进程若在超时内没有任何「就绪」信号，说明它卡住了。
   // 现象是窗口一直停在加载占位页、且没有任何失败事件 —— 只能靠超时判定。
   let settled = false
-  const timer = setTimeout(() => {
+  const clearWatchdog = (): void => {
+    settled = true
+    if (stallTimer !== null) {
+      clearTimeout(stallTimer)
+      stallTimer = null
+    }
+  }
+  stallTimer = setTimeout(() => {
+    stallTimer = null
     if (settled || window.isDestroyed()) {
       return
     }
-    bootLog(`✗ 渲染进程在 ${watchdogMs / 1000} 秒内没有就绪，判定为卡住`)
+    bootMark('RENDERER_STALLED', `✗ 渲染进程在 ${watchdogMs / 1000} 秒内没有就绪，判定为卡住`)
     stalledHandler({ pagePath, preloadPath })
   }, watchdogMs)
-  const markReady = (): void => {
-    settled = true
-    clearTimeout(timer)
-  }
-  window.webContents.once('dom-ready', markReady)
-  window.webContents.once('did-fail-load', markReady)
-  window.webContents.once('render-process-gone', markReady)
-  window.on('closed', () => {
-    settled = true
-    clearTimeout(timer)
-  })
+  window.webContents.once('dom-ready', clearWatchdog)
+  window.webContents.once('did-fail-load', clearWatchdog)
+  window.webContents.once('render-process-gone', clearWatchdog)
+  window.on('closed', clearWatchdog)
 
   // 外链一律交给系统浏览器，不在应用内开新窗口
   window.webContents.setWindowOpenHandler(({ url }) => {

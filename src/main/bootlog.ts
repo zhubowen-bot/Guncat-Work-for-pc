@@ -65,6 +65,23 @@ export function bootLog(message: string): void {
   }
 }
 
+/**
+ * 里程碑标记：一行日志，前缀一个**纯 ASCII** 的大写标记。
+ *
+ * 为什么要这层标记：诊断脚本（diagnose.ps1）必须是纯 ASCII（见 package-portable.mjs
+ * 里的说明），它没法在文件里写中文去匹配日志。而「渲染进程走到哪一步了」正是排查
+ * 白屏时唯一能靠得住的证据，比如：
+ *   RENDERER_DOM_READY   → DOM 解析完了
+ *   RENDERER_FINISH_LOAD → 页面与子资源都加载完了
+ *   REACT_MOUNTED        → React 真的挂载上去了（渲染进程主动上报）
+ *   FRAME_PAINTED        → 浏览器已产出首帧
+ * 这四步是递进的：加载完成 ≠ React 挂载成功 ≠ 界面真的画出来了。
+ * 三种失败在白屏这件事上长得一模一样，只有靠标记才能区分。
+ */
+export function bootMark(marker: string, message: string): void {
+  bootLog(`[${marker}] ${message}`)
+}
+
 /** 取启动日志末尾若干行 —— 用于把「为什么失败」直接放进错误框，省去用户翻文件 */
 export function bootLogTail(lines: number = 24): string {
   try {

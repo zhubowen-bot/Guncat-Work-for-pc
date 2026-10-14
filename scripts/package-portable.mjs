@@ -18,6 +18,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  buildRunCompatCmd,
+  buildRunAsAdminCmd,
+  buildDiagnosePs1,
+  writeAsciiFile,
+  DIAG_MODES
+} from './launch-scripts.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const appName = 'Guncat Work'
@@ -118,131 +125,52 @@ if (fs.existsSync(exeSource)) {
 
 // ===== 6. 双击即用的辅助入口 =====
 //
-// 注意：.cmd 一律只写 ASCII。
+// 注意：.cmd / .ps1 一律只写 ASCII（生成器里做了字节级校验）。
 // 事故：这些脚本最初用中文提示、以 UTF-8 写出，而 cmd.exe 在中文 Windows 上按 GBK
 // 解析批处理文件 —— 内存里的字节被解成乱码，整行变成无法识别的命令，
 // 批处理的 if/goto 控制流直接被拆坏（实测表现为 "'…' is not recognized"）。
 // chcp 65001 放在文件里也救不了，因为解析从第一行就开始了。
 // 中文说明一律放到 使用说明.txt。
+//
+// 兼容参数由 compat.ts 的 COMPAT_SWITCHES 定义。这里刻意照抄一份而不是从 TS 里引：
+// 打包脚本是 node 直接跑的 .mjs，引 TS 需要额外的编译步骤；两者的同步由
+// startup-check.mjs 的断言保证（它会拿生成出来的脚本文本去比对 COMPAT_SWITCHES）。
+//
+// 只剩 --no-sandbox 一条：14 组对照实验证明只有它能改变结果（见 docs/ROOT-CAUSE-REPORT.md）。
+// 其余开关（--disable-gpu 之类）对这次崩溃毫无帮助，却会把界面降成软件渲染。
+const COMPAT_SWITCHES = ['--no-sandbox']
+
+// 兼容模式启动器：一条命令直接带上那唯一的必要开关（不提权）
+writeAsciiFile(path.join(outDir, 'run-compat.cmd'), buildRunCompatCmd(appName, COMPAT_SWITCHES))
+
+// 自提权启动器：最后的逃生口，不是默认路径（提权的作用至今未获证实，§2.9）
+writeAsciiFile(path.join(outDir, 'run-as-admin.cmd'), buildRunAsAdminCmd(appName, COMPAT_SWITCHES))
 
 /**
- * 兼容模式启动器。
- * 事故：默认启动（渲染进程带沙箱）在这台机器上起不来 —— 主进程能跑，
- * 但渲染进程在 did-start-loading 之后就再无动静，约 10 秒后主进程以
- * STATUS_BREAKPOINT(CHECK 失败) 终止，用户看到白屏或无反应。
- * 因此提供一个把沙箱与 GPU 全部关掉的启动入口。
+ * 诊断脚本：逐级降级 + 「走到了哪一步」的判定，见 launch-scripts.mjs 的说明。
+ * 关键改进除了阶梯本身，还有：
+ *   · 每轮独立 --user-data-dir（否则第一轮留下的单实例锁会让第二轮直接失败）；
+ *   · 读启动日志里的 ASCII 里程碑标记，把三种「白屏」区分开 ——
+ *     渲染进程没起来 / 起来了但 React 没挂载 / 挂载了但画不出像素。
  */
-fs.writeFileSync(
-  path.join(outDir, 'run-compat.cmd'),
-  [
-    '@echo off',
-    'cd /d "%~dp0"',
-    'start "" "Guncat Work.exe" --no-sandbox --disable-gpu --disable-software-rasterizer',
-    'exit /b 0'
-  ].join('\r\n') + '\r\n',
-  'latin1'
+writeAsciiFile(
+  path.join(outDir, 'diagnose.ps1'),
+  buildDiagnosePs1({ appName, modes: DIAG_MODES })
 )
 
-/**
- * 诊断脚本用 PowerShell 而不是批处理：
- *   批处理没有超时、拿不到进程存活状态、也不好逐轮隔离环境。
- * 这里的关键改进是**每轮给一个独立的 --user-data-dir**：
- *   上一版因为共用同一份用户数据，第一轮留下的单实例锁直接让第二轮启动失败
- *   （Lock file can not be created），于是最该验证的 --no-sandbox 那轮根本没跑成。
- *   独立目录同时也排除了「用户数据损坏导致 Chromium 起不来」这一可能。
- */
-const diagPs1 = [
-  "# Guncat Work diagnostics. ASCII only (see note in package-portable.mjs).",
-  "$ErrorActionPreference = 'Continue'",
-  "Set-Location -LiteralPath $PSScriptRoot",
-  "$exe = Join-Path $PSScriptRoot 'Guncat Work.exe'",
-  "$log = Join-Path $PSScriptRoot 'diag-log.txt'",
-  "$bootLog = Join-Path $env:APPDATA 'Guncat Work\\logs\\startup.log'",
-  "Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue",
-  "",
-  "function Write-Log($text) { Add-Content -LiteralPath $log -Value $text -Encoding UTF8 }",
-  "",
-  "$modes = @(",
-  "  @{ Name = 'normal';               Args = @() },",
-  "  @{ Name = 'no-sandbox';           Args = @('--no-sandbox', '--disable-gpu') },",
-  "  @{ Name = 'safe-mode';            Args = @('--guncat-safe-mode') },",
-  "  @{ Name = 'diag-page';            Args = @('--guncat-diag', '--no-sandbox', '--disable-gpu') }",
-  ")",
-  "",
-  "Write-Log '===== Guncat Work diagnostics ====='",
-  "Write-Log ('time: ' + (Get-Date).ToString('s'))",
-  "Write-Log ('os: ' + [System.Environment]::OSVersion.VersionString)",
-  "Write-Log ('user: ' + $env:USERNAME)",
-  "Write-Log 'Each mode runs with its own --user-data-dir to avoid lock conflicts.'",
-  "",
-  "$index = 0",
-  "foreach ($mode in $modes) {",
-  "  $index++",
-  "  $udd = Join-Path $PSScriptRoot ('.udd-' + $index)",
-  "  Remove-Item -LiteralPath $udd -Recurse -Force -ErrorAction SilentlyContinue",
-  "",
-  "  Get-Process -Name 'Guncat Work' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue",
-  "  Start-Sleep -Milliseconds 800",
-  "",
-  "  Write-Log ''",
-  "  Write-Log ('========== [' + $index + '/4] ' + $mode.Name + ' ==========')",
-  "  Write-Host ('[' + $index + '/4] ' + $mode.Name)",
-  "",
-  "  $argList = @($mode.Args) + @(('--user-data-dir=' + $udd), '--enable-logging')",
-  "  $outFile = Join-Path $PSScriptRoot ('stdout-' + $index + '.txt')",
-  "  $errFile = Join-Path $PSScriptRoot ('stderr-' + $index + '.txt')",
-  "",
-  "  $proc = Start-Process -FilePath $exe -ArgumentList $argList -PassThru -NoNewWindow -RedirectStandardOutput $outFile -RedirectStandardError $errFile",
-  "",
-  "  # wait up to 25s: if it is still alive a window is probably up;",
-  "  # otherwise treat it as a stall and end it.",
-  "  $waited = 0",
-  "  while (-not $proc.HasExited -and $waited -lt 50) { Start-Sleep -Milliseconds 500; $waited++ }",
-  "",
-  "  if ($proc.HasExited) {",
-  "    $code = $proc.ExitCode",
-  "    Write-Log ('exit code: ' + $code)",
-  "    if ($code -eq -2147483645) { Write-Log 'NOTE: STATUS_BREAKPOINT - Chromium hit a fatal check' }",
-  "  } else {",
-  "    Write-Log 'STILL RUNNING after 25s - a window is probably up. Closing it.'",
-  "    Write-Log 'RESULT: this mode survives; the app is usable with these flags.'",
-  "    $proc | Stop-Process -Force -ErrorAction SilentlyContinue",
-  "    Start-Sleep -Milliseconds 500",
-  "  }",
-  "",
-  "  if (Test-Path -LiteralPath $bootLog) {",
-  "    Copy-Item -LiteralPath $bootLog -Destination (Join-Path $PSScriptRoot ('startup-' + $index + '.log')) -Force -ErrorAction SilentlyContinue",
-  "    $tail = Get-Content -LiteralPath $bootLog -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -Last 6",
-  "    Write-Log 'boot log tail:'",
-  "    foreach ($line in $tail) { Write-Log ('  ' + $line) }",
-  "  }",
-  "}",
-  "",
-  "Write-Log ''",
-  "Write-Log '===== done ====='",
-  "Write-Host ''",
-  "Write-Host 'Done. Send these files:'",
-  "Write-Host '  diag-log.txt, startup-1..4.log, stderr-1..4.txt'",
-  "Write-Host ('  and ' + $bootLog)",
-  ""
-].join('\r\n')
-
-fs.writeFileSync(path.join(outDir, 'diagnose.ps1'), diagPs1, 'latin1')
-
-fs.writeFileSync(
+writeAsciiFile(
   path.join(outDir, 'diagnose.cmd'),
   [
     '@echo off',
     'cd /d "%~dp0"',
     'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0diagnose.ps1"',
     'echo.',
-    'pause'
-  ].join('\r\n') + '\r\n',
-  'latin1'
+    'pause',
+    ''
+  ].join('\r\n')
 )
 
-step('写入 run-compat.cmd 与 diagnose.cmd / diagnose.ps1（纯 ASCII）')
-
+step('写入 run-compat.cmd / run-as-admin.cmd / diagnose.cmd / diagnose.ps1（纯 ASCII，字节级校验）')
 // ===== 7. 简短说明（UTF-8 带 BOM，记事本直接可读） =====
 fs.writeFileSync(
   path.join(outDir, '使用说明.txt'),
@@ -261,6 +189,8 @@ fs.writeFileSync(
       '数据位置：',
       '  对话历史、沙箱工作区与配置都保存在 %APPDATA%\\Guncat Work 下，',
       '  不会写入本目录，删除本目录不影响已有数据。',
+      '  应用只用这一份数据目录（早期版本降级时会切到 -compat 目录，已取消：',
+      '  崩溃与数据目录无关，两套目录只会让用户以为数据丢了）。',
       '',
       '三种形态（左侧栏顶部可切换）：',
       '  ✦ 交互模式  一句话直出可操作界面',
@@ -272,18 +202,30 @@ fs.writeFileSync(
       '────────────────────────────────────────',
       '如果双击后窗口没有出现（白屏 / 闪退）：',
       '',
-      '  正常情况下不需要你做任何事 —— 应用会自己降级：',
-      '  首次启动若渲染进程 6 秒内没起来，它会自动带上兼容参数',
-      '  （--no-sandbox --disable-gpu --disable-software-rasterizer）重启，',
-      '  并换用一个干净的用户数据目录；之后每次启动直接走这条路。',
-      '  兼容模式下窗口标题会显示「Guncat Work（兼容模式）」。',
+      '  正常情况下什么都不用做。这个应用现在**默认**就把 --no-sandbox 带在命令行上：',
+      '  双击启动时它会自己带参数重启一次（所以你可能会看到进程「闪一下又起来」，',
+      '  这是预期行为，不是崩溃）。原因是这台机器上沙箱开启时 Chromium 建不出 GPU 子进程，',
+      '  fallback 用尽后主进程会直接自杀（退出码 -2147483645），而崩溃发生在 Chromium 早期，',
+      '  应用自己的看门狗根本来不及救 —— 只能一启动就把参数带上。',
       '',
-      '  需要手动介入时：',
-      '  · run-compat.cmd —— 直接以兼容参数启动（等同于自动降级后的状态）。',
-      '  · diagnose.cmd   —— 依次尝试四种启动方式，每轮用独立的用户数据目录，',
-      '    结果写进 diag-log.txt，各轮日志另存为 startup-1..4.log。',
-      '    第 4 轮是关键分水岭：极简诊断页能显示 = 渲染进程没问题、是界面加载的问题；',
-      '    连它也白屏 = 渲染进程或 GPU 层的问题。',
+      '  需要手动介入时（按优先级）：',
+      '  · run-compat.cmd —— 不提权，直接以 --no-sandbox 启动。先试这个。',
+      '  · run-as-admin.cmd —— 以管理员身份启动（会弹 UAC 提权确认）。',
+      '    最后的逃生口：调查显示「必须提权」是误判（那个入口同时做了提权和加参数，',
+      '    真正起作用的只是加参数），所以只在 --no-sandbox 也不管用时才需要试它。',
+      '  · diagnose.cmd   —— 诊断，一次跑 6 档（每轮独立用户数据目录），并逐档给出结论。',
+      '    第 1 档 --no-sandbox（现在的默认方式）、第 2 档再加 --disable-gpu、',
+      '    第 3 档不加参数、第 4 档**故意保留沙箱**用来复现原始崩溃、',
+      '    第 5 档是会造成白屏的老三参数组合（对照）、第 6 档是极简诊断页。',
+      '    结果写进 diag-log.txt，各轮日志另存为 startup-N.log / chromium-N.log。',
+      '    每轮的 VERDICT 会明确区分四种情况：',
+      '      · 没到 dom-ready               → 页面根本没加载（看 chromium-N.log 里的 GPU 报错）',
+      '      · 到了 dom-ready 但没挂载       → 界面产物没跑起来（脚本/CSP/React 报错）',
+      '      · 挂载了但没产出帧              → 合成器画不出像素（DOM 正常，窗口却空白）',
+      '      · 加载 + 挂载 + 产帧全都有       → 这条链路本身没问题',
+      '  · 崩溃转储：如果启动即退，Windows 会在 %LOCALAPPDATA%\\CrashDumps 留下 .dmp；',
+      '    各轮的 Chromium 日志由应用自己写在 <用户数据目录>\\logs\\chromium.log，',
+      '    诊断脚本会逐轮复制成 chromium-N.log。',
       '────────────────────────────────────────'
     ].join('\r\n'),
   'utf8'

@@ -12,11 +12,13 @@ import type {
   ConversationSummaryDto,
   GuncatEvent,
   MultimodalConfigDto,
+  RendererStage,
   WorkRunRequest
 } from '../ipc/contract'
 import { SessionManager } from './session/SessionManager'
 import { transcribeAudio } from './asr'
-import { getMainWindow } from './window'
+import { getMainWindow, markRendererAlive } from './window'
+import { bootLog, bootMark } from './bootlog'
 import { getDataRoot, resourcesDir, makeTempDir } from '@core/platform/appPaths'
 
 function send(event: GuncatEvent): void {
@@ -196,6 +198,45 @@ export function registerIpcHandlers(session: SessionManager): void {
       electron: process.versions.electron
     }
   })
+
+  // ===== 启动诊断：渲染进程自报走到了哪一步 =====
+  //
+  // 为什么非要有这条：主进程能自己观察到的最后一站是「页面加载完成」。
+  // 页面加载完成 ≠ React 挂载成功 ≠ 界面真的画出来了 ——
+  // 用户机器上现在就卡在这三者之间：dom-ready 与 did-finish-load 都触发了，
+  // 窗口里却什么都没有，而主进程这边一条报错都没有。
+  // 只有渲染进程主动上报，日志才能把这三态区分开。
+  ipcMain.handle(
+    INVOKE.appRendererStage,
+    async (_e, stage: RendererStage, detail?: string): Promise<void> => {
+      if (stage === 'mounted') {
+        markReported('mounted', 'REACT_MOUNTED', '界面已渲染（React 已挂载）')
+        markRendererAlive()
+        return
+      }
+      if (stage === 'painted') {
+        markReported('painted', 'FRAME_PAINTED', '首帧已产出（浏览器已提交一帧）')
+        markRendererAlive()
+        return
+      }
+      if (stage === 'error') {
+        markReported('error', 'REACT_ERROR', `✗ React 渲染出错: ${String(detail ?? '').slice(0, 2000)}`)
+        return
+      }
+      bootLog(`无法识别的渲染进程阶段上报: ${String(stage)}`)
+    }
+  )
+}
+
+/** 同一步骤只记一次（React 严格模式下 effect 会跑两遍，重复会把日志刷满） */
+const reportedStages = new Set<string>()
+
+function markReported(key: string, marker: string, message: string): void {
+  if (reportedStages.has(key)) {
+    return
+  }
+  reportedStages.add(key)
+  bootMark(marker, message)
 }
 
 /** 供启动阶段使用的临时目录（保留导出，便于后续调试） */

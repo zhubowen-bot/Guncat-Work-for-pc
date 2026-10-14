@@ -29,6 +29,10 @@ workspaces/
 .tmp/
 .npm-cache/
 
+# Python 编译产物（tools/ 下的崩溃转储分析脚本会生成）
+__pycache__/
+*.pyc
+
 # editor / os
 .vscode/*
 !.vscode/extensions.json

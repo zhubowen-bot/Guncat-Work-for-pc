@@ -11,6 +11,7 @@ import type {
   ConversationSummaryDto,
   GuncatEvent,
   MultimodalConfigDto,
+  RendererStage,
   WorkspaceEntryDto,
   WorkRunRequest
 } from '@ipc/contract'
@@ -54,6 +55,8 @@ export interface GuncatApi {
   }
   app: {
     info(): Promise<AppInfoDto>
+    /** 启动诊断：上报「React 已挂载 / 已产出首帧 / 渲染出错」 */
+    reportStage(stage: RendererStage, detail?: string): Promise<void>
   }
   intake: {
     importPaths(
