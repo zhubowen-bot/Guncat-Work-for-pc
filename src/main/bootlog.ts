@@ -12,7 +12,7 @@ import path from 'node:path'
 import os from 'node:os'
 
 let logPath = ''
-let stream: fs.WriteStream | null = null
+let opened = false
 
 function resolveLogPath(): string {
   // 测试可以指定目录，避免覆盖用户真实的启动日志（那正是排查问题时要看的证据）
@@ -34,17 +34,24 @@ export function bootLogPath(): string {
   return logPath
 }
 
-/** 写入一行启动日志。任何失败都必须被吞掉 —— 诊断不该反过来弄崩应用。 */
+/**
+ * 写入一行启动日志。任何失败都必须被吞掉 —— 诊断不该反过来弄崩应用。
+ *
+ * 用同步 append 而不是 WriteStream：**启动日志最需要它的时刻，恰恰是进程即将死掉的时候**，
+ * 而流是有缓冲的，进程猝死会把还没刷盘的日志一起带走 —— 那正好是我们要的那几行。
+ * 启动期日志量很小，同步写的代价可以忽略。
+ */
 export function bootLog(message: string): void {
   const line = `[${new Date().toISOString()}] ${message}\n`
   try {
-    if (stream === null) {
-      const file = bootLogPath()
+    const file = bootLogPath()
+    if (!opened) {
       fs.mkdirSync(path.dirname(file), { recursive: true })
       // 每次启动重写，避免日志无限增长
-      stream = fs.createWriteStream(file, { flags: 'w' })
+      fs.writeFileSync(file, '')
+      opened = true
     }
-    stream.write(line)
+    fs.appendFileSync(file, line)
   } catch {
     // 忽略
   }
@@ -55,6 +62,16 @@ export function bootLog(message: string): void {
     } catch {
       // 忽略
     }
+  }
+}
+
+/** 取启动日志末尾若干行 —— 用于把「为什么失败」直接放进错误框，省去用户翻文件 */
+export function bootLogTail(lines: number = 24): string {
+  try {
+    const all: string[] = fs.readFileSync(bootLogPath(), 'utf8').split('\n').filter((l) => l !== '')
+    return all.slice(-lines).join('\n')
+  } catch {
+    return '(无法读取启动日志)'
   }
 }
 

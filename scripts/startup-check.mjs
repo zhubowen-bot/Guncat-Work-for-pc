@@ -129,6 +129,13 @@ check(
     (e) => find('webContents.on').some((c) => c.args[0] === e)
   )
 )
+// 真实事故：渲染进程 did-start-loading 之后毫无动静，页面永远停在占位页，
+// 且没有任何失败事件可依赖 —— 只能用超时判定。这条断言保证看门狗还在。
+check(
+  '装了渲染进程就绪看门狗（应对「不报错也不动」的卡死）',
+  find('webContents.once').some((c) => c.args[0] === 'dom-ready'),
+  find('webContents.once').map((c) => c.args[0]).join(', ') || '(未注册)'
+)
 
 // --- IPC ---
 const channels = stub.__channels()

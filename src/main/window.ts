@@ -14,7 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resource } from '@core/platform/appPaths'
-import { bootLog } from './bootlog'
+import { bootLog, bootLogPath } from './bootlog'
 
 const __dirname: string = path.dirname(fileURLToPath(import.meta.url))
 
@@ -46,6 +46,7 @@ function traceWebContents(window: BrowserWindow, preloadPath: string, pagePath: 
   bootLog(`页面路径: ${pagePath}（存在=${fs.existsSync(pagePath)}）`)
 
   wc.on('did-start-loading', () => bootLog('渲染进程: 开始加载'))
+  wc.on('did-start-navigation', (_e, url) => bootLog(`渲染进程: 开始导航 ${url}`))
   wc.on('dom-ready', () => bootLog('渲染进程: DOM 就绪'))
   wc.on('did-finish-load', () => {
     bootLog('渲染进程: 加载完成')
@@ -64,9 +65,24 @@ function traceWebContents(window: BrowserWindow, preloadPath: string, pagePath: 
     bootLog(`✗ 渲染进程退出: ${JSON.stringify(details)}`)
   })
   wc.on('unresponsive', () => bootLog('✗ 渲染进程无响应'))
-  wc.on('console-message', (_e, level, message, line, sourceId) => {
-    // 渲染进程的 console 只有落进启动日志，才可能看到 CSP / 脚本加载这类错误
-    bootLog(`[渲染控制台 ${level}] ${message} (${sourceId}:${line})`)
+
+  // 渲染进程的 console 只有落进启动日志，才可能看到 CSP / CORS / 脚本加载这类错误。
+  // 注意：Electron 37 起这个事件从「位置参数」改成了「单个事件对象」，
+  // 只按旧签名解构会拿到一堆 undefined —— 那等于把唯一的线索吞掉了。
+  wc.on('console-message', (...args: unknown[]) => {
+    const first: unknown = args[0]
+    if (typeof first === 'object' && first !== null && 'message' in first) {
+      const e = first as {
+        level?: unknown
+        message?: unknown
+        lineNumber?: unknown
+        sourceId?: unknown
+      }
+      bootLog(`[渲染控制台 ${String(e.level)}] ${String(e.message)} (${String(e.sourceId)}:${String(e.lineNumber)})`)
+    } else {
+      const [, level, message, line, sourceId] = args
+      bootLog(`[渲染控制台 ${String(level)}] ${String(message)} (${String(sourceId)}:${String(line)})`)
+    }
   })
 }
 
@@ -83,6 +99,20 @@ function flushPending(): void {
   } catch {
     // 忽略
   }
+}
+
+/** 渲染进程就绪的看门狗：超时未就绪则判定卡住，交给上层处理（通常是安全模式重启） */
+let stalledHandler: (info: { pagePath: string; preloadPath: string }) => void = () => {}
+let watchdogMs = 10000
+
+export function setRendererStalledHandler(
+  fn: (info: { pagePath: string; preloadPath: string }) => void
+): void {
+  stalledHandler = fn
+}
+
+export function setWatchdogMs(ms: number): void {
+  watchdogMs = ms
 }
 
 export function createMainWindow(): BrowserWindow {
@@ -112,6 +142,28 @@ export function createMainWindow(): BrowserWindow {
 
   traceWebContents(window, preloadPath, pagePath)
 
+  // 看门狗：渲染进程若在超时内没有任何「就绪」信号，说明它卡住了。
+  // 现象是窗口一直停在加载占位页、且没有任何失败事件 —— 只能靠超时判定。
+  let settled = false
+  const timer = setTimeout(() => {
+    if (settled || window.isDestroyed()) {
+      return
+    }
+    bootLog(`✗ 渲染进程在 ${watchdogMs / 1000} 秒内没有就绪，判定为卡住`)
+    stalledHandler({ pagePath, preloadPath })
+  }, watchdogMs)
+  const markReady = (): void => {
+    settled = true
+    clearTimeout(timer)
+  }
+  window.webContents.once('dom-ready', markReady)
+  window.webContents.once('did-fail-load', markReady)
+  window.webContents.once('render-process-gone', markReady)
+  window.on('closed', () => {
+    settled = true
+    clearTimeout(timer)
+  })
+
   // 外链一律交给系统浏览器，不在应用内开新窗口
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
@@ -122,10 +174,14 @@ export function createMainWindow(): BrowserWindow {
 
   if (process.env.ELECTRON_RENDERER_URL !== undefined) {
     bootLog(`加载开发态页面: ${process.env.ELECTRON_RENDERER_URL}`)
-    void window.loadURL(process.env.ELECTRON_RENDERER_URL)
+    window.loadURL(process.env.ELECTRON_RENDERER_URL).catch((e: unknown) => {
+      onLoadFailed(window, process.env.ELECTRON_RENDERER_URL ?? '', e)
+    })
   } else {
     bootLog('加载打包态页面（loadFile）')
-    void window.loadFile(pagePath)
+    window.loadFile(pagePath).catch((e: unknown) => {
+      onLoadFailed(window, pagePath, e)
+    })
   }
 
   window.on('closed', () => {
@@ -134,4 +190,58 @@ export function createMainWindow(): BrowserWindow {
 
   mainWindow = window
   return window
+}
+
+/**
+ * 页面加载失败时的兜底。
+ *
+ * 两个都必须做，缺一个都会让用户面对「一片空白 + 毫无线索」：
+ *   1) 把失败写进启动日志（含真实错误）；
+ *   2) 在窗口里**显示**失败原因 —— 空白窗口比错误信息更难排查。
+ *
+ * 另外：loadFile 返回的 Promise 必须显式 catch。只写 `void window.loadFile(...)`
+ * 会让失败变成 unhandledRejection，被兜底处理器抓成「未处理的 Promise 拒绝」，
+ * 反而掩盖了真正的原因。
+ */
+function onLoadFailed(window: BrowserWindow, target: string, error: unknown): void {
+  const message: string = error instanceof Error ? error.message : String(error)
+  bootLog(`✗ 页面加载失败: ${target}\n${message}`)
+  showLoadError(window, target, message)
+}
+
+/** 在窗口里直接显示失败原因 —— 空白窗口比错误信息更难排查 */
+export function showLoadError(window: BrowserWindow, target: string, message: string): void {
+  if (window.isDestroyed()) {
+    return
+  }
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>Guncat Work</title></head>
+<body style="margin:0;font-family:'Segoe UI','Microsoft YaHei',sans-serif;background:#f5f5f7;color:#1c1c1e">
+<div style="max-width:640px;margin:80px auto;padding:0 24px">
+  <h2 style="font-size:18px;margin:0 0 12px">界面加载失败</h2>
+  <p style="color:#6b6b73;font-size:13px;line-height:1.7;margin:0 0 16px">
+    应用本身已启动，但界面没能加载。把下面这段信息发出来即可定位。
+  </p>
+  <div style="background:#fff;border:1px solid #e0e0e4;border-radius:8px;padding:14px;
+              font-family:Consolas,monospace;font-size:12px;line-height:1.6;word-break:break-all">
+    <div style="color:#6b6b73">目标文件</div>
+    <div style="margin-bottom:10px">${escapeHtml(target)}</div>
+    <div style="color:#6b6b73">错误</div>
+    <div style="color:#c0392b">${escapeHtml(message)}</div>
+  </div>
+  <p style="color:#6b6b73;font-size:12px;margin-top:16px">
+    完整启动日志：${escapeHtml(bootLogPath())}
+  </p>
+</div></body></html>`
+  window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => {
+    // 连错误页都加载不了就只能空着了，日志里已经有记录
+  })
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }

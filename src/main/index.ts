@@ -11,15 +11,37 @@ import { registerElectronPicker } from './picker'
 import { registerIpcHandlers } from './ipc'
 import { collectFileArgs } from './intake'
 import { SessionManager } from './session/SessionManager'
-import { createMainWindow, getMainWindow, setPendingFlush } from './window'
+import { createMainWindow, getMainWindow, setPendingFlush, setRendererStalledHandler, showLoadError } from './window'
 import { resolveAppPaths } from './paths'
-import { bootLog, bootLogPath, bootFail, installCrashHandlers } from './bootlog'
+import { bootLog, bootLogPath, bootLogTail, bootFail, installCrashHandlers } from './bootlog'
 import type { GuncatEvent } from '../ipc/contract'
+
+/**
+ * 安全模式。
+ *
+ * 真实事故：应用能启动、窗口能显示，但渲染进程在 did-start-loading 之后就再没有任何事件，
+ * 页面永远停在加载占位页。这种「不报错、不崩溃、就是不动」的形态，在 Windows 上通常是
+ * Chromium 的 GPU 进程或沙箱初始化卡住（这台机器的 Chromium 本身就不正常，
+ * 主进程连 --version 都返回 STATUS_BREAKPOINT）。
+ *
+ * 与其让用户去琢磨加什么启动参数，不如让它自愈：
+ * 正常启动若在超时内没就绪，就自动带上安全模式参数重启一次。
+ */
+const SAFE_MODE_FLAG = '--guncat-safe-mode'
+const safeMode: boolean = process.argv.includes(SAFE_MODE_FLAG)
+
+if (safeMode) {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('no-sandbox')
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-software-rasterizer')
+}
 
 bootLog('=== Guncat Work 启动 ===')
 bootLog(`argv: ${process.argv.join(' ')}`)
 bootLog(`electron=${process.versions.electron} node=${process.versions.node} chrome=${process.versions.chrome}`)
 bootLog(`平台=${process.platform} 打包态=${app.isPackaged}`)
+bootLog(`安全模式=${safeMode}`)
 bootLog(`日志文件: ${bootLogPath()}`)
 
 /** 待收件的外部文件（窗口还没就绪时先攒着，页面加载完再推） */
@@ -115,6 +137,30 @@ if (!app.requestSingleInstanceLock()) {
         flushPendingIntake()
       })
 
+      // 渲染进程卡住时的自愈：安全模式已试过就如实报错，否则自动用安全模式重启一次
+      setRendererStalledHandler(({ pagePath }: { pagePath: string }) => {
+        const window: BrowserWindow | null = getMainWindow()
+        if (safeMode) {
+          bootLog('安全模式下渲染进程仍未就绪，不再重试')
+          if (window !== null) {
+            showLoadError(
+              window,
+              pagePath,
+              '渲染进程在安全模式下仍未能就绪。请把启动日志发出来：' + bootLogPath()
+            )
+          }
+          return
+        }
+        bootLog('→ 自动以安全模式重启（关闭硬件加速、禁用 GPU 与沙箱）')
+        // 保留原有参数（开发态 argv[1] 是应用目录，不能丢），只去掉重复的安全模式标记
+        const args: string[] = process.argv
+          .slice(1)
+          .filter((a: string) => a !== SAFE_MODE_FLAG)
+          .concat([SAFE_MODE_FLAG])
+        app.relaunch({ args })
+        app.exit(0)
+      })
+
       const window: BrowserWindow = createMainWindow()
       bootLog('主窗口已创建（立刻可见，不依赖渲染进程）')
 
@@ -139,11 +185,16 @@ if (!app.requestSingleInstanceLock()) {
     })
     .catch((e: unknown) => {
       bootFail('whenReady', e)
+      const detail: string = e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e)
+      // 把日志尾部直接放进错误框：用户不必去翻文件，一眼就能看到卡在哪一步
       dialog.showErrorBox(
         'Guncat Work 启动失败',
-        `${String(e)}\n\n详细信息见：\n${bootLogPath()}`
+        `错误：${detail}\n\n最近启动日志：\n${bootLogTail(16)}\n\n完整日志：${bootLogPath()}`
       )
-      app.quit()
+      // 窗口已经建出来就留着（至少能看到界面或错误页），别把能用的部分一起关掉
+      if (BrowserWindow.getAllWindows().length === 0) {
+        app.quit()
+      }
     })
 
   app.on('window-all-closed', () => {

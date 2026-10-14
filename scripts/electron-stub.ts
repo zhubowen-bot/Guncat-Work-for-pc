@@ -64,6 +64,12 @@ class FakeWebContents {
     return this
   }
 
+  once(event: string, cb: (...a: unknown[]) => void): this {
+    this.listeners.set(event, [cb])
+    calls.push({ fn: 'webContents.once', args: [event] })
+    return this
+  }
+
   /** 测试用：模拟页面加载完成 */
   emit(event: string): void {
     for (const cb of this.listeners.get(event) ?? []) {
