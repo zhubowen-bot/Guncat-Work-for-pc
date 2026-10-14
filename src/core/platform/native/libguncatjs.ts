@@ -18,6 +18,12 @@ export interface JsRunOptions {
   inputs: Record<string, string>
   /** 保留字段（鸿蒙侧用于定位 native 资源脚本） */
   resourceName?: string
+  /**
+   * 执行上限（毫秒）。桌面端把它直接交给 vm 的 timeout，
+   * 于是死循环会在**调用方给定的预算内**被引擎中断，
+   * 而不是像上游那样「放弃等待但后台继续跑」。
+   */
+  timeoutMs?: number
   heapMb?: number
   stdoutLimitKb?: number
   outputFileLimitKb?: number
@@ -192,8 +198,8 @@ export async function runJs(code: string, options: JsRunOptions): Promise<JsRunR
     codeGeneration: { strings: true, wasm: false }
   })
 
-  // 默认超时由调用方在 awaitWithTimeout 里再兜一层，这里给 vm 自己的硬中断留足余量
-  const vmTimeoutMs: number = 30_000
+  // 用调用方给的预算做硬中断；未提供时兜底 10 秒（与上游默认执行上限一致）
+  const vmTimeoutMs: number = Math.max(1000, options.timeoutMs ?? 10_000)
 
   let ok: boolean = true
   let error: string = ''
@@ -215,8 +221,8 @@ export async function runJs(code: string, options: JsRunOptions): Promise<JsRunR
     ok = false
     const err: Error = e as Error
     error = err?.message !== undefined && err.message !== '' ? err.message : String(e)
-    if (err?.name === 'Error' && error === 'Script execution timed out after 30000ms') {
-      error = '执行超时：脚本在 30 秒内没有结束，已被引擎中断（请检查死循环）'
+    if (error.includes('timed out')) {
+      error = `执行超时：脚本在 ${vmTimeoutMs}ms 内没有结束，已被引擎中断（请检查死循环）`
     }
   }
 

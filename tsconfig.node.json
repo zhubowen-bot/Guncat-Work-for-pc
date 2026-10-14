@@ -23,6 +23,7 @@
     "paths": {
       "@core/*": ["src/core/*"],
       "@main/*": ["src/main/*"],
+      "@ipc/*": ["src/ipc/*"],
       "@kit.ArkTS": ["src/core/platform/kit/ArkTS.ts"],
       "@kit.CoreFileKit": ["src/core/platform/kit/CoreFileKit.ts"],
       "@kit.NetworkKit": ["src/core/platform/kit/NetworkKit.ts"],
@@ -40,6 +41,7 @@
     "src/core/**/*.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
+    "src/ipc/**/*.ts",
     "electron.vite.config.ts"
   ]
 }

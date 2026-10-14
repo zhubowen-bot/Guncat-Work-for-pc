@@ -66,6 +66,9 @@ importers:
       electron-vite:
         specifier: ^4.0.1
         version: 4.0.1(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0))
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -3478,7 +3481,7 @@ snapshots:
 
   '@types/minimatch@6.0.0':
     dependencies:
-      minimatch: 3.1.5
+      minimatch: 10.2.6
     optional: true
 
   '@types/ms@2.1.0': {}
@@ -5171,11 +5174,11 @@ snapshots:
 
   node-abi@4.37.0:
     dependencies:
-      semver: 7.7.4
+      semver: 7.8.5
 
   node-api-version@0.2.1:
     dependencies:
-      semver: 7.7.4
+      semver: 7.8.5
 
   node-gyp@12.4.0:
     dependencies:
@@ -5184,7 +5187,7 @@ snapshots:
       graceful-fs: 4.2.11
       nopt: 9.0.0
       proc-log: 6.0.0
-      semver: 7.7.4
+      semver: 7.8.5
       tar: 7.5.22
       tinyglobby: 0.2.17
       undici: 6.29.0

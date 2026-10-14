@@ -23,7 +23,8 @@ const NATIVE_ALIASES: Record<string, string> = {
 }
 
 const SHARED_ALIASES: Record<string, string> = {
-  '@core': resolve('src/core')
+  '@core': resolve('src/core'),
+  '@ipc': resolve('src/ipc')
 }
 
 export default defineConfig({
@@ -45,6 +46,9 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
+    resolve: {
+      alias: { ...SHARED_ALIASES }
+    },
     build: {
       rollupOptions: {
         input: { index: resolve('src/preload/index.ts') }

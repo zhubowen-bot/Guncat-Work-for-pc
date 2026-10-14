@@ -85,7 +85,7 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 
 ---
 
-## 4. 桌面端相对上游的两处**能力增强**
+## 4. 桌面端相对上游的**能力增强**
 
 ### 4.1 `run_js`：死循环可以被真正中断
 
@@ -95,14 +95,18 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 
 于是上游只能「超时放弃等待」，并累计 `abandoned` 计数、两次后停用本会话的 `run_js`。
 
-电脑版改用 `node:vm` 的 `runInContext(code, ctx, { timeout })`，**引擎会真正中断**执行。
-因此：
+电脑版改用 `node:vm` 的 `runInContext(code, ctx, { timeout })`，**引擎会真正中断**执行，
+并且把调用方给出的 `timeout_ms` 直接作为 vm 的中断预算
+（`JsCodeService` 里新增一行 `timeoutMs: timeoutMs` 透传）。因此：
 
-- `JsCodeService` 里那套 `abandoned` 计数在桌面端**永不触发**（代码保留以兼容上游）；
+- 死循环会在**调用方预算内**被终止，而不是「放弃等待但后台继续烧 CPU」；
+- `abandoned` 计数在桌面端**永不触发**（代码保留以兼容上游）；
 - 脚本的「最后一条表达式的值即返回值」语义由 `vm` 的完成值天然满足，与上游契约一致。
 
 沙箱边界与上游完全一致：无网络、无文件系统、无 `require`/`import`；
 文件只能通过 `inputs` / `read()` 进、`write()` 出。
+
+> 冒烟脚本里有一条针对性的回归：`while(true){}` 必须在 10 秒左右被中断并返回超时错误。
 
 ### 4.2 rawfile 访问带目录穿越防护
 
@@ -118,12 +122,36 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 | 文件 | 补丁 | 原因 |
 | --- | --- | --- |
 | `core/common/Utils.ts` | 删除 `@kit.ArkTS` 的 `util` import，改用 Web 标准 `TextDecoder` | 该文件同时被渲染进程使用，必须保持平台无关 |
+| `core/model/Message.ts` | 删除类上的 `@Observed` 装饰器 | `@Observed` 是 ArkUI 的追踪装饰器；编译产物会引用这个全局符号，桌面端不存在它（**不删会在运行时直接崩**）。桌面端状态刷新由渲染进程 store 负责 |
 | `core/common/ToolExecutionGuard.ts` | `timer`/`poller` 类型 `number` → `ReturnType<typeof setTimeout/Interval> \| null`，哨兵 `-1` → `null` | Node 的定时器返回 `Timeout` 对象而非 `number` |
 | `core/service/SubagentService.ts` | 同上（`abortPoller`，2 处哨兵比较） | 同上 |
-| `core/service/JsCodeService.ts` | `timer` 类型同上 | 同上 |
+| `core/service/JsCodeService.ts` | ① `timer` 类型同上；② `JsRunOptions` 里新增 `timeoutMs` 透传 | ①同上；②让 vm 按调用方预算硬中断（见 4.1） |
 | `core/service/FileUploadService.ts` | `stringToBuffer()` 返回值加 `as ArrayBuffer` | TS 的 `Uint8Array.buffer` 类型是 `ArrayBufferLike`（含 `SharedArrayBuffer`） |
 
 > 除上表外，`src/core/` 下**没有**对上游逻辑做过任何语义修改。
+
+---
+
+## 5.1 平台层踩到的两个真坑（值得记下来）
+
+### Windows 上不能把鸿蒙 OpenMode 的数值直接透传给 `fs.openSync`
+
+最初的做法是「鸿蒙 OpenMode 取值与 POSIX 常量一致，所以数值直接透传」。
+这在 Linux/macOS 成立，在 **Windows 上会直接 `EINVAL`**：
+Node 在 Windows 把数值标志交给 CRT 的 `_open`，而 CRT 的 `_O_CREAT`/`_O_TRUNC`
+取值与 POSIX 的 `O_CREAT`/`O_TRUNC` **并不相同**（`0x0100` vs `0o100`）。
+
+现在 `CoreFileKit.toNodeFlags()` 统一把位组合翻译成 Node 的字符串标志
+（`r` / `r+` / `w` / `w+` / `a` / `a+`），由 Node 自己跨平台归一。
+
+> 这个 bug 是被 `npm run smoke` 抓出来的：`write_file` 报
+> `EINVAL: invalid argument, open '…'`，随即对话持久化、工作区打包全部连带失败。
+
+### `@kit.*` 的延迟解析
+
+`ImageKit` 里的 `nativeImage` 用 `createRequire` 延迟到真正解码像素时才解析，
+这样本模块（以及依赖它的 `WorkFileService`）可以在**纯 Node 环境**下被导入，
+无头冒烟验证才能覆盖工作区与工具链。
 
 ---
 

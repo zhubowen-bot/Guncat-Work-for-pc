@@ -2,8 +2,9 @@ import { Attachment } from './Attachment';
 import { ToolCallRecord } from './ToolCallRecord';
 
 // 消息(对齐 web 版本的 message 字段)
-// 必须 @Observed 才能让 @ObjectLink 追踪属性变化 (流式输出时 content 增量更新)
-@Observed
+// 平台差异补丁: 上游标记 @Observed 是为了让 ArkUI 的 @ObjectLink 追踪属性变化
+// (流式输出时 content 增量更新)。桌面端状态刷新由渲染进程的 store 负责,
+// 这个装饰器没有对应语义, 故移除 —— 否则编译产物会引用一个不存在的全局符号。
 export class Message {
   id: string = '';
   role: string = 'user';

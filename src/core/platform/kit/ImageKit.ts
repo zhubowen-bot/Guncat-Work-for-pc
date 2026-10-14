@@ -5,8 +5,25 @@
 //   2. 解码 → 缩放 → 重新编码为 png/jpeg（缩略图、view_image、PDF 页面转图）
 // 桌面端直接复用 Electron 内置的 nativeImage：零额外原生依赖，
 // 且缩放质量与 Electron 自身一致。
+//
+// nativeImage 采用**延迟解析**：这样本模块（以及依赖它的 WorkFileService 等）
+// 可以在纯 Node 环境下被导入做无头验证，只有真正做像素解码时才需要 Electron。
 import fs from 'node:fs'
-import { nativeImage, type NativeImage } from 'electron'
+import { createRequire } from 'node:module'
+import type { NativeImage } from 'electron'
+
+const nodeRequire = createRequire(import.meta.url)
+
+let nativeImageApi: { createFromBuffer(buffer: Buffer): NativeImage } | null = null
+
+function nativeImage(): { createFromBuffer(buffer: Buffer): NativeImage } {
+  if (nativeImageApi === null) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electron = nodeRequire('electron') as typeof import('electron')
+    nativeImageApi = electron.nativeImage
+  }
+  return nativeImageApi
+}
 
 export namespace image {
   export interface Size {
@@ -105,7 +122,7 @@ export namespace image {
     }
 
     async getImageInfo(): Promise<ImageInfo> {
-      const img: NativeImage = nativeImage.createFromBuffer(this.data)
+      const img: NativeImage = nativeImage().createFromBuffer(this.data)
       const size: Size = img.getSize()
       return {
         size,
@@ -120,7 +137,7 @@ export namespace image {
     }
 
     async createPixelMap(options?: DecodingOptions): Promise<PixelMap> {
-      let img: NativeImage = nativeImage.createFromBuffer(this.data)
+      let img: NativeImage = nativeImage().createFromBuffer(this.data)
       const desired: Size | undefined = options?.desiredSize
       if (desired !== undefined && desired.width > 0 && desired.height > 0) {
         const current: Size = img.getSize()

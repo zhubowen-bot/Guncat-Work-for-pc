@@ -97,8 +97,44 @@ export namespace fileIo {
   }
 
   export function openSync(filePath: string, mode: number = OpenMode.READ_ONLY): File {
-    const fd: number = fs.openSync(filePath, mode, 0o666)
+    const fd: number = fs.openSync(filePath, toNodeFlags(filePath, mode), 0o666)
     return new File(fd, filePath)
+  }
+
+  /**
+   * 把鸿蒙 OpenMode 位组合翻译成 Node 的字符串标志。
+   *
+   * 为什么不能像最初设想那样直接把数值透传给 fs.openSync：
+   * Windows 上 Node 会把数值标志交给 CRT 的 `_open`，而 CRT 的 `_O_CREAT`/`_O_TRUNC`
+   * 取值与 POSIX 的 `O_CREAT`/`O_TRUNC` **并不相同**（0x0100 vs 0o100），
+   * 于是同一组位在 Windows 上会解析成完全不同的语义并直接 `EINVAL`。
+   * 字符串标志由 Node 自己跨平台归一，因此这里统一做一次翻译。
+   */
+  function toNodeFlags(filePath: string, mode: number): string {
+    const access: number = mode & 0o3
+    const readWrite: boolean = access === OpenMode.READ_WRITE
+    const writeOnly: boolean = access === OpenMode.WRITE_ONLY
+    const create: boolean = (mode & OpenMode.CREATE) !== 0
+    const trunc: boolean = (mode & OpenMode.TRUNC) !== 0
+    const append: boolean = (mode & OpenMode.APPEND) !== 0
+
+    if (append) {
+      return readWrite ? 'a+' : 'a'
+    }
+    if (readWrite) {
+      if (trunc) {
+        return 'w+'
+      }
+      if (create) {
+        // 「存在则不截断、不存在则新建」没有对应的字符串标志，只能先探测
+        return fs.existsSync(filePath) ? 'r+' : 'w+'
+      }
+      return 'r+'
+    }
+    if (writeOnly) {
+      return 'w'
+    }
+    return 'r'
   }
 
   export function readSync(

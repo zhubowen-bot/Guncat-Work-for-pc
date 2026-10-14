@@ -22,6 +22,9 @@ pnpm-debug.log*
 .guncat-data/
 workspaces/
 
+# 无头冒烟验证的中间产物
+.smoke/
+
 # editor / os
 .vscode/*
 !.vscode/extensions.json

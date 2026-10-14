@@ -82,6 +82,9 @@ export class JsCodeService {
     let options: JsRunOptions = {
       inputs: load.inputs,
       resourceName: 'run_js.js',
+      // 平台差异补丁: 桌面端引擎(node:vm)支持真正的中断, 把调用方的预算透传下去,
+      // 死循环会在该预算内被引擎终止, 而不是"放弃等待但后台继续跑"。
+      timeoutMs: timeoutMs,
       heapMb: Constants.WORK_JS_HEAP_MB,
       stdoutLimitKb: Constants.WORK_JS_STDOUT_KB,
       outputFileLimitKb: Math.floor(Constants.WORK_WRITE_MAX_BYTES / 1024),
