@@ -175,6 +175,44 @@ check(
   find('webContents.on').some((c) => c.args[0] === 'did-finish-load'),
   '监听了 did-finish-load'
 )
+
+// --- 应用身份与菜单栏（用户报障：exe 与菜单栏里还是 Electron 默认图标） ---
+// 这条链路修的是「任务栏按 AppUserModelID 归组并据此找图标」这一环：
+// 不设身份时 Windows 会退回 exe 内嵌的图标（= Electron 的）。
+const identityCall = find('app.setAppUserModelId')[0]
+check(
+  '设置了任务栏身份（否则任务栏会退回 exe 内嵌的 Electron 图标）',
+  process.platform !== 'win32' || (identityCall !== undefined && identityCall.args[0] === 'com.guncat.work'),
+  identityCall !== undefined ? String(identityCall.args[0]) : '未调用（非 win32 可接受）'
+)
+check(
+  '任务栏身份在建窗口之前设置（窗口一旦建立就已经带着旧身份进任务栏）',
+  identityCall === undefined ||
+    calls.findIndex((c) => c.fn === 'app.setAppUserModelId') <
+      calls.findIndex((c) => c.fn === 'new BrowserWindow')
+)
+
+const appMenu = stub.__applicationMenu()
+const menuLabels = (appMenu ?? []).map((item) => item?.label)
+check(
+  '菜单栏换成了自己的菜单（不再摆 Electron 自带的英文 File/Edit/View/Window/Help）',
+  Array.isArray(appMenu) && menuLabels.includes('视图') && !menuLabels.includes('File'),
+  menuLabels.join(', ') || '(未设置)'
+)
+const viewItems = (appMenu?.[0]?.submenu ?? []).map((i) => i?.label ?? i?.role ?? i?.type)
+check(
+  '「视图」菜单保留了排障必需的重新加载与开发者工具',
+  viewItems.includes('重新加载') && viewItems.includes('开发者工具'),
+  viewItems.filter((x) => typeof x === 'string').join(', ')
+)
+
+// 窗口图标：Windows 上优先多尺寸的 .ico（任务栏 / Alt+Tab / 系统菜单都要按尺寸取）
+const icoExists = fs.existsSync(path.join(root, 'resources', 'app-icon.ico'))
+check(
+  '窗口图标指向随包的应用图标（Win32 优先 .ico）',
+  icoExists ? String(options.icon ?? '').endsWith('app-icon.ico') : true,
+  String(options.icon ?? '(未设置)')
+)
 check(
   '渲染进程的失败路径都有监听（否则出问题无从查起）',
   ['did-fail-load', 'preload-error', 'render-process-gone', 'console-message', 'dom-ready'].every(
@@ -456,6 +494,24 @@ check(
 check(
   '找不到 exe 时明确报错并退出，不静默成功',
   shortcutCmd.includes(':noexe') && shortcutCmd.includes('exit /b 1')
+)
+
+// --- 打包脚本必须把图标写进 exe 的 PE 资源 ---
+// 回归防线：exe 是 electron.exe 直接改名的，PE 里的图标资源仍然是 Electron 的，
+// 任务栏 / 资源管理器 / Alt+Tab 看到的都是它。图标不是运行时能改的，
+// 只能在打包时用资源编辑器写进去（此前完全没有这一步，用户一眼就看出来了）。
+const packageScript = fs.readFileSync(path.join(root, 'scripts', 'package-portable.mjs'), 'utf8')
+check(
+  '打包脚本用 rcedit 覆写 exe 图标（否则 exe 里还是 Electron 的图标）',
+  packageScript.includes("import('rcedit')") && packageScript.includes('icon: icoPath')
+)
+check(
+  '打包脚本同时写对版本信息（属性对话框里不该还写着 Electron）',
+  packageScript.includes('ProductName: appName') && packageScript.includes("'file-version'")
+)
+check(
+  '图标写入失败会明确告警而不是静默跳过',
+  packageScript.includes('写入 exe 图标失败')
 )
 const asciiProbe = path.join(dataRoot, 'ascii-probe.cmd')
 launch.writeAsciiFile(asciiProbe, compatCmd)

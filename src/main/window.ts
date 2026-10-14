@@ -64,14 +64,26 @@ export function getMainWindow(): BrowserWindow | null {
 }
 
 /**
- * 应用图标（取自鸿蒙原项目的 cat_avatar）。
+ * 应用图标（取自鸿蒙原项目的 cat_avatar，由 scripts/make-icon.py 生成两种格式）。
  * 打包态落在 resources/resources/ 下，与会话资源同处一地。
+ *
+ * Windows 上**优先 .ico**：任务栏、Alt+Tab、窗口系统菜单都要按多尺寸图标取值，
+ * 单张 PNG 只能靠系统缩放，边缘会糊。.ico 里有 7 种尺寸，系统按需取。
  * 取不到就交给 Electron 用默认图标，不能让窗口因为图标起不来。
  */
 function resolveIcon(): string | undefined {
   try {
-    const file: string = resource('app-icon.png')
-    return fs.existsSync(file) ? file : undefined
+    const candidates: string[] =
+      process.platform === 'win32'
+        ? ['app-icon.ico', 'app-icon.png']
+        : ['app-icon.png', 'app-icon.ico']
+    for (const name of candidates) {
+      const file: string = resource(name)
+      if (fs.existsSync(file)) {
+        return file
+      }
+    }
+    return undefined
   } catch {
     return undefined
   }

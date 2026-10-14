@@ -12,6 +12,7 @@ import { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 import { registerElectronPicker } from './picker'
 import { registerIpcHandlers } from './ipc'
 import { collectFileArgs } from './intake'
+import { installAppIdentity, installApplicationMenu } from './appmenu'
 import { SessionManager } from './session/SessionManager'
 import { createMainWindow, getMainWindow, rendererDir, setPendingFlush, setRendererStalledHandler, setCompatMode, showLoadError } from './window'
 import { serveRenderer, registerAppScheme } from './protocol'
@@ -243,6 +244,11 @@ if (!gotLock) {
 
       registerElectronPicker()
       bootLog('文件选择器已注册')
+
+      // 任务栏身份与菜单栏都要在**建窗口之前**定下来：
+      // 窗口一旦建立，就已经带着当时的 AppUserModelID 与默认菜单进了任务栏。
+      installAppIdentity()
+      installApplicationMenu()
 
       // 用 app:// 提供界面文件（替代 file://，详见 protocol.ts 的说明）
       try {

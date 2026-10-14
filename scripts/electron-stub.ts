@@ -232,7 +232,7 @@ export const app = {
     calls.push({ fn: 'app.on', args: [event] })
   },
   setAppUserModelId(id: string): void {
-    calls.push({ fn: 'setAppUserModelId', args: [id] })
+    calls.push({ fn: 'app.setAppUserModelId', args: [id] })
   }
 }
 
@@ -262,6 +262,28 @@ export const shell = {
   async openPath(): Promise<string> {
     return ''
   }
+}
+
+/** 菜单栏替身：记下被设成应用菜单的那份模板，验证时用来断言不是 Electron 的默认菜单 */
+let applicationMenuTemplate: unknown[] | null = null
+
+export const Menu = {
+  buildFromTemplate(template: unknown[]): { __template: unknown[] } {
+    calls.push({ fn: 'Menu.buildFromTemplate', args: [template] })
+    return { __template: template }
+  },
+  setApplicationMenu(menu: unknown): void {
+    applicationMenuTemplate =
+      menu !== null && typeof menu === 'object' && '__template' in menu
+        ? (menu as { __template: unknown[] }).__template
+        : null
+    calls.push({ fn: 'Menu.setApplicationMenu', args: [menu] })
+  }
+}
+
+/** 被设成应用菜单的模板（null = 从未设置，会退回 Electron 自带的英文菜单） */
+export function __applicationMenu(): unknown[] | null {
+  return applicationMenuTemplate
 }
 
 export const webUtils = {

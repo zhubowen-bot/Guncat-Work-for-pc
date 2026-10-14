@@ -126,6 +126,45 @@ if (fs.existsSync(exeSource)) {
   step(`可执行文件 → ${appName}.exe`)
 }
 
+// ===== 5b. 把原版图标与版本信息写进 exe 的 PE 资源 =====
+//
+// 为什么必须有这一步（用户报障「显示在 exe 程序和菜单栏里面的图标还是 electron 默认图标」）：
+//   exe 是 electron.exe 直接改名的，它的图标资源里仍然是 **Electron 的图标**。
+//   任务栏、资源管理器、Alt+Tab、开始菜单、桌面快捷方式的目标文件看到的都是它。
+//   图标不是运行时能改的东西 —— 它就存在 PE 的 RT_ICON 资源里，
+//   必须用资源编辑器写进去（electron-builder 内部做的也正是这件事：rcedit）。
+//   窗口标题栏的图标之所以一直是对的，是因为那条走的是 BrowserWindow.icon，与 PE 资源无关。
+//
+// 顺带把版本信息也写对：属性对话框里的「产品名称 / 文件说明 / 版本」此前也是 Electron 的。
+const icoPath = path.join(root, 'resources', 'app-icon.ico')
+if (fs.existsSync(exeTarget) && fs.existsSync(icoPath)) {
+  // rcedit 要求 MSDN 的四段版本号
+  const ver4 = version.split('.').concat(['0', '0', '0', '0']).slice(0, 4).join('.')
+  try {
+    const rcedit = (await import('rcedit')).default
+    await rcedit(exeTarget, {
+      icon: icoPath,
+      'version-string': {
+        CompanyName: 'zhubowen-bot',
+        FileDescription: appName,
+        ProductName: appName,
+        LegalCopyright: 'Apache License 2.0',
+        OriginalFilename: `${appName}.exe`,
+        InternalFilename: appName
+      },
+      'file-version': ver4,
+      'product-version': ver4
+    })
+    step('exe 图标与版本信息已写入 PE 资源（rcedit）')
+  } catch (e) {
+    // 不因此中断打包：图标不对是观感问题，产物本身仍可用 —— 但必须说清楚
+    console.warn(`  ! 写入 exe 图标失败（exe 会保留 Electron 默认图标）：${e?.message ?? e}`)
+    console.warn('    exe 若正在运行会锁住文件，先关掉应用再重新打包。')
+  }
+} else {
+  console.warn(`  ! 跳过 exe 图标写入：找不到 ${path.relative(root, icoPath)}`)
+}
+
 // ===== 6. 双击即用的辅助入口 =====
 //
 // 注意：.cmd / .ps1 一律只写 ASCII（生成器里做了字节级校验）。

@@ -38,6 +38,7 @@
     "highlight.js": "^11.12.0",
     "katex": "^0.16.22",
     "mermaid": "^11.17.2",
+    "rcedit": "^4.0.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
