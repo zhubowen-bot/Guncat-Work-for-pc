@@ -21,7 +21,11 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const appName = 'Guncat Work'
-const outDir = path.join(root, 'release', appName)
+const pkgJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+const version = pkgJson.version
+// 输出目录带版本号：一来用户一眼知道拿的是哪版，二来避免旧目录被占用
+// （比如用户还开着上一次的 cmd 窗口，其工作目录就在里面）导致整个打包失败。
+const outDir = path.join(root, 'release', `${appName}-${version}`)
 const electronDist = path.join(root, 'node_modules', 'electron', 'dist')
 
 function fail(message) {
@@ -44,7 +48,21 @@ if (!fs.existsSync(path.join(root, 'out', 'main', 'index.js'))) {
 console.log(`\n组装 ${appName} …`)
 
 // ===== 1. 清空并复制 Electron 运行时 =====
-fs.rmSync(outDir, { recursive: true, force: true })
+// Windows 上偶尔会把输出目录本身锁住（EPERM），但里面的内容通常可以删。
+// 所以删除失败时退而求其次：清空内容，而不是整个打包流程失败。
+fs.rmSync(outDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+if (fs.existsSync(outDir)) {
+  for (const entry of fs.readdirSync(outDir)) {
+    try {
+      fs.rmSync(path.join(outDir, entry), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+    } catch {
+      // 实在删不掉就留着，后面的复制会覆盖
+    }
+  }
+  if (fs.existsSync(outDir)) {
+    step('目录已存在且删不掉，改为就地覆盖')
+  }
+}
 fs.mkdirSync(outDir, { recursive: true })
 step('复制 Electron 运行时')
 fs.cpSync(electronDist, outDir, { recursive: true })
@@ -63,7 +81,7 @@ step('写入应用代码 → resources/app')
 fs.cpSync(path.join(root, 'out'), path.join(appTarget, 'out'), { recursive: true })
 
 // package.json 只保留 Electron 启动需要的字段，避免把构建配置带进产物
-const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+const pkg = pkgJson
 fs.writeFileSync(
   path.join(appTarget, 'package.json'),
   JSON.stringify(
@@ -99,104 +117,120 @@ if (fs.existsSync(exeSource)) {
 }
 
 // ===== 6. 双击即用的辅助入口 =====
-// 诊断启动：依次尝试三种启动模式，每种都记录退出码。
-// 之所以要分模式：Chromium 的沙箱在某些进程上下文里会初始化失败并直接让进程
-// 以 STATUS_BREAKPOINT(-2147483645) 退出，此时 --no-sandbox 能绕过。
+//
+// 注意：.cmd 一律只写 ASCII。
+// 事故：这些脚本最初用中文提示、以 UTF-8 写出，而 cmd.exe 在中文 Windows 上按 GBK
+// 解析批处理文件 —— 内存里的字节被解成乱码，整行变成无法识别的命令，
+// 批处理的 if/goto 控制流直接被拆坏（实测表现为 "'…' is not recognized"）。
+// chcp 65001 放在文件里也救不了，因为解析从第一行就开始了。
+// 中文说明一律放到 使用说明.txt。
+const cmdHeader = [
+  '@echo off',
+  'chcp 65001 >nul 2>&1',
+  'cd /d "%~dp0"',
+  'setlocal',
+  'set "LOG=%~dp0diag-log.txt"',
+  'set "APPDIR=%APPDATA%\\Guncat Work"',
+  'set "BOOTLOG=%APPDIR%\\logs\\startup.log"',
+  'set "CRASH=-2147483645"',
+  'set /a STEP=0'
+]
+
+function attempt(label, args) {
+  return [
+    'set /a STEP+=1',
+    `echo. >> "%LOG%"`,
+    `echo ========== [%STEP%] ${label} ========== >> "%LOG%"`,
+    `echo [%STEP%] ${label}`,
+    `"Guncat Work.exe" ${args} --enable-logging >> "%LOG%" 2>&1`,
+    'set "CODE=%ERRORLEVEL%"',
+    `echo exit code: %CODE% >> "%LOG%"`,
+    'if exist "%BOOTLOG%" copy /y "%BOOTLOG%" "%~dp0startup-%STEP%.log" >nul',
+    'if "%CODE%"=="0" goto done'
+  ]
+}
+
 fs.writeFileSync(
-  path.join(outDir, '诊断启动.cmd'),
+  path.join(outDir, 'diagnose.cmd'),
   [
-    '@echo off',
-    'chcp 65001 >nul',
-    'cd /d "%~dp0"',
-    'set LOG=%~dp0启动日志.txt',
-    'set CRASH=-2147483645',
-    '',
-    'echo ===== Guncat Work 诊断启动 ===== > "%LOG%"',
-    'echo 时间: %date% %time% >> "%LOG%"',
-    'echo 系统: %OS% %PROCESSOR_ARCHITECTURE% >> "%LOG%"',
+    ...cmdHeader,
+    'echo ===== Guncat Work diagnostics ===== > "%LOG%"',
+    'echo time: %date% %time% >> "%LOG%"',
+    'echo os: %OS% %PROCESSOR_ARCHITECTURE% >> "%LOG%"',
     'echo.',
-    'echo 即将依次尝试三种启动模式。',
-    'echo 如果窗口出现，直接关闭窗口即可，脚本会继续记录退出码。',
+    'echo This will try 4 launch modes. Each run writes to the log file.',
+    'echo If a window appears, close it and this script will continue.',
     'echo.',
-    '',
-    'echo ---------- [1/3] 正常启动 ---------- >> "%LOG%"',
-    'echo [1/3] 正常启动…',
-    '"Guncat Work.exe" --enable-logging >> "%LOG%" 2>&1',
-    'set CODE=%ERRORLEVEL%',
-    'echo 退出码: %CODE% >> "%LOG%"',
-    'if not "%CODE%"=="%CRASH%" goto done',
-    '',
-    'echo ---------- [2/3] --no-sandbox ---------- >> "%LOG%"',
-    'echo [2/3] 正常启动崩了，改试 --no-sandbox…',
-    '"Guncat Work.exe" --no-sandbox --enable-logging >> "%LOG%" 2>&1',
-    'set CODE=%ERRORLEVEL%',
-    'echo 退出码: %CODE% >> "%LOG%"',
-    'if not "%CODE%"=="%CRASH%" goto done',
-    '',
-    'echo ---------- [3/3] --no-sandbox --disable-gpu ---------- >> "%LOG%"',
-    'echo [3/3] 再试 --no-sandbox --disable-gpu…',
-    '"Guncat Work.exe" --no-sandbox --disable-gpu --enable-logging >> "%LOG%" 2>&1',
-    'set CODE=%ERRORLEVEL%',
-    'echo 退出码: %CODE% >> "%LOG%"',
-    '',
+    ...attempt('normal', ''),
+    ...attempt('no-sandbox', '--no-sandbox --disable-gpu'),
+    ...attempt('safe-mode', '--guncat-safe-mode'),
+    ...attempt('diag-page', '--guncat-diag --no-sandbox --disable-gpu'),
     ':done',
     'echo. >> "%LOG%"',
-    'echo ===== 结束，最后一次退出码: %CODE% ===== >> "%LOG%"',
+    'echo ===== last exit code: %CODE% ===== >> "%LOG%"',
     'echo.',
-    'echo 已结束。请把下面两个文件发出来：',
-    'echo   · %LOG%',
-    'echo   · %APPDATA%\\Guncat Work\\logs\\startup.log',
+    'echo Done. Please send these files:',
+    'echo   - diag-log.txt              (this folder)',
+    'echo   - startup-1.log ... startup-4.log   (this folder)',
+    'echo   - %BOOTLOG%',
     'pause'
-  ].join('\r\n'),
-  'utf8'
+  ].join('\r\n') + '\r\n',
+  'latin1'
 )
 
 // 桌面快捷方式（带应用图标；Windows 快捷方式只认 .ico）
 fs.writeFileSync(
-  path.join(outDir, '创建桌面快捷方式.cmd'),
+  path.join(outDir, 'create-desktop-shortcut.cmd'),
   [
-    '@echo off',
-    'chcp 65001 >nul',
+    ...cmdHeader,
     'powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut([Environment]::GetFolderPath(\'Desktop\') + \'\\Guncat Work.lnk\'); $lnk.TargetPath = \'%~dp0Guncat Work.exe\'; $lnk.WorkingDirectory = \'%~dp0\'; $lnk.IconLocation = \'%~dp0resources\\resources\\app-icon.ico\'; $lnk.Description = \'Guncat Work\'; $lnk.Save()"',
     'echo.',
-    'echo 已尝试在桌面创建「Guncat Work」快捷方式。',
+    'echo A "Guncat Work" shortcut was created on your desktop.',
     'pause'
-  ].join('\r\n'),
-  'utf8'
+  ].join('\r\n') + '\r\n',
+  'latin1'
 )
-step('写入 诊断启动.cmd 与 创建桌面快捷方式.cmd')
+step('写入 diagnose.cmd 与 create-desktop-shortcut.cmd（纯 ASCII）')
 
-// ===== 7. 简短说明 =====
+// ===== 7. 简短说明（UTF-8 带 BOM，记事本直接可读） =====
 fs.writeFileSync(
   path.join(outDir, '使用说明.txt'),
-  [
-    'Guncat Work（电脑版）',
-    '',
-    '双击本目录下的「Guncat Work.exe」即可启动，无需安装、无需命令行。',
-    '想放到桌面就从「创建桌面快捷方式.cmd」双击一次，会生成带图标的快捷方式。',
-    '',
-    '首次使用：',
-    '  1. 打开应用后点左下角「设置」',
-    '  2. 填入接入方式、Base URL、API Key 与模型，保存',
-    '  3. 回到主界面即可开始对话',
-    '',
-    '数据位置：',
-    '  对话历史、沙箱工作区与配置都保存在 %APPDATA%\\Guncat Work 下，',
-    '  不会写入本目录，删除本目录不影响已有数据。',
-    '',
-    '三种形态（左侧栏顶部可切换）：',
-    '  ✦ 交互模式  一句话直出可操作界面',
-    '  🛠 工作模式  多轮工具循环 + 沙箱工作区，可直出 PPT / Word / Excel',
-    '    聊天模式  纯对话',
-    '',
-    '把文件拖进窗口即可导入当前会话的工作区。',
-    '',
-    '如果双击后窗口没有出现：',
-    '  双击本目录的「诊断启动.cmd」，它会带日志启动并留下两个日志文件：',
-    '    · 本目录的「启动日志.txt」',
-    '    · %APPDATA%\\Guncat Work\\logs\\startup.log',
-    '  把这两个文件发出来即可定位问题。'
-  ].join('\r\n'),
+  '\ufeff' +
+    [
+      'Guncat Work（电脑版）',
+      '',
+      '双击本目录下的「Guncat Work.exe」即可启动，无需安装、无需命令行。',
+      '想放到桌面就从「create-desktop-shortcut.cmd」双击一次，会生成带图标的快捷方式。',
+      '',
+      '首次使用：',
+      '  1. 打开应用后点左下角「设置」',
+      '  2. 填入接入方式、Base URL、API Key 与模型，保存',
+      '  3. 回到主界面即可开始对话',
+      '',
+      '数据位置：',
+      '  对话历史、沙箱工作区与配置都保存在 %APPDATA%\\Guncat Work 下，',
+      '  不会写入本目录，删除本目录不影响已有数据。',
+      '',
+      '三种形态（左侧栏顶部可切换）：',
+      '  ✦ 交互模式  一句话直出可操作界面',
+      '  🛠 工作模式  多轮工具循环 + 沙箱工作区，可直出 PPT / Word / Excel',
+      '    聊天模式  纯对话',
+      '',
+      '把文件拖进窗口即可导入当前会话的工作区。',
+      '',
+      '────────────────────────────────────────',
+      '如果双击后窗口没有出现（白屏 / 闪退）：',
+      '',
+      '  双击本目录的「diagnose.cmd」。它会依次尝试四种启动方式，',
+      '  每种都把输出与退出码写进本目录的 diag-log.txt，',
+      '  并把应用自身的启动日志另存为 startup-1.log … startup-4.log。',
+      '  把这几份文件发出来即可定位。',
+      '',
+      '  四种方式分别是：正常 / 禁用沙箱与 GPU / 安全模式 / 极简诊断页。',
+      '  若只有「极简诊断页」能显示，说明渲染进程没问题、是界面产物加载失败；',
+      '  若四种都白屏，则是渲染进程或 GPU 层的问题。',
+      '────────────────────────────────────────'
+    ].join('\r\n'),
   'utf8'
 )
 

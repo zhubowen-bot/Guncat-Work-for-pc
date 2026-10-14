@@ -3,6 +3,8 @@
 // 为什么值得做：本机跑不起 Electron 窗口（electron.exe 连 --version 都是
 // STATUS_BREAKPOINT），但「index.ts → whenReady → createMainWindow → loadFile」
 // 这条链路完全可以在 Node 里跑，并断言路径解析、preload 是否存在、有无异常。
+import fs from 'node:fs'
+
 type Handler = (...args: unknown[]) => unknown
 
 const handlers = new Map<string, Handler>()
@@ -178,6 +180,25 @@ export const shell = {
 export const webUtils = {
   getPathForFile(_file: unknown): string {
     return ''
+  }
+}
+
+/** 特权协议登记与处理器注册 —— 用来断言 app:// 确实装上了 */
+export const protocol = {
+  registerSchemesAsPrivileged(schemes: unknown[]): void {
+    calls.push({ fn: 'protocol.registerSchemesAsPrivileged', args: [schemes] })
+  },
+  handle(scheme: string, handler: unknown): void {
+    calls.push({ fn: 'protocol.handle', args: [scheme, handler] })
+  }
+}
+
+/** 真实读文件，便于在测试里直接调用 app:// 的处理器验证行为 */
+export const net = {
+  async fetch(url: string): Promise<Response> {
+    const { fileURLToPath } = await import('node:url')
+    const body = fs.readFileSync(fileURLToPath(url))
+    return new Response(body)
   }
 }
 

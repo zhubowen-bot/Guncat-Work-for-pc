@@ -11,7 +11,8 @@ import { registerElectronPicker } from './picker'
 import { registerIpcHandlers } from './ipc'
 import { collectFileArgs } from './intake'
 import { SessionManager } from './session/SessionManager'
-import { createMainWindow, getMainWindow, setPendingFlush, setRendererStalledHandler, showLoadError } from './window'
+import { createMainWindow, getMainWindow, rendererDir, setPendingFlush, setRendererStalledHandler, showLoadError } from './window'
+import { serveRenderer, registerAppScheme } from './protocol'
 import { resolveAppPaths } from './paths'
 import { bootLog, bootLogPath, bootLogTail, bootFail, installCrashHandlers } from './bootlog'
 import type { GuncatEvent } from '../ipc/contract'
@@ -20,9 +21,8 @@ import type { GuncatEvent } from '../ipc/contract'
  * 安全模式。
  *
  * 真实事故：应用能启动、窗口能显示，但渲染进程在 did-start-loading 之后就再没有任何事件，
- * 页面永远停在加载占位页。这种「不报错、不崩溃、就是不动」的形态，在 Windows 上通常是
- * Chromium 的 GPU 进程或沙箱初始化卡住（这台机器的 Chromium 本身就不正常，
- * 主进程连 --version 都返回 STATUS_BREAKPOINT）。
+ * 页面永远停在加载占位页或一片空白。这种「不报错、不崩溃、就是不动」的形态，
+ * 在 Windows 上通常是 Chromium 的 GPU 进程或沙箱初始化卡住。
  *
  * 与其让用户去琢磨加什么启动参数，不如让它自愈：
  * 正常启动若在超时内没就绪，就自动带上安全模式参数重启一次。
@@ -34,8 +34,14 @@ if (safeMode) {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('no-sandbox')
   app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-gpu-compositing')
   app.commandLine.appendSwitch('disable-software-rasterizer')
+  // 某些受限会话里 GPU 进程会拖住整个渲染，直接禁用比让它超时更快
+  app.commandLine.appendSwitch('disable-gpu-watchdog')
 }
+
+// app:// 必须在 app ready 之前登记为特权协议
+registerAppScheme()
 
 bootLog('=== Guncat Work 启动 ===')
 bootLog(`argv: ${process.argv.join(' ')}`)
@@ -124,6 +130,13 @@ if (!app.requestSingleInstanceLock()) {
 
       registerElectronPicker()
       bootLog('文件选择器已注册')
+
+      // 用 app:// 提供界面文件（替代 file://，详见 protocol.ts 的说明）
+      try {
+        serveRenderer(rendererDir())
+      } catch (e: unknown) {
+        bootFail('serveRenderer', e)
+      }
 
       const session: SessionManager = new SessionManager((event: GuncatEvent) => {
         dispatch(event)

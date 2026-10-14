@@ -105,10 +105,25 @@ check(
 check('preload 扩展名与格式匹配', typeof preload === 'string' && /\.(mjs|cjs|js)$/.test(preload), String(preload ?? ''))
 check('openExternal 通过 setWindowOpenHandler 接管', find('setWindowOpenHandler').length === 1)
 
-const loadCalls = find('loadFile')
-check('调用了 loadFile（打包态）', loadCalls.length === 1, `${loadCalls.length} 次`)
-const indexPath = loadCalls[0]?.args[0]
-check('loadFile 指向真实存在的 index.html', typeof indexPath === 'string' && fs.existsSync(indexPath), String(indexPath))
+// --- 页面加载方式 ---
+// 回归防线：界面**不能**再用 file:// 加载。
+// 真实事故：Vite 的 ESM 产物在 file:// 下被 CORS 拦掉，文档加载了但
+// DOMContentLoaded 永不触发，窗口永远白屏且没有任何失败事件。
+const loadCalls = find('loadURL')
+check('通过 loadURL 加载界面', loadCalls.length === 1, `${loadCalls.length} 次`)
+const pageUrl = loadCalls[0]?.args[0]
+check('界面走自定义 app:// 协议（而非 file://）', typeof pageUrl === 'string' && pageUrl.startsWith('app://'), String(pageUrl))
+check('没有再用 loadFile（file://）', find('loadFile').length === 0)
+
+const privileged = find('protocol.registerSchemesAsPrivileged')
+check('登记了 app:// 特权协议', privileged.length === 1)
+const schemeEntry = privileged[0]?.args[0]?.[0] ?? {}
+check(
+  'app:// 被登记为 standard + secure（ESM / CSP / fetch 才正常）',
+  schemeEntry.privileges?.standard === true && schemeEntry.privileges?.secure === true,
+  JSON.stringify(schemeEntry.privileges ?? {})
+)
+check('注册了 app:// 的处理器', find('protocol.handle').some((c) => c.args[0] === 'app'))
 
 // 回归防线：窗口可见性**绝不能**依赖渲染进程。
 // 真实事故——窗口曾用 show:false 建、只在 ready-to-show 时才显示，

@@ -15,8 +15,28 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resource } from '@core/platform/appPaths'
 import { bootLog, bootLogPath } from './bootlog'
+import { rendererUrl } from './protocol'
 
 const __dirname: string = path.dirname(fileURLToPath(import.meta.url))
+
+/** 诊断模式：只用一张内联页面，判断故障发生在渲染进程还是界面产物加载 */
+export const DIAG_MODE: boolean = process.argv.includes('--guncat-diag')
+
+function diagPageUrl(): string {
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>Guncat Work 诊断</title></head>
+<body style="margin:0;font-family:'Segoe UI','Microsoft YaHei',sans-serif;background:#eef6ff;color:#1c1c1e">
+<div style="max-width:560px;margin:90px auto;text-align:center">
+  <h2 style="font-size:18px">渲染进程正常</h2>
+  <p style="color:#3a5a7a;font-size:13px;line-height:1.8">
+    这张页面能显示出来，说明 Electron 的渲染进程与窗口都没问题。<br>
+    问题出在加载界面产物（out/renderer）上。
+  </p>
+</div>
+<script>console.log('GUNCAT_DIAG_OK')</script>
+</body></html>`
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+}
 
 let mainWindow: BrowserWindow | null = null
 
@@ -101,6 +121,11 @@ function flushPending(): void {
   }
 }
 
+/** 界面产物目录（app:// 的根目录） */
+export function rendererDir(): string {
+  return path.join(__dirname, '../renderer')
+}
+
 /** 渲染进程就绪的看门狗：超时未就绪则判定卡住，交给上层处理（通常是安全模式重启） */
 let stalledHandler: (info: { pagePath: string; preloadPath: string }) => void = () => {}
 let watchdogMs = 10000
@@ -177,10 +202,22 @@ export function createMainWindow(): BrowserWindow {
     window.loadURL(process.env.ELECTRON_RENDERER_URL).catch((e: unknown) => {
       onLoadFailed(window, process.env.ELECTRON_RENDERER_URL ?? '', e)
     })
+  } else if (DIAG_MODE) {
+    // 诊断模式：加载一张极简的内联页面。
+    // 用途是把故障一分为二 —— 这张页面能渲染出来，说明渲染进程本身没问题，
+    // 问题出在加载界面产物上；连它都不出来，就是渲染进程/GPU 层的问题。
+    bootLog('诊断模式：加载极简内联页面')
+    window.loadURL(diagPageUrl()).catch((e: unknown) => {
+      onLoadFailed(window, '(内联诊断页)', e)
+    })
   } else {
-    bootLog('加载打包态页面（loadFile）')
-    window.loadFile(pagePath).catch((e: unknown) => {
-      onLoadFailed(window, pagePath, e)
+    // 走自定义协议而不是 file://：file:// 下 Vite 的 ESM 产物会被 CORS 拦掉，
+    // 表现为文档加载了但 DOMContentLoaded 永不触发（详见 protocol.ts）。
+    const url: string = rendererUrl()
+    bootLog(`加载 app:// 页面: ${url}`)
+    window.loadURL(url).catch((e: unknown) => {
+      bootLog(`app:// 加载失败，回退 file://: ${String(e)}`)
+      onLoadFailed(window, url, e)
     })
   }
 
