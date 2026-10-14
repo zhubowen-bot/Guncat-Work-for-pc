@@ -46,7 +46,14 @@ const api = {
   chat: {
     send: (request: ChatSendRequest): Promise<void> => ipcRenderer.invoke(INVOKE.chatSend, request),
     abort: (conversationId: string): Promise<void> =>
-      ipcRenderer.invoke(INVOKE.chatAbort, conversationId)
+      ipcRenderer.invoke(INVOKE.chatAbort, conversationId),
+    /** 交互模式：把控件状态写回消息正文（尾标记）并持久化 */
+    patchMessage: (
+      conversationId: string,
+      messageId: string,
+      content: string
+    ): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.messagePatch, conversationId, messageId, content)
   },
 
   work: {

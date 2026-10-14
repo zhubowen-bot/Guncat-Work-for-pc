@@ -75,6 +75,12 @@ export function registerIpcHandlers(session: SessionManager): void {
   ipcMain.handle(INVOKE.workAbort, async (_e, conversationId: string) => {
     session.abort(conversationId)
   })
+  ipcMain.handle(
+    INVOKE.messagePatch,
+    async (_e, conversationId: string, messageId: string, content: string) => {
+      await session.patchMessageContent(conversationId, messageId, content)
+    }
+  )
 
   // ===== 工作区 =====
   ipcMain.handle(INVOKE.workspaceList, async (_e, conversationId: string) =>

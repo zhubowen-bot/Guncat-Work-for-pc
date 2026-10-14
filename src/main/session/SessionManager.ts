@@ -26,6 +26,8 @@ import { ToolCallRecord } from '@core/model/ToolCallRecord'
 import { StreamCallbacks, AbortSignal } from '@core/common/Types'
 import { Constants } from '@core/common/Constants'
 import { generateMessageId } from '@core/common/Utils'
+import { GuncatUiParts } from '@core/common/GuncatUiParts'
+import { GuncatUiRuntime, GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
 
 import type {
   AgentDto,
@@ -206,6 +208,25 @@ export class SessionManager {
     this.emit({ type: 'conversation:title', conversationId: id, title })
   }
 
+  /**
+   * 交互模式：把界面控件的绑定值（状态尾标记）写回消息正文并落盘。
+   * 只更新 content/displayContent，不触发模型请求。
+   */
+  async patchMessageContent(conversationId: string, messageId: string, content: string): Promise<void> {
+    const conv: Conversation | undefined = this.find(conversationId)
+    if (conv === undefined) {
+      return
+    }
+    const msg: Message | undefined = conv.messages.find((m) => m.id === messageId)
+    if (msg === undefined) {
+      return
+    }
+    msg.content = content
+    msg.displayContent = content
+    await this.persist()
+    this.patchMessage(conversationId, messageId, { content, displayContent: content })
+  }
+
   private async persist(): Promise<void> {
     try {
       await StorageManager.saveConversations(this.ctx(), this.conversations)
@@ -382,9 +403,14 @@ export class SessionManager {
     }
 
     // 循环消息：系统提示词固定在第 0 条
+    // 交互模式的状态回传：把上一轮界面里用户调过的绑定值翻译成一句人话附在任务后，
+    // 模型才知道界面当前处于什么状态（对齐上游 GuncatUiRuntime.describeStateForModel）。
+    const uiContext: string = this.describeUiState(conv)
+    const taskText: string = uiContext === '' ? request.text : `${request.text}\n${uiContext}`
+
     const messages: LoopMessage[] = [
       LoopMessage.system(AgentLoopService.buildWorkSystemPromptFor(request.mode)),
-      LoopMessage.user(request.text)
+      LoopMessage.user(taskText)
     ]
 
     const mode: string = request.mode === 'interactive' ? 'interactive' : 'work'
@@ -591,6 +617,30 @@ export class SessionManager {
       out.push(Attachment.of(name, '', 'file', '', '', ''))
     }
     return out
+  }
+
+  /**
+   * 把最近一轮交互界面的绑定状态翻译成一句给模型看的人话。
+   * 没有界面状态时返回空串。
+   */
+  private describeUiState(conv: Conversation): string {
+    for (let i = conv.messages.length - 1; i >= 0; i--) {
+      const msg: Message = conv.messages[i]
+      if (msg.role !== 'assistant' || msg.content === '') {
+        continue
+      }
+      const split = GuncatUiTrailer.split(msg.content)
+      if (!split.hasState) {
+        continue
+      }
+      const parts = GuncatUiParts.build(msg.content, true)
+      const uiSeg = parts.segments.find((s) => s.type === 'ui' && s.program !== null)
+      if (uiSeg === undefined || uiSeg.program === null) {
+        return ''
+      }
+      return GuncatUiRuntime.describeStateForModel(uiSeg.program, split.stateJson)
+    }
+    return ''
   }
 
   // ===== DTO 映射 =====

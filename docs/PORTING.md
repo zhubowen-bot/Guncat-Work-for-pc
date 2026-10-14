@@ -5,6 +5,18 @@
 
 上游参考仓库：`Guncat-Work-for-hmos`（ArkTS / ArkUI，API 24）
 
+## 0. 阶段状态
+
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| 一 | 三协议流式对话 + 工作模式 Agent Loop + 沙箱工作区 + 核心工具 | ✅ 已完成 |
+| 二 | 交互模式：guncat-ui lang 渲染（76 个组件 + `$绑定` + 动作回传） | ✅ 已完成，见 [交互模式实现说明](INTERACTIVE-MODE.md) |
+| 三 | Office 生成器接入工具链 + 技能系统 + PDF 解析后端 | 🚧 生成器与技能库已验证，PDF 后端待接 |
+| 四 | 语音 / 分享等端侧增强 | ⏳ 未开始（相关服务已移入 `porting/deferred/`） |
+
+验证方式见 [README 的验证矩阵](../README.md#验证)：`pnpm typecheck` / `pnpm build` /
+`pnpm smoke`（内核 68 项 + 渲染 26 项）。
+
 ---
 
 ## 1. 核心策略：**别名替换，而不是改写代码**

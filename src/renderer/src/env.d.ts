@@ -36,6 +36,7 @@ export interface GuncatApi {
   chat: {
     send(request: ChatSendRequest): Promise<void>
     abort(conversationId: string): Promise<void>
+    patchMessage(conversationId: string, messageId: string, content: string): Promise<void>
   }
   work: {
     run(request: WorkRunRequest): Promise<void>

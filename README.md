@@ -39,11 +39,17 @@ pnpm dist         # 打安装包到 release/
 | --- | --- | --- |
 | 类型 | `pnpm typecheck` | `src/core`（移植内核）+ `src/main` + `src/preload` + `src/renderer` |
 | 构建 | `pnpm build` | main / preload / renderer 三端产物 |
-| 功能 | `pnpm smoke` | 智能体加载、45 个工具、37 项技能、沙箱工作区、`run_js` 沙箱、数据管道、持久化、三协议端点、Office 三件套生成 |
+| 内核 | `pnpm smoke:core` | 68 项：智能体加载、45 个工具、37 项技能、沙箱工作区、`run_js` 沙箱、数据管道、持久化、三协议端点、Office 三件套生成、**交互模式全链路**（解析 / `$绑定`重算 / 动作回传 / 状态尾标记 / 表单打包） |
+| 渲染 | `pnpm smoke:render` | 26 项：用 `react-dom/server` 把一份覆盖主要组件的界面程序渲染成 HTML 并逐项断言 |
+| 全部 | `pnpm smoke` | 上面两套一起跑 |
 
 `pnpm smoke` 把风险最高的移植内核拉到纯 Node 下按真实调用链跑一遍，
 并用 esbuild 施加与 `electron.vite.config.ts` **完全相同**的别名规则 ——
 验证的是构建产物真实依赖的那套解析规则，而不是另起一套近似配置。
+
+渲染验证的意义：Electron 窗口在本机起不来，但「元素树 → React 组件树」这一段
+在 Node 里可以完整跑通（SSR 不执行 `useEffect`，因此不依赖 `ResizeObserver` / `window`），
+阶段二最核心的渲染器因此不会只停留在「类型检查通过」。
 
 ## 已知环境限制
 
@@ -51,7 +57,7 @@ pnpm dist         # 打安装包到 release/
 （`electron.exe --version` 直接返回 `STATUS_BREAKPOINT`），此时 `pnpm dev` / `pnpm build`
 产出都无法打开窗口。这是宿主环境限制而非代码问题 ——
 同一台机器上的其他 Electron 应用可以正常启动。
-此时用 `pnpm smoke` 仍然可以完整验证业务内核。
+此时用 `pnpm smoke` 仍然可以完整验证业务内核与界面渲染。
 
 ## 目录结构
 
@@ -72,6 +78,7 @@ docs/PORTING.md   # ★ 移植策略、平台适配对照、与上游的分歧�
 | 文档 | 内容 |
 | --- | --- |
 | [移植说明](docs/PORTING.md) | 移植策略、`@kit.*` 适配对照、移植补丁清单、阶段四计划 |
+| [交互模式实现说明](docs/INTERACTIVE-MODE.md) | guncat-ui lang 数据流、76 个组件覆盖、容错设计、两层无头验证 |
 
 ## 授权
 

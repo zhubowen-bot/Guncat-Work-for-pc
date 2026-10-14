@@ -45,6 +45,17 @@ export default function App() {
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  // 最新一条 assistant 消息才是「可交互的那一轮」
+  const lastAssistantIndex = (() => {
+    const messages = active?.messages ?? []
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') {
+        return i
+      }
+    }
+    return -1
+  })()
+
   useEffect(() => {
     void init()
     // 只在挂载时初始化一次：init 内部已订阅事件并做幂等处理
@@ -126,8 +137,18 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              active.messages.map((message) => (
-                <MessageView key={message.id} message={message} />
+              active.messages.map((message, index) => (
+                <MessageView
+                  key={message.id}
+                  message={message}
+                  // 只有最新一轮的界面可操作，历史界面置灰（与鸿蒙版行为一致）
+                  interactive={
+                    !running &&
+                    mode === 'interactive' &&
+                    index === lastAssistantIndex &&
+                    message.role === 'assistant'
+                  }
+                />
               ))
             )}
           </div>

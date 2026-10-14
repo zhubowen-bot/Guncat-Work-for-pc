@@ -23,6 +23,8 @@ export const INVOKE = {
   chatSend: 'chat:send',
   chatAbort: 'chat:abort',
   chatRegenerate: 'chat:regenerate',
+  /** 交互模式：把控件状态（尾标记）写回消息并持久化 */
+  messagePatch: 'chat:patchMessage',
 
   /** 工作模式 / 交互模式 */
   workRun: 'work:run',

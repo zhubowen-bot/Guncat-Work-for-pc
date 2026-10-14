@@ -198,9 +198,9 @@ async function main(): Promise<void> {
 
   // ===== 10. 交互模式语言（guncat-ui lang） =====
   section('10. 交互模式语言解析')
-  const program = 'root = Card([TextContent("你好")])'
-  const parsed = GuncatUiLang.parse(program)
-  check('guncat-ui lang 可解析', parsed !== null)
+  const basicProgram = 'root = Card([TextContent("你好")])'
+  const parsedBasic = GuncatUiLang.parse(basicProgram)
+  check('guncat-ui lang 可解析', parsedBasic !== null)
 
   // ===== 11. 工作区打包 =====
   section('11. 工作区 zip 打包')
@@ -245,6 +245,141 @@ async function main(): Promise<void> {
     resolve: async () => null
   } as never)
   check('PptxBuilder 产出 zip 字节', pptxBytes.byteLength > 0 && pptxBytes[0] === 0x50, `${pptxBytes.byteLength} 字节`)
+
+  // ===== 13. 交互模式：解析 → 绑定 → 动作 → 回传 =====
+  section('13. 交互模式（guncat-ui lang 全链路）')
+  const { GuncatUiLang: UiLang, UiNode: UiNodeRef } = await import('@core/common/GuncatUiLang')
+  const { GuncatUiRuntime: UiRuntime } = await import('@core/common/GuncatUiRuntime')
+  const { GuncatUiState: UiState, GuncatUiTrailer: UiTrailer } = await import(
+    '@core/common/GuncatUiRuntime'
+  )
+  const { GuncatUiParts: UiParts } = await import('@core/common/GuncatUiParts')
+
+  const PROGRAM = [
+    '$amount = 30',
+    'root = Card([',
+    '  CardHeader("季度复盘", "示例界面"),',
+    '  TextContent("金额 " + $amount + " 万"),',
+    '  Slider("amount", "discrete", 0, 200, 5, [30], "金额", $amount),',
+    '  MetricIndicatorInline("" + $amount * 2, "两倍"),',
+    '  Button("按 30 天口径重算", @ToAssistant("按 30 天口径重算"))',
+    '])'
+  ].join('\n')
+
+  const uiProgram = UiLang.parse(PROGRAM)
+  check('程序解析无错误', uiProgram.errors.length === 0, uiProgram.errors.join('；'))
+  check('入口 root 已解析', uiProgram.root !== null && uiProgram.root.type === 'Card')
+  // 绑定变量的键名带 $ 前缀（与语句 id 一致）
+  check(
+    '$变量默认值已收集',
+    uiProgram.state['$amount'] === 30,
+    `keys=${Object.keys(uiProgram.state).join(',')}`
+  )
+
+  const root0 = UiLang.render(uiProgram, null)
+  const cardChildren = (root0 === null ? [] : ((root0.props['children'] as unknown[]) ?? [])) as Array<{
+    type: string
+    props: Record<string, unknown>
+  }>
+  check('Card 子元素数量正确', cardChildren.length === 5, `${cardChildren.length} 个`)
+  check(
+    '表达式已求值（金额 30 万）',
+    String(cardChildren[1].props['text']) === '金额 30 万',
+    String(cardChildren[1].props['text'])
+  )
+
+  // 改绑定值 → 重新物化：表达式必须按新值重算
+  const uiState = UiState.of(uiProgram, null)
+  uiState.set('$amount', 45 as unknown as object)
+  const root1 = UiLang.render(uiProgram, uiState.values)
+  const cardChildren1 = (root1 === null ? [] : ((root1.props['children'] as unknown[]) ?? [])) as Array<{
+    type: string
+    props: Record<string, unknown>
+  }>
+  check(
+    '改绑定值后表达式重算（金额 45 万）',
+    String(cardChildren1[1].props['text']) === '金额 45 万',
+    String(cardChildren1[1].props['text'])
+  )
+  check(
+    '派生表达式同步更新（45*2=90）',
+    String(cardChildren1[3].props['value']) === '90',
+    String(cardChildren1[3].props['value'])
+  )
+
+  // 动作：@ToAssistant 需要被收集成回传文案
+  const buttonSteps = UiNodeRef.actionSteps(cardChildren1[4] as never, 'action')
+  check('按钮动作可解析', buttonSteps.length > 0, `${buttonSteps.length} 步`)
+  check('回传文案取自 @ToAssistant', UiRuntime.collectMessages(buttonSteps)[0] === '按 30 天口径重算')
+
+  // 状态尾标记往返
+  const stateJson = JSON.stringify({ $amount: 45 })
+  const withTrailer = UiTrailer.append(PROGRAM, stateJson)
+  const splitTrailer = UiTrailer.split(withTrailer)
+  check('尾标记可剥离', splitTrailer.body.trim() === PROGRAM.trim())
+  check('尾标记可还原状态', splitTrailer.stateJson === stateJson && splitTrailer.hasState)
+  const restoredState = UiState.of(uiProgram, UiState.fromJson(splitTrailer.stateJson))
+  check('状态恢复后覆盖默认值', restoredState.num('$amount', 0) === 45, `amount=${restoredState.num('$amount', 0)}`)
+
+  // 正文拆分：Markdown + 界面程序混合
+  const mixed = '先看一段说明。\n\n```guncat-ui\n' + PROGRAM + '\n```\n'
+  const uiParts = UiParts.build(mixed, true)
+  check('拆分出界面片段', uiParts.hasUi && uiParts.segments.some((s) => s.type === 'ui'))
+  check('纯文本已剥离程序', !uiParts.textOnly.includes('root = Card'), uiParts.textOnly.slice(0, 40))
+  check('文本片段保留说明文字', uiParts.textOnly.includes('先看一段说明'))
+  const uiSeg = uiParts.segments.find((s) => s.type === 'ui')
+  check('界面片段带标题', uiSeg !== undefined && uiSeg.title === '季度复盘', uiSeg?.title ?? '')
+
+  // 表单回传：字段值 + 提交诉求打包
+  const FORM = [
+    'root = Card([',
+    '  Form("参数设置", Buttons([Button("重新计算", @ToAssistant("换口径重算"))]), [',
+    '    FormControl("口径", Select("scope", [SelectItem("customers", "按客户"), SelectItem("orders", "按订单")], "请选择", {}, $scope)),',
+    '    FormControl("周期", Slider("days", "discrete", 7, 90, 1, [30], "天数", $days))',
+    '  ])',
+    '])'
+  ].join('\n')
+  const formProgram = UiLang.parse(FORM)
+  const formRoot = UiLang.render(formProgram, null)
+  const formEl = ((formRoot?.props['children'] as unknown[])[0] ?? null) as never
+  const formState = UiState.of(formProgram, null)
+  formState.set('$scope', 'orders' as unknown as object)
+  formState.set('$days', 45 as unknown as object)
+  const formBody = UiRuntime.formMessage(formEl, formState)
+  check(
+    '表单字段值可收集',
+    formBody.includes('orders') && formBody.includes('45'),
+    formBody.replace(/\n/g, ' | ')
+  )
+  const interaction = UiRuntime.interactionText('参数设置', formBody)
+  check('回传文案带交互界面标记', interaction.startsWith('【交互界面回传】'), interaction.split('\n')[0])
+
+  // 图表数据：series/labels 能取出
+  const CHART = [
+    's1 = Series("本季", [120, 132, 101])',
+    's2 = Series("上季", [90, 110, 95])',
+    'root = Card([BarChart(["1月","2月","3月"], [s1, s2], "grouped", "月份", "万元", 200)])'
+  ].join('\n')
+  const chartProgram = UiLang.parse(CHART)
+  const chartRoot = UiLang.render(chartProgram, null)
+  const chartEl = ((chartRoot?.props['children'] as unknown[])[0] ?? null) as {
+    type: string
+    props: Record<string, unknown>
+  } | null
+  check('图表元素类型正确', chartEl !== null && chartEl.type === 'BarChart')
+  check('图表 labels 可取出', (chartEl?.props['labels'] as string[])?.join(',') === '1月,2月,3月')
+  check('图表 series 可取出', ((chartEl?.props['series'] as unknown[]) ?? []).length === 2)
+
+  // 容错：流式中间态（未闭合）也应能解析出部分内容
+  const partial = UiLang.parse('root = Card([TextContent("半句")')
+  check('未闭合程序可容错解析', partial.root !== null, `incomplete=${partial.incomplete}`)
+
+  // 未知组件：按上游约定「丢弃并给出诊断」，但不能影响同一块里的其它组件
+  const unknownProgram = UiLang.parse('root = Card([NoSuchComp("x"), TextContent("还在")])')
+  const unknownRoot = UiLang.render(unknownProgram, null)
+  const unknownChildren = (unknownRoot?.props['children'] as unknown[]) ?? []
+  check('未知组件被丢弃并给出诊断', unknownProgram.errors.length > 0, unknownProgram.errors.join('；'))
+  check('未知组件不影响同一块的其它组件', unknownChildren.length === 1, `${unknownChildren.length} 个子元素`)
 
   // ===== 结果 =====
   console.log(`\n${'─'.repeat(58)}`)

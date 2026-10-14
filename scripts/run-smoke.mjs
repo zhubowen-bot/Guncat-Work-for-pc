@@ -7,25 +7,7 @@ import { build } from 'esbuild'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
-
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-
-const kit = (name) => path.join(root, 'src/core/platform/kit', name)
-
-const alias = {
-  '@kit.ArkTS': kit('ArkTS.ts'),
-  '@kit.CoreFileKit': kit('CoreFileKit.ts'),
-  '@kit.NetworkKit': kit('NetworkKit.ts'),
-  '@kit.BasicServicesKit': kit('BasicServicesKit.ts'),
-  '@kit.AbilityKit': kit('AbilityKit.ts'),
-  '@kit.ArkData': kit('ArkData.ts'),
-  '@kit.PerformanceAnalysisKit': kit('PerformanceAnalysisKit.ts'),
-  '@kit.ImageKit': kit('ImageKit.ts'),
-  '@kit.PDFKit': kit('PDFKit.ts'),
-  'libguncatjs.so': path.join(root, 'src/core/platform/native/libguncatjs.ts'),
-  '@core': path.join(root, 'src/core'),
-  '@ipc': path.join(root, 'src/ipc')
-}
+import { root, alias } from './esbuild-aliases.mjs'
 
 const outDir = path.join(root, '.smoke')
 fs.rmSync(outDir, { recursive: true, force: true })

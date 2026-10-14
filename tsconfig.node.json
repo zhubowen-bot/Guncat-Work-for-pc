@@ -1,11 +1,11 @@
 {
   "compilerOptions": {
-    "composite": true,
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2023", "DOM"],
     "types": ["node", "electron-vite/node"],
+    "noEmit": true,
     "strict": false,
     "strictNullChecks": false,
     "strictFunctionTypes": false,

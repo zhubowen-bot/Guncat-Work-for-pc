@@ -47,6 +47,8 @@ interface State {
   openSettings(open: boolean): void
   reloadSettings(): Promise<void>
   send(text: string): Promise<void>
+  /** 交互模式：把界面控件的绑定值写回消息并持久化 */
+  patchMessageContent(messageId: string, content: string): Promise<void>
   abort(): Promise<void>
   loadWorkspace(): Promise<void>
   deleteWorkspaceEntry(path: string): Promise<void>
@@ -302,6 +304,14 @@ export const useStore = create<State>((set, get) => {
         return
       }
       await window.guncat.chat.abort(activeId)
+    },
+
+    async patchMessageContent(messageId, content) {
+      const activeId = get().activeId
+      if (activeId === null) {
+        return
+      }
+      await window.guncat.chat.patchMessage(activeId, messageId, content)
     },
 
     async loadWorkspace() {
