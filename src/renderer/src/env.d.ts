@@ -71,6 +71,9 @@ export interface GuncatApi {
   files: {
     pathForFile(file: File): string
   }
+  asr: {
+    transcribe(audio: Uint8Array, mime: string): Promise<{ ok: boolean; text: string; error: string }>
+  }
   onEvent(listener: (event: GuncatEvent) => void): () => void
 }
 

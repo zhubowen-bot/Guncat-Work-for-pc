@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAutoResize } from '../hooks/useAutoResize'
+import { useVoiceInput } from '../speech/useVoiceInput'
 
 interface Props {
   running: boolean
@@ -12,6 +13,10 @@ export function Composer({ running, mode, onSend, onAbort }: Props) {
   const [text, setText] = useState('')
   const ref = useRef<HTMLTextAreaElement>(null)
   useAutoResize(ref, text)
+
+  const voice = useVoiceInput((spoken) => {
+    setText((prev) => (prev.trim() === '' ? spoken : `${prev}${spoken}`))
+  })
 
   // 切会话/切模式时清空草稿，避免误发到别的会话
   useEffect(() => {
@@ -52,6 +57,24 @@ export function Composer({ running, mode, onSend, onAbort }: Props) {
           onKeyDown={onKeyDown}
           rows={1}
         />
+
+        <button
+          type="button"
+          className="btn btn--ghost composer__mic"
+          data-recording={voice.state === 'recording'}
+          title={
+            voice.state === 'recording'
+              ? '点击结束录音并转写'
+              : voice.state === 'transcribing'
+                ? '正在转写…'
+                : '语音输入（点击开始录音）'
+          }
+          disabled={voice.state === 'transcribing'}
+          onClick={voice.toggle}
+        >
+          {voice.state === 'recording' ? '⏺ 停止' : voice.state === 'transcribing' ? '…' : '🎤'}
+        </button>
+
         {running ? (
           <button className="btn btn--danger" onClick={onAbort}>
             停止
@@ -62,6 +85,11 @@ export function Composer({ running, mode, onSend, onAbort }: Props) {
           </button>
         )}
       </div>
+      {voice.error !== '' ? (
+        <div className="composer__hint" style={{ color: 'var(--warn)' }}>
+          {voice.error}
+        </div>
+      ) : null}
       <div className="composer__hint">
         <span>
           {mode === 'chat'

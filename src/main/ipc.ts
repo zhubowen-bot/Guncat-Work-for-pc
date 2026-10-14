@@ -15,6 +15,7 @@ import type {
   WorkRunRequest
 } from '../ipc/contract'
 import { SessionManager } from './session/SessionManager'
+import { transcribeAudio } from './asr'
 import { getMainWindow } from './window'
 import { getDataRoot, resourcesDir, makeTempDir } from '@core/platform/appPaths'
 
@@ -172,6 +173,16 @@ export function registerIpcHandlers(session: SessionManager): void {
       const bytes: Uint8Array = await session.exportMessageDocx(conversationId, messageId)
       fs.writeFileSync(result.filePath, bytes)
       return { saved: true, path: result.filePath }
+    }
+  )
+
+  /** 语音输入：把录音字节送到转写接口 */
+  ipcMain.handle(
+    INVOKE.asrTranscribe,
+    async (_e, audio: Uint8Array | ArrayBuffer, mime: string) => {
+      const bytes: Uint8Array =
+        audio instanceof Uint8Array ? audio : new Uint8Array(audio as ArrayBuffer)
+      return await transcribeAudio(bytes, mime ?? '')
     }
   )
 

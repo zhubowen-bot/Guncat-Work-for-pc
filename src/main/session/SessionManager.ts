@@ -156,11 +156,14 @@ export class SessionManager {
     await StorageManager.saveString(this.ctx(), key, value)
   }
 
-  /** 字符串型偏好：朗读音色/语速等（鸿蒙侧存在 Preferences，桌面端同构） */
+  /** 字符串型偏好：朗读音色/语速、语音转写配置等（鸿蒙侧存在 Preferences，桌面端同构） */
   private static readonly STRING_PREF_KEYS: string[] = [
     'reader_voice',
     'reader_rate',
-    'reader_enabled'
+    'reader_enabled',
+    'asr_baseUrl',
+    'asr_apiKey',
+    'asr_model'
   ]
 
   private async loadStringPrefs(): Promise<Record<string, string>> {

@@ -20,6 +20,7 @@ fs.writeFileSync(
   `export { registerIpcHandlers } from '@main/ipc'
 export { SessionManager } from '@main/session/SessionManager'
 export { collectFileArgs } from '@main/intake'
+export { resolveTranscriptionUrl, loadAsrConfig, transcribeAudio } from '@main/asr'
 export { __invoke, __channels, __events, __reset } from 'electron'
 export { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 `
@@ -101,7 +102,8 @@ const required = [
   'app:info',
   'settings:saveString',
   'intake:import',
-  'message:exportDocx'
+  'message:exportDocx',
+  'asr:transcribe'
 ]
 const missing = required.filter((c) => !channels.includes(c))
 check('preload 用到的通道全部已注册', missing.length === 0, missing.length > 0 ? `缺 ${missing.join(', ')}` : `${channels.length} 个通道`)
@@ -326,6 +328,66 @@ check(
 )
 
 console.log(`\n端侧增强验证：通过 ${passed - passedBefore} 项`)
+
+// ===== 19. 语音输入（ASR）配置解析与端点拼接 =====
+const passedBeforeAsr = passed
+console.log('\n19. 语音输入（ASR）')
+
+// 端点拼接：Base URL 的几种常见写法都要落到 /audio/transcriptions
+const urlCases = [
+  ['https://api.openai.com/v1', 'https://api.openai.com/v1/audio/transcriptions'],
+  ['https://api.openai.com/v1/', 'https://api.openai.com/v1/audio/transcriptions'],
+  ['https://api.openai.com', 'https://api.openai.com/audio/transcriptions'],
+  ['  https://x.example.com/v1/audio/transcriptions  ', 'https://x.example.com/v1/audio/transcriptions']
+]
+for (const [input, want] of urlCases) {
+  const got = mod.resolveTranscriptionUrl(input)
+  check(`端点拼接 ${input.trim()}`, got === want, got)
+}
+check('空 Base URL 返回空', mod.resolveTranscriptionUrl('') === '')
+check('仅斜杠返回空', mod.resolveTranscriptionUrl('///') === '')
+
+// 配置解析：专用偏好优先，缺省回落到多模态配置
+await inv('settings:saveString', 'asr_baseUrl', '')
+await inv('settings:saveString', 'asr_apiKey', '')
+await inv('settings:saveString', 'asr_model', '')
+await inv('settings:saveMultimodalConfig', {
+  baseUrl: 'https://mm.example.com/v1',
+  apiKey: 'mm-key',
+  model: 'glm-4v-flash',
+  preparseEnabled: true
+})
+const cfgFallback = await mod.loadAsrConfig()
+check('转写配置回落到多模态配置', cfgFallback.baseUrl === 'https://mm.example.com/v1' && cfgFallback.apiKey === 'mm-key')
+check('转写模型有默认值', cfgFallback.model === 'whisper-1', cfgFallback.model)
+
+await inv('settings:saveString', 'asr_baseUrl', 'https://asr.example.com/v1')
+await inv('settings:saveString', 'asr_apiKey', 'asr-key')
+await inv('settings:saveString', 'asr_model', 'whisper-large-v3')
+const cfgDedicated = await mod.loadAsrConfig()
+check('专用转写配置优先于多模态配置', cfgDedicated.baseUrl === 'https://asr.example.com/v1' && cfgDedicated.model === 'whisper-large-v3')
+
+// 未配置时必须明确报错
+await inv('settings:saveString', 'asr_baseUrl', '')
+await inv('settings:saveString', 'asr_apiKey', '')
+await inv('settings:saveMultimodalConfig', { baseUrl: '', apiKey: '', model: '', preparseEnabled: false })
+const noConfig = await inv('asr:transcribe', new Uint8Array([1, 2, 3]), 'audio/webm')
+check('未配置转写服务时给出可操作提示', noConfig.ok === false && noConfig.error.includes('尚未配置'), noConfig.error.slice(0, 50))
+
+const emptyAudio = await mod.transcribeAudio(new Uint8Array(0), 'audio/webm')
+check('空录音给出明确错误', emptyAudio.ok === false && emptyAudio.error.includes('没有录到音频'), emptyAudio.error)
+
+// 不可达地址：必须是「可读错误」而不是抛异常
+await inv('settings:saveString', 'asr_baseUrl', 'http://127.0.0.1:9/v1')
+await inv('settings:saveString', 'asr_apiKey', 'k')
+const unreachable = await inv('asr:transcribe', new Uint8Array([1, 2, 3]), 'audio/webm')
+check(
+  '转写服务不可达时返回可读错误而非抛异常',
+  unreachable.ok === false && unreachable.error.length > 0,
+  unreachable.error.slice(0, 60)
+)
+
+console.log(`\n语音输入验证：通过 ${passed - passedBeforeAsr} 项`)
 
 console.log(`\nIPC 验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {

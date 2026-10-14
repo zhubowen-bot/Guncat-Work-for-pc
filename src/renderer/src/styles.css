@@ -731,6 +731,31 @@ select {
   flex: 1;
 }
 
+.composer__mic {
+  font-size: 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  flex: none;
+}
+
+.composer__mic[data-recording='true'] {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.62;
+  }
+}
+
 /* ===== 朗读控制条 ===== */
 
 .speech-bar {

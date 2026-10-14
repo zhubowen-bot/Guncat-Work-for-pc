@@ -35,14 +35,16 @@ pnpm dist         # 打安装包到 release/
 
 ## 验证
 
+一条命令跑完全部：**`pnpm verify`**（= typecheck + build + smoke）。
+
 | 层 | 命令 | 覆盖 |
 | --- | --- | --- |
 | 类型 | `pnpm typecheck` | `src/core`（移植内核）+ `src/main` + `src/preload` + `src/renderer` |
 | 构建 | `pnpm build` | main / preload / renderer 三端产物 |
 | 内核 | `pnpm smoke:core` | 105 项：智能体加载、45 个工具、37 项技能、沙箱工作区、`run_js` 沙箱、数据管道、持久化、三协议端点、**Office 工具链端到端**（生成→读回→算子编辑）、**技能系统工具**、**交互模式全链路**（解析 / `$绑定`重算 / 动作回传 / 状态尾标记 / 表单打包） |
 | 渲染 | `pnpm smoke:render` | 26 项：用 `react-dom/server` 把一份覆盖主要组件的界面程序渲染成 HTML 并逐项断言 |
-| 契约 | `pnpm smoke:ipc` | 43 项：用 electron 替身把渲染进程会调用的**每个 IPC 通道**真实 invoke 一遍（注册完整性、设置往返、会话生命周期、事件推送、越界与目录穿越拒绝、护栏提示、**文件收件**、**导出 Word**） |
-| 全部 | `pnpm smoke` | 上面三套一起跑（174 项） |
+| 契约 | `pnpm smoke:ipc` | 55 项：用 electron 替身把渲染进程会调用的**每个 IPC 通道**真实 invoke 一遍（注册完整性、设置往返、会话生命周期、事件推送、越界与目录穿越拒绝、护栏提示、**文件收件**、**导出 Word**、**语音转写配置与端点拼接**） |
+| 全部 | `pnpm smoke` | 上面三套一起跑（186 项） |
 
 `pnpm smoke` 把风险最高的移植内核拉到纯 Node 下按真实调用链跑一遍，
 并用 esbuild 施加与 `electron.vite.config.ts` **完全相同**的别名规则 ——

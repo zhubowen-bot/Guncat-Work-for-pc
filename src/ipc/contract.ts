@@ -49,7 +49,9 @@ export const INVOKE = {
   /** 端侧增强：文件收件（拖拽 / 系统「打开方式」/ 命令行参数） */
   intakeImport: 'intake:import',
   /** 端侧增强：把一条回答导出为 Word */
-  messageExportDocx: 'message:exportDocx'
+  messageExportDocx: 'message:exportDocx',
+  /** 端侧增强：语音输入（录音 → 转写） */
+  asrTranscribe: 'asr:transcribe'
 } as const
 
 export const EVENT = 'guncat:event'

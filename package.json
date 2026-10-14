@@ -14,6 +14,7 @@
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "verify": "npm run typecheck && npm run build && npm run smoke",
     "smoke": "node scripts/run-smoke.mjs && node scripts/render-check.mjs && node scripts/ipc-check.mjs",
     "smoke:core": "node scripts/run-smoke.mjs",
     "smoke:render": "node scripts/render-check.mjs",

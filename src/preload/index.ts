@@ -114,6 +114,13 @@ const api = {
     pathForFile: (file: File): string => webUtils.getPathForFile(file)
   },
 
+  /** 语音输入（录音 → 转写） */
+  asr: {
+    transcribe(audio: Uint8Array, mime: string): Promise<{ ok: boolean; text: string; error: string }> {
+      return ipcRenderer.invoke(INVOKE.asrTranscribe, audio, mime)
+    }
+  },
+
   /** 订阅主进程事件；返回取消订阅函数 */
   onEvent: (listener: (event: GuncatEvent) => void): (() => void) => {
     const handler = (_e: Electron.IpcRendererEvent, payload: GuncatEvent): void => listener(payload)

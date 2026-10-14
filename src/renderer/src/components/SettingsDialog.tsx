@@ -45,6 +45,9 @@ export function SettingsDialog() {
   const [mmBaseUrl, setMmBaseUrl] = useState('')
   const [mmApiKey, setMmApiKey] = useState('')
   const [mmModel, setMmModel] = useState('')
+  const [asrBaseUrl, setAsrBaseUrl] = useState('')
+  const [asrApiKey, setAsrApiKey] = useState('')
+  const [asrModel, setAsrModel] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -55,6 +58,9 @@ export function SettingsDialog() {
     setMmBaseUrl(settings?.multimodalConfig.baseUrl ?? '')
     setMmApiKey(settings?.multimodalConfig.apiKey ?? '')
     setMmModel(settings?.multimodalConfig.model ?? '')
+    setAsrBaseUrl(settings?.prefs?.asr_baseUrl ?? '')
+    setAsrApiKey(settings?.prefs?.asr_apiKey ?? '')
+    setAsrModel(settings?.prefs?.asr_model ?? '')
   }, [open, settings])
 
   if (!open) {
@@ -75,6 +81,9 @@ export function SettingsDialog() {
         model: mmModel,
         preparseEnabled: settings?.multimodalConfig.preparseEnabled ?? true
       })
+      await window.guncat.settings.saveString('asr_baseUrl', asrBaseUrl)
+      await window.guncat.settings.saveString('asr_apiKey', asrApiKey)
+      await window.guncat.settings.saveString('asr_model', asrModel)
       await reloadSettings()
       pushNotice('info', '设置已保存')
       openSettings(false)
@@ -216,6 +225,48 @@ export function SettingsDialog() {
           <div className="field">
             <label>预解析模型</label>
             <input value={mmModel} onChange={(e) => setMmModel(e.target.value)} />
+          </div>
+
+          <div
+            style={{
+              borderTop: '1px solid var(--border)',
+              margin: '18px 0 14px',
+              paddingTop: 14,
+              fontSize: 12,
+              color: 'var(--text-muted)'
+            }}
+          >
+            语音输入（录音转文字）
+          </div>
+          <div className="field__hint" style={{ marginBottom: 10, marginTop: -6 }}>
+            桌面端没有端侧识别可用，走 OpenAI 兼容的 /audio/transcriptions 接口。
+            留空则复用上面的「多模态预解析」地址与 Key。
+          </div>
+
+          <div className="field">
+            <label>转写 Base URL（可选）</label>
+            <input
+              value={asrBaseUrl}
+              placeholder={mmBaseUrl !== '' ? `默认复用：${mmBaseUrl}` : 'https://api.openai.com/v1'}
+              onChange={(e) => setAsrBaseUrl(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>转写 API Key（可选）</label>
+            <input
+              type="password"
+              value={asrApiKey}
+              placeholder={mmApiKey !== '' ? '默认复用多模态预解析的 Key' : 'sk-…'}
+              onChange={(e) => setAsrApiKey(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>转写模型</label>
+            <input
+              value={asrModel}
+              placeholder="whisper-1"
+              onChange={(e) => setAsrModel(e.target.value)}
+            />
           </div>
         </div>
 
