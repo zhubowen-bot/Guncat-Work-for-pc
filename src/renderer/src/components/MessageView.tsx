@@ -15,7 +15,7 @@ import { APP_ICON_SRC } from './AgentGlyph'
 import { docxFileName } from '../fileName'
 import { useSpeech, speechTextOf } from '../speech/speechStore'
 import { useStore } from '../store'
-import { formatStats } from '../turns'
+import { formatStats, stripMarkdown } from '../turns'
 import {
   IconBrain,
   IconChevronDown,
@@ -145,8 +145,8 @@ export function MessageActions({
       {extra}
       <button
         className="act"
-        title="复制纯文本"
-        onClick={() => copy(text, '已复制')}
+        title="复制纯文本（剥掉 Markdown 标记）"
+        onClick={() => copy(stripMarkdown(text), '已复制')}
       >
         <IconCopy size={14} />
         文本

@@ -1,10 +1,11 @@
-// 消息 → 回合（turn）的重组，以及工具行/统计的展示纯函数。
+﻿// 消息 → 回合（turn）的重组，以及工具行/统计的展示纯函数。
 //
 // 为什么要在渲染层重组（对齐鸿蒙原版 ChatPage.buildWorkTimeline 的注释）：
 //   Agent Loop 的既定结构就是「一个用户请求 → 若干条 assistant 消息」，
 //   每条 assistant 带自己的 toolCalls。下一轮请求的历史由 messages 重建，
 //   把多轮并成一条会让模型看到「一条 assistant 同时调了所有工具」，时序错乱。
 //   所以**数据保持原样，只在渲染层归组**：一个用户请求下的多轮工具/回复是同一个视觉整体。
+import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import type { MessageDto, ToolCallRecordDto } from '@ipc/contract'
 
 export interface Turn {
@@ -92,14 +93,29 @@ export function processTitle(stats: TurnStats): string {
   return parts.join(' · ')
 }
 
-/** 单条回答的统计行：输出速度 + 缓存命中（原版 ChatBubbleView 的统计行口径） */
+/**
+ * 单条回答的统计行。
+ *
+ * 逐字对齐原版 WorkTurnView.buildStatsLine / ChatBubbleView 的统计行：
+ *   「（速度图标）N 字符/秒」 + `缓存命中 N%` + `工具 N 项 · 总耗时`
+ * 三段的出现条件各自独立；速度用 **Math.round**（原版就是整数，不是一位小数），
+ * 缓存命中同样取整；总耗时只累计「正数」的单步耗时（还在跑的那一步不计）。
+ *
+ * 一处有意差异：原版速度前面有一个文字符号前缀，本项目的渲染层禁用符号字符
+ * （统一改用 SVG 图标；见 scripts/check-emoji.mjs），这里就只用文字表达同一件事。
+ */
 export function formatStats(message: MessageDto): string {
   const parts: string[] = []
   if (message.tokenSpeed !== undefined && message.tokenSpeed > 0) {
-    parts.push(`${message.tokenSpeed.toFixed(1)} 字符/秒`)
+    parts.push(`${Math.round(message.tokenSpeed)} 字符/秒`)
   }
   if (message.cacheHitRate !== undefined && message.cacheHitRate >= 0) {
-    parts.push(`缓存命中 ${(message.cacheHitRate * 100).toFixed(0)}%`)
+    parts.push(`缓存命中 ${Math.round(message.cacheHitRate * 100)}%`)
+  }
+  const calls = message.toolCalls ?? []
+  if (calls.length > 0) {
+    const totalMs = calls.reduce((sum, c) => sum + (c.durationMs > 0 ? c.durationMs : 0), 0)
+    parts.push(`工具 ${calls.length} 项 · ${formatDuration(totalMs)}`)
   }
   return parts.join(' · ')
 }
@@ -253,6 +269,31 @@ export function capText(text: string, max: number): string {
     return text
   }
   return `${text.substring(0, max)}…`
+}
+
+/**
+ * 剥掉 Markdown 标记，得到可复制的纯文本。
+ *
+ * 逐字移植原版 ChatViewModel 里的 stripMarkdown：先抽掉界面程序
+ * （否则整份 guncat-ui 程序源码会被当成「正文」复制出去），再去掉代码块、
+ * 行内代码、图片、链接、标题、粗斜体、引用与表格竖线、分割线。
+ */
+export function stripMarkdown(markdown: string): string {
+  let text = GuncatUiParts.plainSummary(markdown)
+  if (text.trim() === '') {
+    text = markdown
+  }
+  text = text.replace(/```[\s\S]*?```/g, '')
+  text = text.replace(/`([^`]+)`/g, '$1')
+  text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+  text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+  text = text.replace(/^#{1,6}\s+/gm, '')
+  text = text.replace(/\*\*([^*]+)\*\*/g, '$1')
+  text = text.replace(/\*([^*]+)\*/g, '$1')
+  text = text.replace(/^>\s?/gm, '')
+  text = text.replace(/\|/g, '')
+  text = text.replace(/^-{3,}$/gm, '')
+  return text.trim()
 }
 
 export interface ToolStatus {

@@ -328,7 +328,7 @@ check(
 )
 check('最终答复取回合里最后一条 assistant', mod.groupTurns(MESSAGES)[0].rounds.at(-1).content === '最终答复')
 
-check('统计行：输出速度与缓存命中', mod.formatStats(MESSAGES[3]) === '12.3 字符/秒 · 缓存命中 50%', mod.formatStats(MESSAGES[3]))
+check('统计行：输出速度与缓存命中', mod.formatStats(MESSAGES[3]) === '12 字符/秒 · 缓存命中 50%', mod.formatStats(MESSAGES[3]))
 check('统计行：无数据时为空串', mod.formatStats(MESSAGES[5]) === '')
 check('耗时：小于一秒用 ms', mod.formatDuration(320) === '320ms')
 check('耗时：大于一秒用 s', mod.formatDuration(2400) === '2.4s')
@@ -407,7 +407,68 @@ check(
   (shell.match(/thinking__head/g) ?? []).length === 1
 )
 check('最终答复是主体并带操作行', shell.includes('这是最终答复') && shell.includes('重答'))
-check('统计行口径与原版一致（字符/秒 + 缓存命中）', shell.includes('20.0 字符/秒') && shell.includes('缓存命中 50%'))
+check('统计行口径与原版一致（整数 字符/秒 + 缓存命中）', shell.includes('20 字符/秒') && shell.includes('缓存命中 50%'))
+check(
+  '统计行带「工具 N 项 · 总耗时」（原版 buildStatsLine 的第三段）',
+  mod.formatStats({
+    id: 'm',
+    role: 'assistant',
+    content: '',
+    displayContent: '',
+    reasoning: '',
+    createdAt: 0,
+    tokenSpeed: 18.6,
+    cacheHitRate: 0.5,
+    attachments: [],
+    toolCalls: [
+      { id: 't1', name: 'read_file', argsJson: '{}', result: '', status: 'ok', startedAt: 0, finishedAt: 0, durationMs: 320, diff: '' },
+      { id: 't2', name: 'write_file', argsJson: '{}', result: '', status: 'ok', startedAt: 0, finishedAt: 0, durationMs: 1200, diff: '' }
+    ]
+  }) === '19 字符/秒 · 缓存命中 50% · 工具 2 项 · 1.5s',
+  mod.formatStats({
+    id: 'm',
+    role: 'assistant',
+    content: '',
+    displayContent: '',
+    reasoning: '',
+    createdAt: 0,
+    tokenSpeed: 18.6,
+    cacheHitRate: 0.5,
+    attachments: [],
+    toolCalls: [
+      { id: 't1', name: 'read_file', argsJson: '{}', result: '', status: 'ok', startedAt: 0, finishedAt: 0, durationMs: 320, diff: '' },
+      { id: 't2', name: 'write_file', argsJson: '{}', result: '', status: 'ok', startedAt: 0, finishedAt: 0, durationMs: 1200, diff: '' }
+    ]
+  })
+)
+check(
+  '总耗时只累计已完成的单步（还在跑的那一步 durationMs<0 不计）',
+  mod.formatStats({
+    id: 'm',
+    role: 'assistant',
+    content: '',
+    displayContent: '',
+    reasoning: '',
+    createdAt: 0,
+    tokenSpeed: -1,
+    cacheHitRate: -1,
+    attachments: [],
+    toolCalls: [
+      { id: 't1', name: 'read_file', argsJson: '{}', result: '', status: 'ok', startedAt: 0, finishedAt: 0, durationMs: 500, diff: '' },
+      { id: 't2', name: 'write_file', argsJson: '{}', result: '', status: 'running', startedAt: 0, finishedAt: 0, durationMs: -1, diff: '' }
+    ]
+  }) === '工具 2 项 · 500ms'
+)
+check(
+  '复制纯文本会剥掉 Markdown 标记（「文本」与「MD」两个按钮语义不同）',
+  mod.stripMarkdown('## 标题\n\n**粗体**与 `代码` 和 [链接](https://x)') === '标题\n\n粗体与 代码 和 链接',
+  JSON.stringify(mod.stripMarkdown('## 标题\n\n**粗体**与 `代码` 和 [链接](https://x)'))
+)
+check(
+  '剥 Markdown 时图片与围栏代码块整段丢弃（否则会把源码/图片地址复制出去）',
+  !mod.stripMarkdown('前\n\n```\ncode\n```\n\n后').includes('code') &&
+    !mod.stripMarkdown('前\n\n![图](a.png)\n\n后').includes('a.png')
+)
 
 // --- 交互模式：整个回合收进一条活动折叠栏 ---
 const groupedShell = mod.renderGroupedTurn(false)
