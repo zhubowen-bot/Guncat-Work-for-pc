@@ -32,7 +32,13 @@ const dir = path.join(root, '.smoke')
 fs.mkdirSync(dir, { recursive: true })
 
 const entry = path.join(dir, 'startup-entry.ts')
-fs.writeFileSync(entry, `export * from '@main/index'\nexport * from 'electron'\n`)
+fs.writeFileSync(
+  entry,
+  `export * from '@main/index'
+export * from 'electron'
+export { buildCompatArgs, isSafeModeRequested, COMPAT_ARGS } from '@main/compat'
+`
+)
 
 // 关键：测试包必须落在与生产**同一层级**，因为 window.ts 用
 // `path.join(__dirname, '../preload/index.mjs')` 解析 preload/preload 与 renderer。
@@ -156,6 +162,19 @@ check(
 const channels = stub.__channels()
 check('IPC 通道已注册', channels.length >= 24, `${channels.length} 个`)
 check('渲染进程需要的核心通道都在', ['settings:load', 'agents:list', 'conversations:load', 'chat:send'].every((c) => channels.includes(c)))
+
+// --- 自动降级：参数拼装（这段一旦错，自愈会静默失效，用户只看得到白屏） ---
+// 用户机器上实测：只有带上这组参数渲染进程才起得来。
+const built = stub.buildCompatArgs(['C:\\app\\Guncat Work.exe', '--enable-logging', '--gdi'])
+check('降级参数包含 --no-sandbox', built.includes('--no-sandbox'))
+check('降级参数包含 --disable-gpu', built.includes('--disable-gpu'))
+check('降级参数包含 --disable-software-rasterizer', built.includes('--disable-software-rasterizer'))
+check('降级参数带上全新配置目录标记', built.includes('--guncat-fresh-profile'))
+check('降级时保留原有参数（不丢应用路径/日志开关）', built.includes('--enable-logging') && built.includes('--gdi'))
+check('降级时去掉 argv[0]（可执行文件路径不能当参数传）', !built.some((a) => a.includes('.exe')))
+check('重复降级不会叠加参数', stub.buildCompatArgs(['x'].concat(built)).length === built.length)
+check('命令行能识别兼容模式标记', stub.isSafeModeRequested(['x', '--guncat-safe-mode']))
+check('没有标记时不误判', !stub.isSafeModeRequested(['x', '--gdi']))
 
 // --- 数据目录 ---
 check('数据目录已创建', fs.existsSync(dataRoot))

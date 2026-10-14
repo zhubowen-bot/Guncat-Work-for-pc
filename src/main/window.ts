@@ -21,6 +21,8 @@ const __dirname: string = path.dirname(fileURLToPath(import.meta.url))
 
 /** 诊断模式：只用一张内联页面，判断故障发生在渲染进程还是界面产物加载 */
 export const DIAG_MODE: boolean = process.argv.includes('--guncat-diag')
+/** 兼容模式（禁用渲染沙箱与 GPU）：这台机器上唯一能让渲染进程起来的配置 */
+export const COMPAT_MODE: boolean = process.argv.includes('--guncat-safe-mode')
 
 function diagPageUrl(): string {
   const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
@@ -155,7 +157,8 @@ export function createMainWindow(): BrowserWindow {
     show: true,
     autoHideMenuBar: true,
     backgroundColor: '#f5f5f7',
-    title: 'Guncat Work',
+    // 兼容模式下注明，免得用户以为界面卡顿是程序本身的问题（其实是软件渲染）
+    title: COMPAT_MODE ? 'Guncat Work（兼容模式）' : 'Guncat Work',
     icon: resolveIcon(),
     webPreferences: {
       preload: preloadPath,

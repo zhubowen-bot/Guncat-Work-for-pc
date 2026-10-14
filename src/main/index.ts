@@ -6,6 +6,8 @@
 // 每个里程碑都写一行启动日志（见 bootlog.ts）：一旦用户机器上「启动即退」，
 // 日志能指出它走到了哪一步，而不是只有「打不开」。
 import { app, BrowserWindow, dialog } from 'electron'
+import fs from 'node:fs'
+import path from 'node:path'
 import { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 import { registerElectronPicker } from './picker'
 import { registerIpcHandlers } from './ipc'
@@ -13,31 +15,78 @@ import { collectFileArgs } from './intake'
 import { SessionManager } from './session/SessionManager'
 import { createMainWindow, getMainWindow, rendererDir, setPendingFlush, setRendererStalledHandler, showLoadError } from './window'
 import { serveRenderer, registerAppScheme } from './protocol'
+import { buildCompatArgs, SAFE_MODE_FLAG, FRESH_PROFILE_FLAG } from './compat'
 import { resolveAppPaths } from './paths'
 import { bootLog, bootLogPath, bootLogTail, bootFail, installCrashHandlers } from './bootlog'
 import type { GuncatEvent } from '../ipc/contract'
 
 /**
- * 安全模式。
+ * 安全模式与自动降级。
  *
- * 真实事故：应用能启动、窗口能显示，但渲染进程在 did-start-loading 之后就再没有任何事件，
- * 页面永远停在加载占位页或一片空白。这种「不报错、不崩溃、就是不动」的形态，
- * 在 Windows 上通常是 Chromium 的 GPU 进程或沙箱初始化卡住。
+ * 实测结论（用户机器）：只有带上
+ *   --no-sandbox --disable-gpu --disable-software-rasterizer
+ * 并以管理员身份运行时，渲染进程才起得来。
+ * 不带这些参数时：主进程一路正常（路径、协议、IPC、窗口全部就绪），
+ * 渲染进程发出 did-start-loading 后就没有下文，约 10 秒后主进程触发致命 CHECK 终止。
  *
- * 与其让用户去琢磨加什么启动参数，不如让它自愈：
- * 正常启动若在超时内没就绪，就自动带上安全模式参数重启一次。
+ * 所以不该要求用户每次手动带参数、更不该要求管理员权限，而是让它自己降级：
+ *   正常启动 → 渲染进程超时未就绪 → 带真实 Chromium 参数自动重启（并换干净的 profile）
+ * 之后每次启动都直接走这条路（记在标记文件里），不必再白等一次超时。
  */
-const SAFE_MODE_FLAG = '--guncat-safe-mode'
-const safeMode: boolean = process.argv.includes(SAFE_MODE_FLAG)
+
+/** 曾经靠兼容参数起来过就记下来，下次直接照做 */
+function compatMarkerPath(base: string): string {
+  return path.join(base, 'safe-mode.marker')
+}
+
+/**
+ * 降级后使用独立的用户数据目录（<原目录>-compat）。
+ * 理由：反复崩溃会在原目录里留下半初始化的 Chromium 状态（GPUCache / Dawn* 等），
+ * 那本身就可能让下一次启动继续崩 —— 换个干净目录才能打破这个循环。
+ */
+function applyCompatProfile(fresh: boolean): void {
+  const base: string = app.getPath('userData')
+  const compat: string = `${base}-compat`
+  if (fresh) {
+    try {
+      fs.rmSync(compat, { recursive: true, force: true })
+    } catch {
+      // 删不掉就用现有的
+    }
+  }
+  app.setPath('userData', compat)
+}
+
+const freshProfile: boolean = process.argv.includes(FRESH_PROFILE_FLAG)
+
+// 先决定是否走兼容参数：命令行显式要求，或上次留下的标记
+let safeMode: boolean = process.argv.includes(SAFE_MODE_FLAG)
+if (!safeMode) {
+  try {
+    if (fs.existsSync(compatMarkerPath(app.getPath('userData')))) {
+      safeMode = true
+    }
+  } catch {
+    // 读不到就当没有
+  }
+}
 
 if (safeMode) {
+  // 真参数走命令行（见下 relaunch），这里再在进程内加一道，
+  // 覆盖「靠标记文件直接进安全模式」这条没有命令行参数的路径
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('no-sandbox')
   app.commandLine.appendSwitch('disable-gpu')
   app.commandLine.appendSwitch('disable-gpu-compositing')
   app.commandLine.appendSwitch('disable-software-rasterizer')
-  // 某些受限会话里 GPU 进程会拖住整个渲染，直接禁用比让它超时更快
   app.commandLine.appendSwitch('disable-gpu-watchdog')
+  applyCompatProfile(freshProfile)
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true })
+    fs.writeFileSync(compatMarkerPath(app.getPath('userData')), '1')
+  } catch {
+    // 记不下来就每次重新降级，功能不受影响
+  }
 }
 
 // app:// 必须在 app ready 之前登记为特权协议
@@ -47,7 +96,7 @@ bootLog('=== Guncat Work 启动 ===')
 bootLog(`argv: ${process.argv.join(' ')}`)
 bootLog(`electron=${process.versions.electron} node=${process.versions.node} chrome=${process.versions.chrome}`)
 bootLog(`平台=${process.platform} 打包态=${app.isPackaged}`)
-bootLog(`安全模式=${safeMode}`)
+bootLog(`兼容模式=${safeMode} 全新配置目录=${freshProfile}`)
 bootLog(`日志文件: ${bootLogPath()}`)
 
 /** 待收件的外部文件（窗口还没就绪时先攒着，页面加载完再推） */
@@ -164,13 +213,11 @@ if (!app.requestSingleInstanceLock()) {
           }
           return
         }
-        bootLog('→ 自动以安全模式重启（关闭硬件加速、禁用 GPU 与沙箱）')
-        // 保留原有参数（开发态 argv[1] 是应用目录，不能丢），只去掉重复的安全模式标记
-        const args: string[] = process.argv
-          .slice(1)
-          .filter((a: string) => a !== SAFE_MODE_FLAG)
-          .concat([SAFE_MODE_FLAG])
-        app.relaunch({ args })
+        bootLog('→ 自动以兼容模式重启（禁用渲染沙箱 / GPU，并换用干净的用户数据目录）')
+        // 关键：把**真实 Chromium 参数**作为命令行传过去，而不是只传自己的标记。
+        // 这正是用户机器上唯一验证成功的那组参数；只靠进程内 appendSwitch 不可靠
+        // （沙箱相关开关在进程启动早期就被读取）。
+        app.relaunch({ args: buildCompatArgs(process.argv) })
         app.exit(0)
       })
 
