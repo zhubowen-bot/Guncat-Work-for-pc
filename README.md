@@ -3,35 +3,61 @@
 > 鸿蒙版 [Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos) 的桌面移植 ——
 > 用 **Electron + React + TypeScript** 复刻的 Agent Harness 客户端。
 
+## 怎么启动
+
+### 给用户：双击就能开
+
+打包一次，然后把整个文件夹拷给对方，**双击里面的 `Guncat Work.exe` 即可**，
+不需要装 Node、不需要命令行：
+
+```bash
+pnpm install
+pnpm dist          # 产出 release/Guncat Work/
+```
+
+产物：
+
+```
+release/Guncat Work/
+├── Guncat Work.exe      ← 双击这个
+├── 使用说明.txt
+└── resources/           ← 应用代码 + 随包资源（不要单独移动）
+```
+
+首次打开后，点左下角「设置」填入接入方式、Base URL、API Key 与模型，即可开始对话。
+数据（对话历史、沙箱工作区、配置）存在 `%APPDATA%\Guncat Work`，不在程序目录里。
+
+### 给开发：改代码即时生效
+
+```bash
+pnpm install
+pnpm dev           # 主进程 + 渲染进程热更新
+```
+
 ## 两个形态
 
 | 形态 | 对标 | 说明 |
 | --- | --- | --- |
 | ✦ **交互模式** | GPT 的 Intelligent UI | 一句话直出可操作界面，默认零工具调用、一轮渲染，控件取值即时重算 |
 | 🛠 **工作模式** | DeepSeek Harness | 多轮工具循环 + 每会话独立沙箱工作区，长程任务自主执行 |
+| 聊天模式 | — | 纯对话，不带沙箱工作区 |
 
 ## 技术栈
 
-- **桌面外壳**：Electron 38
+- **桌面外壳**：Electron 38（应用代码用 vite 全量打进 `out/`，产物**没有运行时 node_modules**）
 - **界面**：React 19 + TypeScript + Vite（electron-vite）
 - **业务内核**：从鸿蒙版**逐字移植**的 TypeScript（约 3.5 万行），平台依赖通过 `@kit.*` 别名替换
-- **打包**：electron-builder
+- **打包**：自带的 `scripts/package-portable.mjs`（见下方「关于打包」）
 
-## 快速开始
+### 关于打包
 
-```bash
-pnpm install
-pnpm dev          # 开发模式（主进程 + 渲染进程热更新）
-pnpm typecheck    # 类型检查（core / main / renderer）
-pnpm build        # 构建产物到 out/
-pnpm smoke        # 无头冒烟验证（44 项，覆盖移植过来的业务内核）
-pnpm dist         # 打安装包到 release/
-```
+`pnpm dist` 用的是仓库自带的组装脚本，而不是 electron-builder。原因很具体：
+本机的 pnpm 依赖收集器拿不到 `pnpm list --json` 的输出，electron-builder 会在打包中途
+报 `No JSON content found in output`。而本应用的运行时代码已被 vite 全部打进 `out/`，
+**打包时本来就没有 node_modules 需要收集** —— 那一步是多余的。
+自带的脚本按 Electron 标准应用目录结构直接组装，结果更可控也更快。
 
-首次启动后在左下角「设置」里配置接入方式、Base URL、API Key 与模型。
-
-> 首次 `pnpm install` 后若 Electron 二进制未下载成功（受限网络环境常见），
-> 可手动执行：`cd node_modules/electron && node --use-system-ca install.js`
+`electron-builder.yml` 保留在仓库里，供将来需要**签名安装包 / 自动更新**时使用。
 
 ## 验证
 

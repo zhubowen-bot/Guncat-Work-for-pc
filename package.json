@@ -20,23 +20,10 @@
     "smoke:render": "node scripts/render-check.mjs",
     "smoke:ipc": "node scripts/ipc-check.mjs",
     "dump:components": "node scripts/dump-components.mjs",
-    "package": "electron-vite build && electron-builder --dir",
-    "dist": "electron-vite build && electron-builder"
+    "dist": "electron-vite build && node scripts/package-portable.mjs",
+    "dist:dir": "node scripts/package-portable.mjs"
   },
-  "dependencies": {
-    "electron-updater": "^6.6.2",
-    "fast-xml-parser": "^5.2.5",
-    "fflate": "^0.8.2",
-    "katex": "^0.16.22",
-    "mermaid": "^11.12.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "react-markdown": "^10.1.0",
-    "rehype-katex": "^7.0.1",
-    "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0",
-    "zustand": "^5.0.8"
-  },
+  "//dependencies": "本应用的运行时代码全部由 vite 打进 out/，因此没有 runtime dependencies —— 这也是 electron-builder 能干净出包的前提。下面这些包只参与构建。",
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.2",
@@ -46,7 +33,16 @@
     "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.1",
     "esbuild": "^0.28.2",
+    "fflate": "^0.8.2",
+    "katex": "^0.16.22",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "typescript": "^5.9.3",
-    "vite": "^7.1.14"
+    "vite": "^7.1.14",
+    "zustand": "^5.0.8"
   }
 }
