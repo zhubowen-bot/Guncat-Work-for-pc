@@ -129,7 +129,7 @@ export class SubagentService {
 
   // 子代理工具面: 从全量工具定义中排除自身(防递归)与交互/调度类(无宿主通道)
   private static excludedTools(): string[] {
-    return ['subagent', 'ask_user_question',
+    return ['subagent',
       'schedule_create', 'schedule_delete', 'schedule_list',
       'goal_create', 'goal_update', 'todo_write'];
   }

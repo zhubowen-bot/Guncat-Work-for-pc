@@ -1,16 +1,16 @@
 ---
 name: ppt
-description: 用 Deck JSON 制作与编辑 PPT（write_pptx / read_ppt / edit_ppt）。V3：全量加载所有 reference、新建前 ask_user_question 前置提问、默认 20+ 页、每页 SVG 装饰、强制自检报告。
+description: 用 Deck JSON 制作与编辑 PPT（write_pptx / read_ppt / edit_ppt）。V3：全量加载所有 reference、本平台无提问界面（不得调用 ask_user_question，新建前直接采用最合理默认假设并在最终总结集中说明）、默认 20+ 页、每页 SVG 装饰、强制自检报告。
 ---
 
 # PPT 制作与编辑（V3）
 
-本文是 PPT 技能的总入口与流程主线。**V3 把“文档”改成“门”**：全量加载、前置提问、篇幅下限、每页装饰、自检报告都是不可跳过的硬门，均有可核对产出物。**对外契约不变**：仍只通过 `write_pptx(path, deck | deck_file | outline, theme?, title?)`、`read_ppt(path)`、`edit_ppt(path, ops)` 完成制作、读取与编辑。
+本文是 PPT 技能的总入口与流程主线。**V3 把“文档”改成“门”**：全量加载、默认假设、篇幅下限、每页装饰、自检报告都是不可跳过的硬门，均有可核对产出物。**对外契约不变**：仍只通过 `write_pptx(path, deck | deck_file | outline, theme?, title?)`、`read_ppt(path)`、`edit_ppt(path, ops)` 完成制作、读取与编辑。
 
 ## 0. TL;DR 铁律（优先级最高，冲突时以本节为准）
 
 1. **[铁律] 每次接到新 PPT 指令或新附件后，第一个工具调用必须是 `load_skill("ppt")` 全量加载**。`load_skill("ppt")` 会一次返回 SKILL.md + 全部 reference（deck-dsl / design-guide / themes / visual-styles / deck-blueprints / visual-components / style-guidelines / troubleshooting）。禁止只读 SKILL.md 后挑读 reference，禁止跳过、中途截断或凭记忆继续。
-2. **[铁律] 新建演示文稿（工作流 A）在动手生成前，必须先调用 `ask_user_question` 做一次前置提问**：目的/受众、篇幅、风格、素材、硬约束一次问全。用户已提供全部关键信息或明确说“不用问/直接做”时才能跳过，且必须在最终总结记录假设。
+2. **[铁律] 新建演示文稿（工作流 A）在动手生成前不得调用 `ask_user_question`**：本平台没有向用户提问的界面，用户不会作答，调用只会拿到一条“不可用”的结果。请按 §3 的维度**直接采用最合理的默认假设**（目的/受众、篇幅、风格、素材、硬约束），并在最终总结里集中说明这些假设。
 3. **[铁律] 用户未提供篇幅时，默认 24~30 页，任何情况下不得少于 20 页**（除非用户明确指定更少）。用户给了逐页大纲则对齐其页数；给了文档/主题则按内容量扩到 20 页以上。
 4. **[铁律] 每一页必须有视觉装饰 + 内容配图，禁止纯色背景+纯文字**。**装饰**：每页有装饰性 SVG 或纹理背景（`background.image` / custom 元素），封面/分节/结尾页也有设计母题。**配图**：每页必须有至少一个“内容性视觉”——流程图、时间轴、架构图、对比图、简单插画、信息图、数据可视化等，不能只有小图标或角标。纯要点页必须把一部分要点转成流程图、时间线或示意图。全册统一风格，双色以上混搭，禁止裸用 8 套纯色预设。
 5. **[铁律] 交付前必须产出可核对的自检报告**：用 `read_ppt` 逐页回读核对，写入 `ppt_qa_report.md`，并在最终总结附 `## PPT 交付自检报告` 摘要。没有报告不视为完成。
@@ -27,7 +27,7 @@ description: 用 Deck JSON 制作与编辑 PPT（write_pptx / read_ppt / edit_pp
 **冲突裁决程序（出现规则打架时按此顺序，不自行选阻力最小路径）**：
 
 1. 用户当前明确指令 > 用户历史明确指令 > 模板/品牌规范 > 本技能铁律 > 强规则 > 建议 > 软参考。
-2. “默认不打断”与“不确定项一次问清”冲突时：**新建 PPT 走“前置提问门”（铁律），编辑/读取走“不打断”**；两者按场景路由分流，不并存。
+2. “默认不打断”与“不确定项处理”冲突时：**一律不向用户提问**——新建 PPT 走“默认假设门”（§3）取最合理默认值，编辑/读取按保守、少改动的方向处理；所有假设集中写进最终总结。
 3. “每页都有装饰”与“装饰不凑数/不加无关配图”冲突时：装饰必须是**与选定视觉风格一致、有语义或纯装饰但克制的 SVG 母题**；不能为了凑装饰放无关照片或乱加元素。
 4. “内容要丰富 20+ 页”与“信息密度/不注水”冲突时：用拆页、每节多页、案例/数据/图表/对比/问答/行动页来撑内容，禁止复制粘贴相同要点或空话扩页。
 
@@ -47,11 +47,11 @@ description: 用 Deck JSON 制作与编辑 PPT（write_pptx / read_ppt / edit_pp
 - **禁止**：只读 SKILL.md 后说“参考文件按需读”；禁止用 `load_skill("ppt","reference/xxx.md")` 替代全量加载（个别文件可在全量之后用于精读，但不能代替）。
 - 生成 SVG 装饰时还需 `load_skill("svg")`，按 svg 技能规范写 SVG 并 `view_image` 预览。
 
-## 3. 前置提问门（新建演示文稿，硬门）
+## 3. 默认假设门（新建演示文稿，硬门）
 
-**新建 PPT 前必须调用一次 `ask_user_question`**，把下列问题合并为一次提问（不要挤牙膏）。由于 `ask_user_question` 是单问题工具，请把 5 项合并为一段 question 文本；`options` 可提供风格/篇幅候选，但不要拆成多次提问。
+**本平台没有向用户提问的界面，不得调用 `ask_user_question`**（该工具已停用，调用只会得到一条“不可用”的结果）。新建 PPT 前，自己按下表为每一项选定最合理的默认值后继续动手，并在最终总结里集中说明选定的假设。
 
-| # | 问题 | 选项/示例 | 默认假设（用户取消回答时用） |
+| # | 需要定的事 | 选项/示例 | 默认假设（无人可问时直接用） |
 |---|---|---|---|
 | 1 | 这份 PPT 的**目的与受众/场景**是什么？ | 经营汇报 / 融资路演 / 技术分享 / 培训 / 产品发布 / 品牌故事 / 学术答辩 / 其他 | 按主题合理推断，总结中说明 |
 | 2 | **篇幅**大约多少页？ | 20 页左右（推荐）/ 25~30 页 / 30~40 页 / 用户自定义 | **24~30 页，且不少于 20 页** |
@@ -59,8 +59,8 @@ description: 用 Deck JSON 制作与编辑 PPT（write_pptx / read_ppt / edit_pp
 | 4 | 有没有**素材/文档/数据/模板/图片**需要我使用？ | 有（列出路径）/ 没有 | 用工作区已有资料 + 合理推断，禁止编造数据 |
 | 5 | 有没有**硬约束**（必须包含/不能出现/品牌色/模板）？ | 自由填写 | 无 |
 
-- 用户已经提供了以上全部信息，或明确说“不要问，直接做”，可跳过提问，但必须在最终总结写“采用假设：目的/受众/篇幅/风格”。
-- **编辑已有 PPT、读取分析、模板保真场景不触发前置提问**；只有真正影响方向的硬阻塞（附件打不开、意图矛盾）才问。
+- 用户已经提供了上述信息时按用户信息执行；缺失项按上表默认值补齐，并在最终总结写“采用假设：目的/受众/篇幅/风格”。
+- 只有附件打不开、需求自相矛盾这类硬阻塞，才在最终交付里如实说明并给出替代方案——同样不要停下来等回答。
 
 ## 4. 场景路由
 
@@ -81,7 +81,7 @@ description: 用 Deck JSON 制作与编辑 PPT（write_pptx / read_ppt / edit_pp
 | `read_ppt(path)` | 读回 Deck JSON 源（自家文件无损；外来文件近似导入） |
 | `edit_ppt(path, ops)` | 结构化编辑已有 .pptx（增删页/改内容/换主题/全文替换） |
 | `write_svg(path, svg, width?)` | 生成装饰 SVG/图标/示意图；`write_pptx` 可直接引用 `.svg` |
-| `ask_user_question` | 新建 PPT 前置提问（见 §3） |
+| （已停用） | `ask_user_question` 在本平台不可用：没有向用户提问的界面，新建 PPT 一律按 §3 直接采用默认假设 |
 
 图片来源只能是：工作区已有文件（用户上传、`pdf_to_images` 的 `pdf_images/` 产物）、data URL 或 http(s) 链接。`.svg` 文件可直接引用（导出时自动栅格化）；需要照片级素材用 `download_file` 下载到工作区；需要图标/示意图用 `write_svg` 生成（见 svg 技能）。**禁止编造不存在的图片路径**——先用 list_files 确认。
 
@@ -96,10 +96,10 @@ description: 用 Deck JSON 制作与编辑 PPT（write_pptx / read_ppt / edit_pp
 
 ## 7. 工作流 A：新建演示文稿
 
-**核心顺序：全量加载 → 前置提问 → 理解需求 → 选定设计系统 → 收集素材 → 规划页面/篇幅 → 制作装饰 SVG → 写 Deck JSON → 生成 → 回读 → 写自检报告 → 交付。**
+**核心顺序：全量加载 → 定默认假设 → 理解需求 → 选定设计系统 → 收集素材 → 规划页面/篇幅 → 制作装饰 SVG → 写 Deck JSON → 生成 → 回读 → 写自检报告 → 交付。**
 
 1. **全量加载**：`load_skill("ppt")`（§2）。如要生成装饰 SVG，同时 `load_skill("svg")`。
-2. **前置提问**：`ask_user_question`（§3）。收到回答后确定目的、受众、页数、风格、素材、硬约束。
+2. **定默认假设**：本平台不得调用 `ask_user_question`（§3），按默认假设门直接定下目的、受众、页数、风格、素材、硬约束，并在最终总结集中说明。
 3. **理解需求**：确定目的、受众、页数、风格倾向、输入类型（仅主题 / 完整文档 / 逐页大纲讲稿）。用户给了逐页大纲则对齐其页数；只给主题或长文档时按内容量推测合理页数并说明理由。**默认页数：24~30 页，下限 20 页**。
 4. **选定设计系统**：全量加载已包含设计文档。先看 `reference/visual-styles.md` 选**视觉风格**（科技/古风/简约/杂志/商务/学术/路演等），再看 `reference/themes.md` 选主题并叠加 `themeOverride` 双色以上混搭；按 `reference/design-guide.md` 定版式纪律。**选定后，配色、纹理、装饰、字体、留白、版式、图片密度等所有视觉决策全程遵守这套系统，不中途混入冲突风格**。用户已给品牌/配色/字体/参考风格时，以用户为准。
 5. **收集素材**：完整阅读用户上传/提供的附件，图片、表格、公式里的信息不能只靠纯文本抽取；关键数字、图表、截图要保留原始信息，可缩放适配排版，但**不做裁剪**。需要真实图片时用工作区文件/下载/SVG；**禁止编造数据与图片路径**，所有外部来源记下出处。
@@ -188,7 +188,7 @@ description: 用 Deck JSON 制作与编辑 PPT（write_pptx / read_ppt / edit_pp
 | … | … | … | … | … | … | PASS |
 ## 硬门核对
 - [ ] load_skill("ppt") 已全量加载（SKILL.md + 8 个 reference）？
-- [ ] 新建前 ask_user_question 已调用，或已记录用户已提供全部信息？
+- [ ] 未调用 ask_user_question，新建前按 §3 选定的默认假设已写入最终总结？
 - [ ] 页数 ≥ 20（或用户明确指定更少）？
 - [ ] 每页都有装饰性 SVG/纹理，无纯色背景+文字？
 - [ ] 每页都有内容配图（流程图/时间轴/架构图/对比图/插画/信息图），非纯文字页？
@@ -240,7 +240,7 @@ description: 用 Deck JSON 制作与编辑 PPT（write_pptx / read_ppt / edit_pp
 |---|---|---|
 | V3：规则分级（铁律/强规则/建议/软参考）与冲突裁决程序 | `qwenwork/skills/pptx/SKILL.md` + 用户反馈的结构性问题 | 把 100+ 条规则分级，明确 TL;DR 铁律；冲突不再交给 agent 自行选择 |
 | V3：全量加载门（load_skill("ppt") 一次加载全部 reference） | `doubao/skills/ppt/SKILL.md` 权威经验 #3 | “技能中的所有文档都必须完整读完，尾部有重要信息，不要中途截断”移植为强制门 |
-| V3：新建前 ask_user_question 前置提问 | `workbuddy/experts/humanize-ppt-team/skills/guizang-ppt-skill/SKILL.md` Step 1 | 需求澄清“动手前必做”，6 问清单适配为 5 问（目的/篇幅/风格/素材/硬约束） |
+| V3：新建前默认假设门（本平台无提问界面，不调用 ask_user_question） | `workbuddy/experts/humanize-ppt-team/skills/guizang-ppt-skill/SKILL.md` Step 1 | 需求澄清“动手前必做”，改为自己取最合理默认值（目的/篇幅/风格/素材/硬约束）并在最终总结集中说明 |
 | V3：默认 20 页以上篇幅 | `workbuddy/experts/humanize-ppt-team/skills/guizang-ppt-skill/SKILL.md` Step 1 + 用户反馈 | 15 分钟≈10 页/30 分钟≈20 页/45 分钟≈25-30 页；本环境默认 24~30 页、下限 20 页 |
 | V3：每页 SVG 装饰、禁止纯色默认模板、视觉风格目录 | `workbuddy/official_experts/plugins/pptx/SKILL.md` Design Ideas + `workbuddy/experts/humanize-ppt-team/skills/guizang-ppt-skill/SKILL.md` | “Every slide needs a visual element / Don't create boring slides / Pick a bold palette / Commit to a visual motif”适配到 Deck JSON 的 background.image 与 custom |
 | V3.1：每页内容配图（流程图/时间轴/架构图/对比图/插画/信息图） | `workbuddy/experts/humanize-ppt-team/skills/guizang-ppt-skill/SKILL.md` + `qwenwork/skills/pptx/visual-directions.md` + 用户反馈 | 纯文字页必须把一部分内容转成图；配图与装饰分离，`image-text`/`custom` 放内容配图，`background.image` 放纹理/母题 |
