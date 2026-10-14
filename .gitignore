@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# electron / electron-builder download caches (large binaries, machine-local)
+.electron-cache/
+.electron-builder-cache/
+
+# build output
+out/
+dist/
+release/
+*.tsbuildinfo
+
+# logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# runtime data / sandbox workspaces
+.guncat-data/
+workspaces/
+
+# editor / os
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# local env
+.env
+.env.local
+.env.*.local
