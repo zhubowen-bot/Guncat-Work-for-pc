@@ -1544,8 +1544,66 @@ select {
   color: var(--text);
 }
 
-.composer__mic[data-recording='true'] {
-  color: #fff;
+/* 附件入口（聊天模式）：与麦克风同规格的圆形按钮 */
+.composer__clip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 22px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+  flex: none;
+}
+
+.composer__clip:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.composer__clip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 已选附件的预览带（原版输入区就是这一条） */
+.composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 800px;
+  margin: 0 auto 8px;
+}
+
+.composer__attachments .attachment {
+  max-width: 260px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+
+.attachment__size {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.attachment__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--text-faint);
+  padding: 2px;
+  border-radius: 8px;
+}
+
+.attachment__del:hover {
+  color: var(--danger);
+  background: var(--bg-sunken);
+}
+
+.composer__mic[data-recording='true'] {  color: #fff;
   background: var(--danger);
   border-color: var(--danger);
   animation: mic-pulse 1.2s ease-in-out infinite;

@@ -63,7 +63,7 @@ interface State {
   setWebSearch(value: boolean): void
   openSettings(open: boolean): void
   reloadSettings(): Promise<void>
-  send(text: string): Promise<void>
+  send(text: string, attachmentPaths?: string[]): Promise<void>
   /** 重新生成最后一条回答 */
   regenerate(): Promise<void>
   /** 交互模式：把界面控件的绑定值写回消息并持久化 */
@@ -365,7 +365,7 @@ export const useStore = create<State>((set, get) => {
       set({ settings })
     },
 
-    async send(text) {
+    async send(text, attachmentPaths) {
       let activeId = get().activeId
       if (activeId === null) {
         const conv = await get().createConversation()
@@ -377,7 +377,9 @@ export const useStore = create<State>((set, get) => {
         text,
         mode,
         thinkingEnabled: get().thinkingEnabled,
-        webSearchEnabled: get().webSearchEnabled
+        webSearchEnabled: get().webSearchEnabled,
+        // 附件只在聊天模式直传；工作/交互模式的素材入口是工作区（上传/拖拽）
+        attachmentPaths: mode === 'chat' ? (attachmentPaths ?? []) : []
       }
       set({ running: true })
       try {

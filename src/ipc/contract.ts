@@ -14,6 +14,12 @@ export const INVOKE = {
   /** 本地联网搜索的引擎目录（渲染层据此渲染选项，不必自己维护一份引擎表） */
   settingsSearchEngines: 'settings:searchEngines',
   /**
+   * 选择要发送给模型的附件（图片 / 文档）。
+   * 原版输入区有回形针与预览条；桌面端此前**完全没有附件入口** ——
+   * ChatSendRequest.attachmentPaths 这个字段一直存在，却从来没有人赋值。
+   */
+  attachmentsPick: 'attachments:pick',
+  /**
    * 配置方案（多套 API 配置）。原版 SettingsPanel 顶部的「配置方案 / 配置名称」就是它；
    * 桌面端此前 ApiProfileDto、saveApiProfiles 通道、StorageManager 的读写**全都在**，
    * 只有渲染层从来没有调用点 —— 用户无法保存/切换第二套配置。
@@ -139,6 +145,19 @@ export interface SearchEngineDto {
   label: string
   needsApiKey: boolean
   supportsBaseUrl: boolean
+}
+
+/**
+ * 选中的附件（发送前）。
+ * 只带「怎么显示」与「文件在哪」—— 真正的读取与解析放在主进程的发送路径上
+ * （多模态配置、API Key 都在那边），避免解析两遍。
+ */
+export interface PickedAttachmentDto {
+  path: string
+  name: string
+  size: number
+  /** 图片的小缩略图（data URL）；非图片为空串，渲染层退回显示文件名 */
+  thumbnail: string
 }
 
 export interface AppSettingsDto {

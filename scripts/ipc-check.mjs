@@ -114,6 +114,7 @@ const required = [
   'settings:saveCurrentApiProfile',
   'intake:import',
   'intake:pickFiles',
+  'attachments:pick',
   'message:exportDocx',
   'asr:transcribe'
 ]
@@ -524,6 +525,56 @@ const uploadOk = await inv('intake:pickFiles', conv3.id)
 check('上传：选中的文件被导入工作区', uploadOk.canceled === false && uploadOk.imported === 1, uploadOk.names.join(', '))
 check('上传后文件真的在工作区里', (await inv('workspace:list', conv3.id)).some((e) => e.path === '报表.csv'))
 mod.__setOpenDialog(null)
+
+// --- 聊天模式附件：此前整条链路是空壳（审计 P0） ---
+//
+// 事故形状：SessionManager.makeAttachments 只留了文件名（dataUrl / parsedText / fileId 全空串），
+// 而 ChatService 三条协议都会因 `parsedText === '' && dataUrl === ''` 直接 continue ——
+// 于是「加了附件」对请求零影响：图片发不过去、文档也没内容。
+// 这里从「发一条带附件的消息」一路查到持久化的消息 DTO。
+mod.__setOpenDialog({ canceled: true, filePaths: [] })
+check('附件选择：取消时不选任何文件', (await inv('attachments:pick')).length === 0)
+mod.__setOpenDialog(null)
+
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:1',
+  apiKey: 'sk-attachment-test',
+  model: 'attachment-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const attachPath = path.join(intakeDir, '附件素材.txt')
+fs.writeFileSync(attachPath, 'attachment payload 内容', 'utf8')
+const convAttach = await inv('conversations:create', agents[0].id, 'chat')
+await inv('chat:send', {
+  conversationId: convAttach.id,
+  text: '看看这个附件',
+  mode: 'chat',
+  thinkingEnabled: false,
+  webSearchEnabled: false,
+  attachmentPaths: [attachPath]
+})
+const convAttachDto = await inv('conversation:get', convAttach.id)
+const attachUserMsg = (convAttachDto?.messages ?? []).find((m) => m.role === 'user')
+const attachList = attachUserMsg?.attachments ?? []
+check('附件被记进这条用户消息', attachList.length === 1, `${attachList.length} 个`)
+check(
+  '附件带上了真实内容（此前 dataUrl/parsedText 都是空串，协议会直接跳过它）',
+  typeof attachList[0]?.dataUrl === 'string' &&
+    attachList[0].dataUrl.startsWith('data:text/plain;base64,') &&
+    attachList[0].dataUrl.length > 40,
+  String(attachList[0]?.dataUrl).slice(0, 40)
+)
+check(
+  '附件名取自文件路径（不是整条路径）',
+  attachList[0]?.name === '附件素材.txt',
+  String(attachList[0]?.name)
+)
+check('附件类型按扩展名归类', attachList[0]?.type === 'file', String(attachList[0]?.type))
 
 // --- 导出回答为 Word ---
 // 渲染进程走的是带保存对话框的通道（替身返回取消）

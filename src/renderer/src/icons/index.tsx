@@ -193,6 +193,15 @@ export function IconPlus(props: IconProps) {
   )
 }
 
+/** 附件（回形针，对应原版 MessageInputView 的附件入口） */
+export function IconPaperclip(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M17.6 10.4 11 17a3.4 3.4 0 0 1-4.8-4.8l7.4-7.4a2.4 2.4 0 0 1 3.4 3.4l-7.2 7.2a1.4 1.4 0 0 1-2-2l6.6-6.6" />
+    </Svg>
+  )
+}
+
 /** 关闭（叉） */
 export function IconClose(props: IconProps) {
   return (

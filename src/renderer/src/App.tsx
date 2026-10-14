@@ -230,7 +230,7 @@ export default function App() {
         <Composer
           running={running}
           mode={mode}
-          onSend={(text) => void send(text)}
+          onSend={(text, attachmentPaths) => void send(text, attachmentPaths)}
           onAbort={() => void abort()}
         />
       </main>

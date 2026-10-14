@@ -116,8 +116,7 @@ const api = {
   },
 
   /** 端侧增强 */
-  intake: {
-    /** 把外部文件导入指定会话的工作区 */
+  intake: {    /** 把外部文件导入指定会话的工作区 */
     importPaths: (
       conversationId: string,
       paths: string[]
@@ -128,6 +127,12 @@ const api = {
       conversationId: string
     ): Promise<{ names: string[]; imported: number; failed: string[]; canceled: boolean }> =>
       ipcRenderer.invoke(INVOKE.intakePickFiles, conversationId)
+  },
+
+  /** 聊天模式的附件：选文件（读取与解析在主进程的发送路径上） */
+  attachments: {
+    pick: (): Promise<import('../ipc/contract').PickedAttachmentDto[]> =>
+      ipcRenderer.invoke(INVOKE.attachmentsPick)
   },
 
   messages: {

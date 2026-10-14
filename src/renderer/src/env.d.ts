@@ -12,6 +12,7 @@ import type {
   ConversationSummaryDto,
   GuncatEvent,
   MultimodalConfigDto,
+  PickedAttachmentDto,
   RendererStage,
   SearchEngineDto,
   WorkspaceEntryDto,
@@ -84,6 +85,10 @@ export interface GuncatApi {
     pickFiles(
       conversationId: string
     ): Promise<{ names: string[]; imported: number; failed: string[]; canceled: boolean }>
+  }
+  /** 聊天模式的附件：选文件（读取与解析在主进程的发送路径上） */
+  attachments: {
+    pick(): Promise<PickedAttachmentDto[]>
   }
   messages: {
     exportDocx(

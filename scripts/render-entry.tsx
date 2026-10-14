@@ -43,6 +43,7 @@ import {
 import { AgentItem, ConvItem } from '@renderer/components/Sidebar'
 import { GroupedTurn, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
+import { Composer } from '@renderer/components/Composer'
 import { WorkspacePanel, workspaceFileIcon } from '@renderer/components/WorkspacePanel'
 import { marqueeText } from '@renderer/components/MessageView'
 import type { MessageDto } from '@ipc/contract'
@@ -130,6 +131,21 @@ export function renderWorkspaceFileIcons(): Record<string, string> {
     out[name] = renderToStaticMarkup(workspaceFileIcon(name))
   }
   return out
+}
+
+/**
+ * 输入区。附件入口（回形针）只在聊天模式给 —— 工作/交互模式的素材入口是工作区，
+ * 两条路是不同的事，这里把这条分界钉住。
+ */
+export function renderComposer(mode: string): string {
+  return renderToStaticMarkup(
+    createElement(Composer, {
+      running: false,
+      mode,
+      onSend: () => {},
+      onAbort: () => {}
+    })
+  )
 }
 
 /** Markdown 渲染：断言脚注回跳不是第三方默认的「↩」符号 */

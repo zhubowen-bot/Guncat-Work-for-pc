@@ -1,4 +1,4 @@
-// IPC 注册：把渲染进程的调用路由到 SessionManager，并把事件推回去。
+﻿// IPC 注册：把渲染进程的调用路由到 SessionManager，并把事件推回去。
 import { ipcMain, app, shell, dialog } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -21,6 +21,7 @@ import { transcribeAudio } from './asr'
 import { getMainWindow, markRendererAlive } from './window'
 import { bootLog, bootMark } from './bootlog'
 import { getDataRoot, resourcesDir, makeTempDir } from '@core/platform/appPaths'
+import { image } from '@core/platform/kit/ImageKit'
 
 function send(event: GuncatEvent): void {
   const window = getMainWindow()
@@ -245,6 +246,41 @@ export function registerIpcHandlers(session: SessionManager): void {
     }
   )
 
+  // ===== 附件（聊天模式的图片/文档直传） =====
+  //
+  // 这里只负责「选哪些文件」并给出预览所需的信息；真正的读取与解析放在
+  // SessionManager.makeAttachments —— 多模态配置、API Key 与 Files API 上传都在主进程那条路上。
+  ipcMain.handle(INVOKE.attachmentsPick, async () => {
+    const window = getMainWindow()
+    const result = await dialog.showOpenDialog(window ?? undefined!, {
+      title: '选择要发送的图片或文档',
+      buttonLabel: '添加',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] },
+        {
+          name: '文档',
+          extensions: [
+            'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+            'txt', 'md', 'csv', 'json', 'log', 'yaml', 'yml'
+          ]
+        },
+        { name: '所有文件', extensions: ['*'] }
+      ]
+    })
+    if (result.canceled) {
+      return []
+    }
+    return await Promise.all(
+      result.filePaths.map(async (filePath) => ({
+        path: filePath,
+        name: path.basename(filePath),
+        size: fs.existsSync(filePath) ? fs.statSync(filePath).size : 0,
+        thumbnail: await makeAttachmentThumbnail(filePath)
+      }))
+    )
+  })
+
   // ===== 应用信息 =====
   ipcMain.handle(INVOKE.appInfo, async (): Promise<AppInfoDto> => {
     return {
@@ -298,3 +334,39 @@ function markReported(key: string, marker: string, message: string): void {
 
 /** 供启动阶段使用的临时目录（保留导出，便于后续调试） */
 export { makeTempDir }
+
+/**
+ * 图片的小缩略图（data URL），给附件预览条用。
+ * 失败一律返回空串 —— 预览条会退回显示文件名，不该因为缩略图失败而看不到已选文件。
+ */
+async function makeAttachmentThumbnail(filePath: string): Promise<string> {
+  const ext: string = path.extname(filePath).toLowerCase()
+  if (!['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'].includes(ext)) {
+    return ''
+  }
+  let source: image.ImageSource | null = null
+  let pixelMap: image.PixelMap | null = null
+  let packer: image.ImagePacker | null = null
+  try {
+    source = image.createImageSource(fs.readFileSync(filePath))
+    pixelMap = await source.createPixelMap({ desiredSize: { width: 128, height: 128 } })
+    packer = image.createImagePacker()
+    const buffer: ArrayBuffer = await packer.packToData(pixelMap, {
+      format: 'image/png',
+      quality: 80
+    })
+    return `data:image/png;base64,${Buffer.from(buffer).toString('base64')}`
+  } catch {
+    return ''
+  } finally {
+    if (pixelMap !== null) {
+      await pixelMap.release().catch((): void => undefined)
+    }
+    if (source !== null) {
+      await source.release().catch((): void => undefined)
+    }
+    if (packer !== null) {
+      await packer.release().catch((): void => undefined)
+    }
+  }
+}

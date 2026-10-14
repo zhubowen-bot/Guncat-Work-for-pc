@@ -1,4 +1,4 @@
-// SessionManager：主进程的业务权威。
+﻿// SessionManager：主进程的业务权威。
 //
 // 它持有全部会话（内存中的 Conversation 模型 + 落盘持久化），
 // 驱动「聊天模式」的三协议流式对话与「工作模式」的 Agent Loop，
@@ -33,6 +33,11 @@ import { generateMessageId } from '@core/common/Utils'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { GuncatUiRuntime, GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
 import { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
+// 附件链路：MultimodalService（先行解析）与 FileUploadService（Files API）此前是零引用的
+// 已移植能力，见 makeAttachments 的说明。
+import { MultimodalService } from '@core/service/MultimodalService'
+import { FileUploadService } from '@core/service/FileUploadService'
+import { image } from '@core/platform/kit/ImageKit'
 
 import type {
   AgentDto,
@@ -502,7 +507,7 @@ export class SessionManager {
       return
     }
 
-    const attachments: Attachment[] = this.makeAttachments(request.attachmentPaths ?? [])
+    const attachments: Attachment[] = await this.makeAttachments(request.attachmentPaths ?? [])
     const userMsg: Message = Message.ofUser(
       generateMessageId(),
       request.text,
@@ -978,13 +983,188 @@ export class SessionManager {
     this.emit({ type: 'message:patched', conversationId, messageId, patch })
   }
 
-  private makeAttachments(paths: string[]): Attachment[] {
+  /**
+   * 把用户选中的文件变成真正的附件。
+   *
+   * 用户报障类问题（审计 P0）：原实现只留了文件名 ——
+   * `Attachment.of(name, '', 'file', '', '', '')`，dataUrl / parsedText / fileId 全是空串。
+   * 而 ChatService 的三条协议都会因 `parsedText === '' && dataUrl === ''` 直接 `continue`，
+   * 于是「加了附件」对请求零影响：图片发不过去，文档也没内容。
+   *
+   * 移植自原版 ChatViewModel.enqueueFiles + parseOneFile + prepareAttachmentFileIds：
+   *   · 先行解析（preparseEnabled）：交给 MultimodalService 把内容读成文字；
+   *   · 未开先行解析、或解析失败：退回 Base64 内联（dataUrl），由主模型的多模态能力直接看；
+   *   · 大文件 / Responses 协议的文档：走 Files API 拿 file_id，按各协议引用。
+   */
+  private async makeAttachments(paths: string[]): Promise<Attachment[]> {
     const out: Attachment[] = []
+    if (paths.length === 0) {
+      return out
+    }
+    const mm: MultimodalConfig = await StorageManager.loadMultimodalConfig(this.ctx()).catch(
+      (): MultimodalConfig => MultimodalConfig.default()
+    )
+    const api: ApiConfig | null = await StorageManager.loadApiConfig(this.ctx()).catch(
+      (): ApiConfig | null => null
+    )
     for (const p of paths) {
       const name: string = p.split(/[\\/]/).pop() ?? p
-      out.push(Attachment.of(name, '', 'file', '', '', ''))
+      if (!fs.existsSync(p)) {
+        this.emit({ type: 'notice', level: 'warn', text: `附件不存在，已跳过：${name}` })
+        continue
+      }
+      let bytes: Buffer
+      try {
+        bytes = fs.readFileSync(p)
+      } catch (e: unknown) {
+        this.emit({
+          type: 'notice',
+          level: 'warn',
+          text: `附件读取失败，已跳过：${name}（${e instanceof Error ? e.message : String(e)}）`
+        })
+        continue
+      }
+      const mime: string = SessionManager.guessMime(name)
+      const isImage: boolean = mime.startsWith('image/')
+      const type: string = isImage ? 'image' : 'file'
+      let parsedText: string = ''
+      let dataUrl: string = ''
+      // 先行解析：多模态服务把图片/文档读成文字（没配密钥时静默跳过，下面会退回内联）
+      if (mm.preparseEnabled && mm.apiKey !== '') {
+        try {
+          const result = await MultimodalService.parseFile(
+            mm,
+            name,
+            SessionManager.toArrayBuffer(bytes),
+            mime
+          )
+          parsedText = result.content
+          dataUrl = result.dataUrl
+        } catch (e: unknown) {
+          // 解析失败不该让整条消息发不出去：退回内联，并在界面上说清原因
+          this.emit({
+            type: 'notice',
+            level: 'warn',
+            text: `${name} 解析失败，改为直接内联发送：${e instanceof Error ? e.message : String(e)}`
+          })
+        }
+      }
+      if (parsedText === '' && dataUrl === '') {
+        dataUrl = `data:${mime};base64,${bytes.toString('base64')}`
+      }
+      let fileId: string = ''
+      if (api !== null && SessionManager.shouldUploadViaFilesApi(api, type, bytes.byteLength)) {
+        try {
+          fileId = await FileUploadService.uploadFile(
+            api,
+            name,
+            mime,
+            SessionManager.toArrayBuffer(bytes)
+          )
+        } catch {
+          // 上传失败保留 dataUrl 内联发送（与原版一致）
+          fileId = ''
+        }
+      }
+      out.push(Attachment.of(name, parsedText, type, await this.makeThumbnail(dataUrl), dataUrl, fileId))
     }
     return out
+  }
+
+  /**
+   * 是否走 Files API（对齐原版 prepareAttachmentFileIds 的判定）：
+   *   · 文档只在 OpenAI Responses 协议下上传（其余协议没有 file 类型的引用方式）；
+   *   · 图片超过 4MB 才上传（小图 Base64 内联更省一次往返）；
+   *   · Anthropic 协议下只在 DeepSeek 的兼容入口上这么干（官方入口的阈值不同）。
+   */
+  private static shouldUploadViaFilesApi(
+    config: ApiConfig,
+    type: string,
+    byteLength: number
+  ): boolean {
+    const provider: string = config.provider
+    if (
+      provider !== 'openai-completions' &&
+      provider !== 'openai-responses' &&
+      provider !== 'anthropic-messages'
+    ) {
+      return false
+    }
+    if (type === 'file') {
+      return provider === 'openai-responses'
+    }
+    const THRESHOLD: number = 4 * 1024 * 1024
+    if (provider === 'anthropic-messages') {
+      return byteLength > THRESHOLD && config.baseUrl.indexOf('deepseek.com') !== -1
+    }
+    return byteLength > THRESHOLD
+  }
+
+  /** 图片的 96px 缩略图（消息气泡里显示小图，避免每次重绘都解码全尺寸原图）。 */
+  private async makeThumbnail(dataUrl: string): Promise<string> {
+    const comma: number = dataUrl.indexOf(',')
+    if (comma < 0) {
+      return ''
+    }
+    let source: image.ImageSource | null = null
+    let pixelMap: image.PixelMap | null = null
+    let packer: image.ImagePacker | null = null
+    try {
+      source = image.createImageSource(Buffer.from(dataUrl.slice(comma + 1), 'base64'))
+      pixelMap = await source.createPixelMap({ desiredSize: { width: 96, height: 96 } })
+      packer = image.createImagePacker()
+      const buffer: ArrayBuffer = await packer.packToData(pixelMap, {
+        format: 'image/png',
+        quality: 80
+      })
+      return `data:image/png;base64,${Buffer.from(buffer).toString('base64')}`
+    } catch {
+      // 缩略图失败不影响附件本身（渲染层会退回显示文件名）
+      return ''
+    } finally {
+      if (pixelMap !== null) {
+        await pixelMap.release().catch((): void => undefined)
+      }
+      if (source !== null) {
+        await source.release().catch((): void => undefined)
+      }
+      if (packer !== null) {
+        await packer.release().catch((): void => undefined)
+      }
+    }
+  }
+
+  private static toArrayBuffer(bytes: Buffer): ArrayBuffer {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  }
+
+  /** 按扩展名给出 MIME（附件内联 / 上传都要用；认不出时按二进制处理） */
+  static guessMime(name: string): string {
+    const dot: number = name.lastIndexOf('.')
+    const ext: string = dot >= 0 ? name.slice(dot + 1).toLowerCase() : ''
+    const table: Record<string, string> = {
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      webp: 'image/webp',
+      gif: 'image/gif',
+      bmp: 'image/bmp',
+      pdf: 'application/pdf',
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xls: 'application/vnd.ms-excel',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ppt: 'application/vnd.ms-powerpoint',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      txt: 'text/plain',
+      md: 'text/markdown',
+      csv: 'text/csv',
+      json: 'application/json',
+      log: 'text/plain',
+      yaml: 'text/yaml',
+      yml: 'text/yaml'
+    }
+    return table[ext] ?? 'application/octet-stream'
   }
 
   /**

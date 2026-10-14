@@ -507,6 +507,22 @@ check('图片 / PDF / 压缩包 / 源码 / 视频 / 音频各用各的图标', (
 })(), Object.entries(wsIcons).map(([k, v]) => `${k}=${v.length}`).join(' '))
 check('未知类型回退通用文件图标', iconOf('a.unknown') !== '' && iconOf('a.unknown') !== iconOf('a.py'))
 
+// --- 输入区：附件入口必须存在（审计 P0：聊天模式的附件链路此前是空壳） ---
+console.log('\n22. 输入区（附件入口）')
+const composerChat = mod.renderComposer('chat')
+const composerWork = mod.renderComposer('work')
+check('聊天模式的输入区有附件入口（回形针）', composerChat.includes('composer__clip'))
+check(
+  '附件入口的提示说清是「发给模型直接看」',
+  composerChat.includes('添加图片或文档')
+)
+check(
+  '工作/交互模式不给附件入口（那两种形态的素材入口是工作区）',
+  !composerWork.includes('composer__clip')
+)
+check('发送按钮仍在', composerChat.includes('composer__send'))
+check('语音输入按钮仍在', composerChat.includes('composer__mic'))
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')
