@@ -62,9 +62,16 @@ const CONTENT_TYPES: Record<string, string> = {
 /**
  * 注册 app:// 的处理器。rootDir 是界面产物目录（out/renderer）。
  * 必须在 app ready 之后调用。
+ *
+ * extraRoot 用于把随包资源也暴露给渲染层，挂载在 /res/ 前缀下：
+ * 智能体的头像（agents.json 里的 `icon` 字段，如 `icons/guncat-3.1-flash.png`）
+ * 就在 resources/resources/icons 下。不这么做的话，渲染层只能拿到
+ * 「名字首字」这类替代品（原图是 1024² 的 PNG，10 张，重复拷进渲染层要 2.3MB）。
  */
-export function serveRenderer(rootDir: string): void {
+export function serveRenderer(rootDir: string, extraRoot?: string): void {
   const root: string = path.resolve(rootDir)
+  const extra: string = extraRoot !== undefined ? path.resolve(extraRoot) : ''
+  const EXTRA_PREFIX = '/res/'
 
   protocol.handle(APP_SCHEME, async (request: Request): Promise<Response> => {
     let pathname = ''
@@ -79,9 +86,16 @@ export function serveRenderer(rootDir: string): void {
       pathname = '/index.html'
     }
 
-    // 防目录穿越：解析后必须仍在 root 之内
-    const full: string = path.resolve(root, `.${pathname}`)
-    if (full !== root && !full.startsWith(root + path.sep)) {
+    // 随包资源走独立根目录
+    let base: string = root
+    if (extra !== '' && pathname.startsWith(EXTRA_PREFIX)) {
+      base = extra
+      pathname = `/${pathname.slice(EXTRA_PREFIX.length)}`
+    }
+
+    // 防目录穿越：解析后必须仍在 base 之内
+    const full: string = path.resolve(base, `.${pathname}`)
+    if (full !== base && !full.startsWith(base + path.sep)) {
       bootLog(`✗ app:// 拒绝越界请求: ${pathname}`)
       return new Response('路径越界', { status: 403 })
     }
@@ -102,7 +116,7 @@ export function serveRenderer(rootDir: string): void {
     })
   })
 
-  bootLog(`app:// 协议已注册，根目录=${root}`)
+  bootLog(`app:// 协议已注册，根目录=${root}${extra !== '' ? ` 资源目录=${extra}` : ''}`)
 }
 
 /** 界面入口地址 */

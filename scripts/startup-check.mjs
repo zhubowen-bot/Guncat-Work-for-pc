@@ -220,6 +220,22 @@ check('没有标记时不误判', !stub.isSafeModeRequested(['x', '--gdi']))
 
 // --- 数据目录 ---
 check('数据目录已创建', fs.existsSync(dataRoot))
+
+// --- 随包资源要通过 app:// 暴露给渲染层 ---
+// 智能体头像（agents.json 的 icon 字段，如 icons/guncat-3.1-flash.png）就是随包资源。
+// 原图 1024²×10 张本就在产物里；不这么做渲染层只能退回「名字首字」这类替代品，
+// 而把它们拷进渲染层资源要白白多 2.3MB。
+// 判据用启动日志：serveRenderer 会把两个根目录都写进去。
+{
+  const boot = fs.readFileSync(path.join(dataRoot, 'startup.log'), 'utf8')
+  const line = boot.split('\n').find((l) => l.includes('app:// 协议已注册')) ?? ''
+  check('启动日志记录了 app:// 的根目录', line.includes('根目录='), line.trim().slice(0, 120))
+  check(
+    'app:// 同时暴露了随包资源根目录（否则智能体头像全部退化）',
+    line.includes('资源目录='),
+    line.trim().slice(0, 160)
+  )
+}
 check('files 子目录已创建', fs.existsSync(path.join(dataRoot, 'files')))
 check('temp 子目录已创建', fs.existsSync(path.join(dataRoot, 'temp')))
 

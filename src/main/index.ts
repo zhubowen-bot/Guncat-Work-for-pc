@@ -246,7 +246,7 @@ if (!gotLock) {
 
       // 用 app:// 提供界面文件（替代 file://，详见 protocol.ts 的说明）
       try {
-        serveRenderer(rendererDir())
+        serveRenderer(rendererDir(), paths.resourcesRoot)
       } catch (e: unknown) {
         bootFail('serveRenderer', e)
       }

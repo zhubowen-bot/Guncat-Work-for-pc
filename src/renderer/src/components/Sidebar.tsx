@@ -27,11 +27,33 @@ const VIRTUAL_ICON: Record<string, typeof IconWork> = {
   [INTERACTIVE_AGENT_ID]: IconInteractive
 }
 
-/** 真实智能体的头像：用名字首字做字母标，避免依赖渲染进程拿不到的资源路径 */
+/**
+ * 随包资源（智能体头像等）经 app:// 暴露在 /res/ 前缀下，见 src/main/protocol.ts。
+ * 原图是 1024² 的 PNG、10 张，本来就在产物里；若拷进渲染层资源会白白多 2.3MB。
+ */
+const RESOURCE_BASE = 'app://guncat/res/'
+
+/**
+ * 智能体头像（原版用 rawfile 里的 PNG）。
+ * 虚拟引擎（工作/交互）用 SVG 形态图标；真实智能体用 agents.json 里的 icon 原图；
+ * 图取不到时退回名字首字 —— 头像不该成为界面起不来的原因。
+ */
 function AgentAvatar({ agent }: { agent: AgentDto }) {
   const Virtual = VIRTUAL_ICON[agent.id]
+  const [broken, setBroken] = useState(false)
   if (Virtual !== undefined) {
     return <Virtual size={20} className="agent-item__glyph" />
+  }
+  if (agent.icon !== '' && !broken) {
+    return (
+      <img
+        className="agent-avatar agent-avatar--img"
+        src={RESOURCE_BASE + agent.icon}
+        alt=""
+        title={agent.name}
+        onError={() => setBroken(true)}
+      />
+    )
   }
   return (
     <span className="agent-avatar" title={agent.name}>
