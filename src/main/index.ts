@@ -11,7 +11,7 @@ import { registerElectronPicker } from './picker'
 import { registerIpcHandlers } from './ipc'
 import { collectFileArgs } from './intake'
 import { SessionManager } from './session/SessionManager'
-import { createMainWindow, getMainWindow } from './window'
+import { createMainWindow, getMainWindow, setPendingFlush } from './window'
 import { resolveAppPaths } from './paths'
 import { bootLog, bootLogPath, bootFail, installCrashHandlers } from './bootlog'
 import type { GuncatEvent } from '../ipc/contract'
@@ -110,22 +110,13 @@ if (!app.requestSingleInstanceLock()) {
       registerIpcHandlers(session)
       bootLog('IPC 通道已注册')
 
-      const window: BrowserWindow = createMainWindow()
-      bootLog('主窗口已创建')
-
-      // 页面加载完再把启动时的文件参数推过去，避免事件早于渲染进程订阅
-      window.webContents.on('did-finish-load', () => {
-        bootLog('渲染进程加载完成')
+      // 页面加载完成后把积压的收件文件推给渲染进程（页面加载完成的监听在 window.ts 里）
+      setPendingFlush(() => {
         flushPendingIntake()
       })
 
-      window.webContents.on('render-process-gone', (_e, details) => {
-        bootLog(`✗ 渲染进程退出: ${JSON.stringify(details)}`)
-      })
-
-      window.webContents.on('did-fail-load', (_e, code, desc, url) => {
-        bootLog(`✗ 页面加载失败: code=${code} desc=${desc} url=${url}`)
-      })
+      const window: BrowserWindow = createMainWindow()
+      bootLog('主窗口已创建（立刻可见，不依赖渲染进程）')
 
       // 启动时若带文件参数（双击关联文件 / 拖到图标上），先入队
       enqueueIntake(collectFileArgs(process.argv))

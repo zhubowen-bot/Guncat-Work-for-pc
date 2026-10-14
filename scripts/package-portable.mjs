@@ -99,7 +99,9 @@ if (fs.existsSync(exeSource)) {
 }
 
 // ===== 6. 双击即用的辅助入口 =====
-// 诊断启动：带日志启动，失败时能留下证据（而不是只有一句「打不开」）
+// 诊断启动：依次尝试三种启动模式，每种都记录退出码。
+// 之所以要分模式：Chromium 的沙箱在某些进程上下文里会初始化失败并直接让进程
+// 以 STATUS_BREAKPOINT(-2147483645) 退出，此时 --no-sandbox 能绕过。
 fs.writeFileSync(
   path.join(outDir, '诊断启动.cmd'),
   [
@@ -107,19 +109,43 @@ fs.writeFileSync(
     'chcp 65001 >nul',
     'cd /d "%~dp0"',
     'set LOG=%~dp0启动日志.txt',
+    'set CRASH=-2147483645',
+    '',
     'echo ===== Guncat Work 诊断启动 ===== > "%LOG%"',
     'echo 时间: %date% %time% >> "%LOG%"',
     'echo 系统: %OS% %PROCESSOR_ARCHITECTURE% >> "%LOG%"',
-    'echo ------------------------------------------ >> "%LOG%"',
-    'echo 正在带日志启动，请稍候…',
-    '"Guncat Work.exe" --enable-logging >> "%LOG%" 2>&1',
-    'echo. >> "%LOG%"',
-    'echo 进程退出码: %ERRORLEVEL% >> "%LOG%"',
     'echo.',
-    'echo 启动流程已结束。',
-    'echo   · 本目录下的「启动日志.txt」：Electron 自身的输出与退出码',
-    'echo   · %APPDATA%\\Guncat Work\\logs\\startup.log：应用逐里程碑的启动日志',
-    'echo 若窗口没有出现，请把这两个文件发出来。',
+    'echo 即将依次尝试三种启动模式。',
+    'echo 如果窗口出现，直接关闭窗口即可，脚本会继续记录退出码。',
+    'echo.',
+    '',
+    'echo ---------- [1/3] 正常启动 ---------- >> "%LOG%"',
+    'echo [1/3] 正常启动…',
+    '"Guncat Work.exe" --enable-logging >> "%LOG%" 2>&1',
+    'set CODE=%ERRORLEVEL%',
+    'echo 退出码: %CODE% >> "%LOG%"',
+    'if not "%CODE%"=="%CRASH%" goto done',
+    '',
+    'echo ---------- [2/3] --no-sandbox ---------- >> "%LOG%"',
+    'echo [2/3] 正常启动崩了，改试 --no-sandbox…',
+    '"Guncat Work.exe" --no-sandbox --enable-logging >> "%LOG%" 2>&1',
+    'set CODE=%ERRORLEVEL%',
+    'echo 退出码: %CODE% >> "%LOG%"',
+    'if not "%CODE%"=="%CRASH%" goto done',
+    '',
+    'echo ---------- [3/3] --no-sandbox --disable-gpu ---------- >> "%LOG%"',
+    'echo [3/3] 再试 --no-sandbox --disable-gpu…',
+    '"Guncat Work.exe" --no-sandbox --disable-gpu --enable-logging >> "%LOG%" 2>&1',
+    'set CODE=%ERRORLEVEL%',
+    'echo 退出码: %CODE% >> "%LOG%"',
+    '',
+    ':done',
+    'echo. >> "%LOG%"',
+    'echo ===== 结束，最后一次退出码: %CODE% ===== >> "%LOG%"',
+    'echo.',
+    'echo 已结束。请把下面两个文件发出来：',
+    'echo   · %LOG%',
+    'echo   · %APPDATA%\\Guncat Work\\logs\\startup.log',
     'pause'
   ].join('\r\n'),
   'utf8'

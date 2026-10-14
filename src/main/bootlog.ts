@@ -15,6 +15,11 @@ let logPath = ''
 let stream: fs.WriteStream | null = null
 
 function resolveLogPath(): string {
+  // 测试可以指定目录，避免覆盖用户真实的启动日志（那正是排查问题时要看的证据）
+  const override: string | undefined = process.env.GUNCAT_BOOTLOG_DIR
+  if (override !== undefined && override !== '') {
+    return path.join(override, 'startup.log')
+  }
   const base: string =
     process.env.APPDATA !== undefined && process.env.APPDATA !== ''
       ? process.env.APPDATA
@@ -43,11 +48,13 @@ export function bootLog(message: string): void {
   } catch {
     // 忽略
   }
-  // 同时写 stderr：带 --enable-logging 从终端启动时能直接看到
-  try {
-    process.stderr.write(line)
-  } catch {
-    // 忽略
+  // 需要时也写 stderr（配合 --enable-logging 从终端看）；默认关闭以免污染测试输出
+  if (process.env.GUNCAT_BOOTLOG_STDERR === '1') {
+    try {
+      process.stderr.write(line)
+    } catch {
+      // 忽略
+    }
   }
 }
 

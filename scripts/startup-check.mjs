@@ -20,6 +20,8 @@ import { root, alias } from './esbuild-aliases.mjs'
 
 const dataRoot = path.join(os.tmpdir(), `guncat-startup-${Date.now()}`)
 process.env.GUNCAT_DATA_DIR = dataRoot
+// 启动日志写到临时目录：绝不能覆盖用户真实的那份（排查问题时要看的正是它）
+process.env.GUNCAT_BOOTLOG_DIR = dataRoot
 
 // 记录任何逃逸出来的异常 —— 那正是「启动即退」的形态
 const uncaught = []
@@ -107,7 +109,26 @@ const loadCalls = find('loadFile')
 check('调用了 loadFile（打包态）', loadCalls.length === 1, `${loadCalls.length} 次`)
 const indexPath = loadCalls[0]?.args[0]
 check('loadFile 指向真实存在的 index.html', typeof indexPath === 'string' && fs.existsSync(indexPath), String(indexPath))
-check('显示窗口', find('window.show').length + find('window.on').length > 0)
+
+// 回归防线：窗口可见性**绝不能**依赖渲染进程。
+// 真实事故——窗口曾用 show:false 建、只在 ready-to-show 时才显示，
+// 结果渲染进程没加载完窗口就永远不出现，用户看到的是「双击了没反应」。
+check(
+  '窗口创建时即可见（不依赖渲染进程）',
+  options.show === true,
+  options.show === true ? 'show: true' : `show=${String(options.show)} —— 会导致「启动即无反应」`
+)
+check(
+  '页面加载完成后才推送积压的收件文件',
+  find('webContents.on').some((c) => c.args[0] === 'did-finish-load'),
+  '监听了 did-finish-load'
+)
+check(
+  '渲染进程的失败路径都有监听（否则出问题无从查起）',
+  ['did-fail-load', 'preload-error', 'render-process-gone', 'console-message', 'dom-ready'].every(
+    (e) => find('webContents.on').some((c) => c.args[0] === e)
+  )
+)
 
 // --- IPC ---
 const channels = stub.__channels()
@@ -123,8 +144,6 @@ check('temp 子目录已创建', fs.existsSync(path.join(dataRoot, 'temp')))
 check('启动完成后无未捕获异常', uncaught.length === 0, uncaught[0]?.slice(0, 200) ?? '')
 
 // --- 页面加载完成后应把待收件文件推给渲染进程（这里只验证不抛异常） ---
-const windowOnCalls = find('webContents.on')
-check('监听了 did-finish-load（用于推送启动时的收件文件）', windowOnCalls.some((c) => c.args[0] === 'did-finish-load'))
 
 console.log(`\n启动链路验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
