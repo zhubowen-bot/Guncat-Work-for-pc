@@ -24,21 +24,46 @@ pnpm install
 pnpm dev          # 开发模式（主进程 + 渲染进程热更新）
 pnpm typecheck    # 类型检查（core / main / renderer）
 pnpm build        # 构建产物到 out/
+pnpm smoke        # 无头冒烟验证（44 项，覆盖移植过来的业务内核）
 pnpm dist         # 打安装包到 release/
 ```
 
+首次启动后在左下角「设置」里配置接入方式、Base URL、API Key 与模型。
+
 > 首次 `pnpm install` 后若 Electron 二进制未下载成功（受限网络环境常见），
-> 可手动执行：`cd node_modules/.pnpm/electron@*/node_modules/electron && node --use-system-ca install.js`
+> 可手动执行：`cd node_modules/electron && node --use-system-ca install.js`
+
+## 验证
+
+| 层 | 命令 | 覆盖 |
+| --- | --- | --- |
+| 类型 | `pnpm typecheck` | `src/core`（移植内核）+ `src/main` + `src/preload` + `src/renderer` |
+| 构建 | `pnpm build` | main / preload / renderer 三端产物 |
+| 功能 | `pnpm smoke` | 智能体加载、45 个工具、37 项技能、沙箱工作区、`run_js` 沙箱、数据管道、持久化、三协议端点、Office 三件套生成 |
+
+`pnpm smoke` 把风险最高的移植内核拉到纯 Node 下按真实调用链跑一遍，
+并用 esbuild 施加与 `electron.vite.config.ts` **完全相同**的别名规则 ——
+验证的是构建产物真实依赖的那套解析规则，而不是另起一套近似配置。
+
+## 已知环境限制
+
+在某些受限的桌面会话里，Electron 进程会被宿主作业对象拒绝启动
+（`electron.exe --version` 直接返回 `STATUS_BREAKPOINT`），此时 `pnpm dev` / `pnpm build`
+产出都无法打开窗口。这是宿主环境限制而非代码问题 ——
+同一台机器上的其他 Electron 应用可以正常启动。
+此时用 `pnpm smoke` 仍然可以完整验证业务内核。
 
 ## 目录结构
 
 ```text
 src/
 ├── core/         # 鸿蒙版业务内核（逐字移植）+ 平台适配层
-├── main/         # Electron 主进程（窗口、IPC、服务编排）
+├── main/         # Electron 主进程（窗口、IPC、会话与 Agent Loop 编排）
 ├── preload/      # contextBridge 安全桥
-└── renderer/     # React 界面
+├── renderer/     # React 界面
+└── ipc/          # 主进程 ↔ 渲染进程的共享契约
 resources/        # 随包资源：agents.json、智能体提示词、技能库
+scripts/          # 无头冒烟验证
 docs/PORTING.md   # ★ 移植策略、平台适配对照、与上游的分歧清单
 ```
 
