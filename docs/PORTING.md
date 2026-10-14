@@ -11,11 +11,30 @@
 | --- | --- | --- |
 | 一 | 三协议流式对话 + 工作模式 Agent Loop + 沙箱工作区 + 核心工具 | ✅ 已完成 |
 | 二 | 交互模式：guncat-ui lang 渲染（76 个组件 + `$绑定` + 动作回传） | ✅ 已完成，见 [交互模式实现说明](INTERACTIVE-MODE.md) |
-| 三 | Office 生成器接入工具链 + 技能系统 + PDF 解析后端 | 🚧 生成器与技能库已验证，PDF 后端待接 |
+| 三 | Office 生成器接入工具链 + 技能系统 | ✅ 已完成（生成→读回→算子编辑端到端验证） |
 | 四 | 语音 / 分享等端侧增强 | ⏳ 未开始（相关服务已移入 `porting/deferred/`） |
 
 验证方式见 [README 的验证矩阵](../README.md#验证)：`pnpm typecheck` / `pnpm build` /
-`pnpm smoke`（内核 68 项 + 渲染 26 项）。
+`pnpm smoke`（内核 105 项 + 渲染 26 项）。
+
+### 阶段三说明：Office 工具链为何无需改动
+
+`write_docx` / `write_xlsx` / `write_pptx` 及其读回与算子编辑（`read_*` / `edit_*`）
+在鸿蒙侧本来就走 `WorkToolRunner` 分发到 `export/` 下的纯 TS 生成器。
+平台层把 `fileIo` / `util` / `zlib` 补齐之后，这条链在桌面端**原样可用**：
+
+- 生成器本身不依赖任何 ArkUI（已确认 `export/` 下零装饰器）；
+- `zlib.decompressFile` 实为 zip 解包，已用 `fflate` 对齐；
+- 内嵌 JSON 源的无损读回机制不涉及平台差异。
+
+`transform_file`（数据管道）同样是纯逻辑，CSV/TSV/JSON/Markdown/XLSX 互转直接可用。
+
+技能系统（`list_skills` / `load_skill`）只依赖 `resourceManager.getRawFileContent`，
+已映射到随包 `resources/` 目录，37 项技能与参考文档均可按需加载。
+
+**仍未完成**：PDF 解析（`parse_document`）后端。接口已在 `platform/kit/PDFKit.ts` 就位，
+但 PDF.js 的 `getDocument()` 是异步的、而端口代码的取文本链路是同步的，
+需要一次针对性的异步改造，尚未动手；当前会返回清晰报错而非静默失败。
 
 ---
 

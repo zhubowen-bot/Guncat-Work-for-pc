@@ -381,6 +381,170 @@ async function main(): Promise<void> {
   check('未知组件被丢弃并给出诊断', unknownProgram.errors.length > 0, unknownProgram.errors.join('；'))
   check('未知组件不影响同一块的其它组件', unknownChildren.length === 1, `${unknownChildren.length} 个子元素`)
 
+  // ===== 15. Office 工具链（走真实的工具分发，而不是直接调生成器） =====
+  section('15. Office 工具链（WorkToolRunner 端到端）')
+
+  const callTool = async (name: string, args: Record<string, unknown>) =>
+    WorkToolRunner.execute(ctx, convId, name, JSON.stringify(args), null)
+
+  // --- Word：Markdown → .docx → 读回 ---
+  const docxWrite = await callTool('write_docx', {
+    path: 'out/报告.docx',
+    markdown: '# 季度报告\n\n正文第一段。\n\n- 要点一\n- 要点二\n\n| 区域 | 营收 |\n| --- | --- |\n| 华东 | 820 |\n',
+    title: '季度报告'
+  })
+  check('write_docx 成功', docxWrite.ok, docxWrite.output.slice(0, 120))
+  check('docx 文件已落盘', fs.existsSync(path.join(wsRoot, 'out/报告.docx')))
+  const docxFileBytes = fs.existsSync(path.join(wsRoot, 'out/报告.docx'))
+    ? fs.readFileSync(path.join(wsRoot, 'out/报告.docx'))
+    : Buffer.alloc(0)
+  check('docx 是合法 zip(PK 魔数)', docxFileBytes.length > 0 && docxFileBytes[0] === 0x50, `${docxFileBytes.length} 字节`)
+
+  const docxRead = await callTool('read_docx', { path: 'out/报告.docx' })
+  check('read_docx 可读回', docxRead.ok, docxRead.output.slice(0, 100))
+  check('读回内容无损（含标题）', docxRead.output.includes('季度报告'))
+
+  // --- Excel：Workbook JSON → .xlsx → 读回 ---
+  const xlsxWrite = await callTool('write_xlsx', {
+    path: 'out/营收.xlsx',
+    workbook: JSON.stringify({
+      name: '营收表',
+      sheets: [
+        {
+          name: '月度',
+          rows: [
+            ['区域', '1月', '2月', '合计'],
+            ['华东', 120, 132, '=SUM(B2:C2)'],
+            ['华南', 90, 110, '=SUM(B3:C3)']
+          ],
+          // formats 是按列的格式数组（每列一项）
+          formats: ['text', 'int', 'int', 'money'],
+          colWidths: [10, 8, 8, 12],
+          freeze: true
+        }
+      ]
+    }),
+    style: 'default'
+  })
+  check('write_xlsx 成功', xlsxWrite.ok, xlsxWrite.output.slice(0, 120))
+  const xlsxRead = await callTool('read_xlsx', { path: 'out/营收.xlsx' })
+  check('read_xlsx 可读回', xlsxRead.ok, xlsxRead.output.slice(0, 100))
+  check('读回含公式与数据', xlsxRead.output.includes('=SUM(B2:C2)') && xlsxRead.output.includes('华东'))
+
+  // --- PPT：Deck JSON → .pptx → 读回 ---
+  const pptxWrite = await callTool('write_pptx', {
+    path: 'out/汇报.pptx',
+    deck: JSON.stringify({
+      title: '季度汇报',
+      slides: [
+        { layout: 'cover', title: '季度汇报', subtitle: '2024 Q3' },
+        { layout: 'content', title: '核心结论', bullets: ['营收增长 18%', '毛利持平'] }
+      ]
+    })
+  })
+  check('write_pptx 成功', pptxWrite.ok, pptxWrite.output.slice(0, 120))
+  const pptxRead = await callTool('read_ppt', { path: 'out/汇报.pptx' })
+  check('read_ppt 可读回', pptxRead.ok, pptxRead.output.slice(0, 100))
+  check('读回含页标题', pptxRead.output.includes('核心结论'))
+
+  // --- 结构化编辑算子：改完再读回，确认算子真的落到文件里 ---
+  const docxEdit = await callTool('edit_docx', {
+    path: 'out/报告.docx',
+    ops: JSON.stringify([{ op: 'replace_text', find: '正文第一段', replace: '正文已被改写' }])
+  })
+  check('edit_docx 可应用算子', docxEdit.ok, docxEdit.output.slice(0, 100))
+  const docxRead2 = await callTool('read_docx', { path: 'out/报告.docx' })
+  check('edit_docx 改动已持久化', docxRead2.output.includes('正文已被改写'))
+
+  const xlsxEdit = await callTool('edit_xlsx', {
+    path: 'out/营收.xlsx',
+    ops: JSON.stringify([{ op: 'set_cell', sheet: '月度', row: 1, col: 2, value: 999 }])
+  })
+  check('edit_xlsx 可应用算子', xlsxEdit.ok, xlsxEdit.output.slice(0, 100))
+  const xlsxRead2 = await callTool('read_xlsx', { path: 'out/营收.xlsx' })
+  check('edit_xlsx 改动已持久化', xlsxRead2.output.includes('999'))
+
+  const pptxEdit = await callTool('edit_ppt', {
+    path: 'out/汇报.pptx',
+    ops: JSON.stringify([{ op: 'set_title', title: '已改标题' }])
+  })
+  check('edit_ppt 可应用算子', pptxEdit.ok, pptxEdit.output.slice(0, 100))
+
+  // --- transform_file：真实数据管道（过滤 + 派生列）+ 导出 xlsx ---
+  fs.writeFileSync(
+    path.join(wsRoot, 'out/people.csv'),
+    'name,age,city\n张三,17,上海\n李四,25,北京\n王五,31,上海\n',
+    'utf8'
+  )
+  const tfPreview = await callTool('transform_file', {
+    input: 'out/people.csv',
+    steps: JSON.stringify([
+      { op: 'filter', expr: "col('age') >= 18" },
+      { op: 'derive', name: '年份', expr: "2024 - col('age')" }
+    ])
+  })
+  check('transform_file 预览成功', tfPreview.ok, tfPreview.output.slice(0, 120))
+  check('过滤条件生效（17 岁被剔除）', !tfPreview.output.includes('张三'))
+  check('派生列生效', tfPreview.output.includes('年份') || tfPreview.output.includes('1999'))
+  check('未给 output 时不落盘', !fs.existsSync(path.join(wsRoot, 'out/people_out.csv')))
+
+  const tfWrite = await callTool('transform_file', {
+    input: 'out/people.csv',
+    steps: JSON.stringify([{ op: 'filter', expr: "col('age') >= 18" }]),
+    output: 'out/people_clean.csv'
+  })
+  check('transform_file 可写盘', tfWrite.ok && fs.existsSync(path.join(wsRoot, 'out/people_clean.csv')))
+  const cleaned = fs.readFileSync(path.join(wsRoot, 'out/people_clean.csv'), 'utf8')
+  check('写盘内容正确（保留表头 + 2 行）', cleaned.includes('name,age,city') && cleaned.includes('李四') && !cleaned.includes('张三'))
+
+  const tfXlsx = await callTool('transform_file', {
+    input: 'out/people.csv',
+    steps: JSON.stringify([{ op: 'filter', expr: "col('age') >= 18" }]),
+    output: 'out/people_clean.xlsx'
+  })
+  check('transform_file 可导出 xlsx', tfXlsx.ok && fs.existsSync(path.join(wsRoot, 'out/people_clean.xlsx')))
+
+  // --- 只读工具链：search_files 能搜到刚生成的 Office 产物 ---
+  const searchOffice = await callTool('search_files', { query: '华东' })
+  check('search_files 可搜 Office 产物文本', searchOffice.ok, searchOffice.output.slice(0, 100))
+
+  // --- 文件管理类工具 ---
+  const listOut = await callTool('list_files', { path: 'out' })
+  check('list_files 列出产物目录', listOut.ok && listOut.output.includes('报告.docx'))
+  const mkdir = await callTool('create_dir', { path: 'out/nested' })
+  check('create_dir 成功', mkdir.ok, mkdir.output.slice(0, 80))
+  const move = await callTool('move_file', { from: 'out/people_clean.csv', to: 'out/nested/moved.csv' })
+  check('move_file 成功', move.ok && fs.existsSync(path.join(wsRoot, 'out/nested/moved.csv')))
+  const del = await callTool('delete_file', { path: 'out/nested/moved.csv' })
+  check('delete_file 成功', del.ok && !fs.existsSync(path.join(wsRoot, 'out/nested/moved.csv')))
+
+  // --- todo_write：长程任务清单 ---
+  const todo = await callTool('todo_write', {
+    todos: JSON.stringify([{ id: '1', content: '读素材', status: 'completed' }, { id: '2', content: '出报表', status: 'in_progress' }])
+  })
+  check('todo_write 成功', todo.ok, todo.output.slice(0, 80))
+
+  // ===== 16. 技能系统（工具链入口） =====
+  section('16. 技能系统工具（list_skills / load_skill）')
+  const listSkills = await callTool('list_skills', {})
+  check('list_skills 成功', listSkills.ok, listSkills.output.slice(0, 100))
+  check('技能清单含主 Skill', listSkills.output.includes('ppt') && listSkills.output.includes('docx'))
+  check('技能清单含数据管道技能', listSkills.output.includes('data'))
+
+  const loadPpt = await callTool('load_skill', { name: 'ppt' })
+  check('load_skill(ppt) 成功', loadPpt.ok, loadPpt.output.slice(0, 100))
+  check('技能正文已加载', loadPpt.output.length > 2000, `${loadPpt.output.length} 字`)
+
+  // 参考文件：主 Skill 的 reference/ 子目录（docx 技能带 6 篇参考文档）
+  const loadBranch = await callTool('load_skill', { name: 'docx', file: 'reference/doc-dsl.md' })
+  check('可按路径加载技能参考文档', loadBranch.ok, loadBranch.output.slice(0, 90))
+
+  const loadBadFile = await callTool('load_skill', { name: 'data', file: 'reference/recipes.md' })
+  check('缺失的参考文件给出可用清单', !loadBadFile.ok && loadBadFile.output.includes('SKILL.md'), loadBadFile.output.slice(0, 70))
+
+  const loadMissing = await callTool('load_skill', { name: 'no-such-skill' })
+  check('不存在的技能给出明确错误', !loadMissing.ok, loadMissing.output.slice(0, 80))
+
   // ===== 结果 =====
   console.log(`\n${'─'.repeat(58)}`)
   console.log(`通过 ${passed} 项，失败 ${failed} 项`)
