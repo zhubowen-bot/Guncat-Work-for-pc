@@ -263,7 +263,16 @@ export interface WorkRunRequest {
   mode: AgentMode
   thinkingEnabled: boolean
   webSearchEnabled: boolean
+  /**
+   * 推理强度：'max' | 'high' | 'low'（原版按形态分档：工作 Max/High/Low，交互 High/Low/Off）。
+   * 不传时由主进程按 thinkingEnabled 推默认值 —— 此前是**写死** 'high'/'none'，
+   * 于是工作模式永远拿不到 Max 档，也没法选 Low 提速。
+   */
+  reasoningEffort?: string
 }
+
+/** 推理强度的合法取值（对齐 AgentLoopService 下发给三种协议的取值） */
+export const REASONING_EFFORTS: string[] = ['max', 'high', 'low', 'none']
 
 /**
  * 重新生成最后一条回答（对应原版消息操作行的「重答」）。

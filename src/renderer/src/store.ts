@@ -29,6 +29,23 @@ export interface Notice {
   at: number
 }
 
+// 推理强度的偏好键（与主进程 Constants 里的两个键同名）
+const PREF_EFFORT_WORK = 'guncat_reasoning_effort'
+const PREF_EFFORT_INTERACTIVE = 'guncat_interactive_effort'
+
+/**
+ * 从偏好里取某个形态的推理强度。
+ *
+ * 默认值按原版的口径：工作模式 'high'（均衡），交互模式 'high'。
+ * 聊天形态没有强度概念，但 store 里是一个字段，就统一用工作那个键 ——
+ * 反正只在工作/交互形态下才会被读走。
+ */
+function effortFromPrefs(prefs: Record<string, string> | undefined, mode: string): string {
+  const key = mode === 'interactive' ? PREF_EFFORT_INTERACTIVE : PREF_EFFORT_WORK
+  const raw = prefs?.[key] ?? ''
+  return raw === 'max' || raw === 'high' || raw === 'low' || raw === 'none' ? raw : 'high'
+}
+
 interface State {
   ready: boolean
   /** 真实智能体（agents.json，IPC 原样） */
@@ -43,6 +60,12 @@ interface State {
   mode: AgentMode
   running: boolean
   thinkingEnabled: boolean
+  /**
+   * 推理强度（工作 / 交互模式）：'max' | 'high' | 'low' | 'none'。
+   * 原版按形态分两个偏好键持久化（工作 Max/High/Low，交互 High/Low/Off），
+   * 桌面端此前把它写死在主进程里，用户无法选择。
+   */
+  reasoningEffort: string
   webSearchEnabled: boolean
   settings: AppSettingsDto | null
   workspace: WorkspaceEntryDto[]
@@ -66,6 +89,7 @@ interface State {
   selectAgent(agentId: string): Promise<void>
   setMode(mode: AgentMode): void
   setThinking(value: boolean): void
+  setReasoningEffort(value: string): void
   setWebSearch(value: boolean): void
   openSettings(open: boolean): void
   toggleWorkspace(open?: boolean): void
@@ -235,6 +259,7 @@ export const useStore = create<State>((set, get) => {
     mode: 'chat',
     running: false,
     thinkingEnabled: false,
+    reasoningEffort: 'high',
     webSearchEnabled: false,
     settings: null,
     workspace: [],
@@ -268,6 +293,8 @@ export const useStore = create<State>((set, get) => {
         activeAgentId: firstReal === undefined ? '' : firstReal.id,
         summaries,
         settings,
+        // 推理强度按当前形态从偏好里取（工作 / 交互各一个键，与原版一致）
+        reasoningEffort: effortFromPrefs(settings.prefs, 'chat'),
         ready: true
       })
       if (summaries.length > 0) {
@@ -344,6 +371,8 @@ export const useStore = create<State>((set, get) => {
       // 形态与引擎是同一件事的两种说法（原版：形态切换就是切到对应虚拟智能体），
       // 因此这里走 selectAgent，顺带把会话也切过去，避免「界面显示工作模式、
       // 实际发到聊天模式会话」这种错位。
+      // 推理强度按形态各存一个键，切形态时把它一起换过来。
+      set({ reasoningEffort: effortFromPrefs(get().settings?.prefs, mode) })
       const target = agentIdForMode(mode, get().agents, get().activeAgentId)
       if (target === '') {
         set({ mode })
@@ -358,6 +387,14 @@ export const useStore = create<State>((set, get) => {
 
     setThinking(value) {
       set({ thinkingEnabled: value })
+    },
+
+    setReasoningEffort(value) {
+      set({ reasoningEffort: value })
+      // 按形态存到各自的键上（与原版 LS_KEY_REASONING_EFFORT / LS_KEY_INTERACTIVE_EFFORT 同名）：
+      // 切回另一种形态时能回到各自上次选的档位
+      const key = get().mode === 'interactive' ? PREF_EFFORT_INTERACTIVE : PREF_EFFORT_WORK
+      void window.guncat.settings.saveString(key, value)
     },
 
     setWebSearch(value) {
@@ -391,7 +428,9 @@ export const useStore = create<State>((set, get) => {
         thinkingEnabled: get().thinkingEnabled,
         webSearchEnabled: get().webSearchEnabled,
         // 附件只在聊天模式直传；工作/交互模式的素材入口是工作区（上传/拖拽）
-        attachmentPaths: mode === 'chat' ? (attachmentPaths ?? []) : []
+        attachmentPaths: mode === 'chat' ? (attachmentPaths ?? []) : [],
+        // 推理强度只对 Agent Loop 的两种形态有意义（原版也是这么分档的）
+        reasoningEffort: mode === 'chat' ? undefined : get().reasoningEffort
       }
       set({ running: true })
       try {

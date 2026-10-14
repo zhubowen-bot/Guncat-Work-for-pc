@@ -590,6 +590,31 @@ select {
   background: var(--accent-soft);
 }
 
+/* 推理强度选择器：与两个开关同排，样式上也是胶囊 */
+.topbar__effort {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 3px 6px 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.topbar__effort select {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  padding: 1px 2px;
+  outline: none;
+}
+
+.topbar__effort select:disabled {
+  color: var(--text-faint);
+}
+
 .timeline {
   flex: 1;
   min-height: 0;

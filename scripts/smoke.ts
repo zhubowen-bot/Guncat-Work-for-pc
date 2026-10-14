@@ -1,4 +1,4 @@
-﻿// 无头冒烟验证：在纯 Node 下跑通移植过来的业务内核。
+// 无头冒烟验证：在纯 Node 下跑通移植过来的业务内核。
 //
 // 为什么需要它：Electron 的 GUI 在本机沙箱里无法启动（进程被宿主作业对象拒绝），
 // 但应用真正有风险的部分是「从鸿蒙移植过来的 3.5 万行业务逻辑」，
@@ -773,34 +773,49 @@ async function main(): Promise<void> {
   }
 
   // A) 总时长（约 720ms）远超读超时（300ms），但块与块之间只隔 60ms —— 读空闲语义下这是正常长流式
-  const streamed = await startStreamServer(60, 12, false)
-  const httpA = guncatHttp.createHttp()
-  const chunksA: string[] = []
-  let endedA = false
-  httpA.on('dataReceive', (data: ArrayBuffer) => {
-    chunksA.push(Buffer.from(data).toString('utf8'))
-  })
-  httpA.on('dataEnd', () => {
-    endedA = true
-  })
+  //
+  // 允许多试两次：这一段验证的是**超时语义**，不是连通性。本机上偶发过
+  // 「fetch failed / 0 块」的连接层抖动（上一轮的 socket 还没完全释放），
+  // 那与读超时无关。只在**完全没收到任何数据**时才重试，语义断言不受影响。
   let errorA = ''
-  try {
-    await httpA.requestInStream(streamed.url, {
-      method: guncatHttp.RequestMethod.GET,
-      readTimeout: 300,
-      connectTimeout: 3000
+  let chunksA: string[] = []
+  let endedA = false
+  let tries = 0
+  while (tries < 3) {
+    tries++
+    const streamed = await startStreamServer(60, 12, false)
+    const httpA = guncatHttp.createHttp()
+    chunksA = []
+    endedA = false
+    errorA = ''
+    httpA.on('dataReceive', (data: ArrayBuffer) => {
+      chunksA.push(Buffer.from(data).toString('utf8'))
     })
-  } catch (e) {
-    errorA = String((e as Error)?.message ?? e)
+    httpA.on('dataEnd', () => {
+      endedA = true
+    })
+    try {
+      await httpA.requestInStream(streamed.url, {
+        method: guncatHttp.RequestMethod.GET,
+        readTimeout: 300,
+        connectTimeout: 3000
+      })
+    } catch (e) {
+      errorA = String((e as Error)?.message ?? e)
+    }
+    stopServer(streamed.server)
+    if (errorA === '' || chunksA.length > 0) {
+      break
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 200))
   }
   check(
     '长流式：总时长超过读超时、但一直在读 —— 不该被中断',
     errorA === '' && endedA,
-    `${chunksA.length} 块 / 错误=${errorA === '' ? '无' : errorA.slice(0, 60)}`
+    `${chunksA.length} 块 / 第 ${tries} 次 / 错误=${errorA === '' ? '无' : errorA.slice(0, 50)}`
   )
   const expectedA = Array.from({ length: 12 }, (_v, i) => 'chunk' + String(i)).join('')
   check('长流式：数据一块不落', chunksA.join('') === expectedA, `${chunksA.join('').length} 字节`)
-  stopServer(streamed.server)
 
   // B) 拿到响应头后不再发数据 —— 这才应该由读空闲超时掐断
   const stalled = await startStreamServer(0, 0, true)

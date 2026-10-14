@@ -44,6 +44,8 @@ export default function App() {
   const mode = useStore((s) => s.mode)
   const running = useStore((s) => s.running)
   const thinkingEnabled = useStore((s) => s.thinkingEnabled)
+  const reasoningEffort = useStore((s) => s.reasoningEffort)
+  const setReasoningEffort = useStore((s) => s.setReasoningEffort)
   const webSearchEnabled = useStore((s) => s.webSearchEnabled)
   const setThinking = useStore((s) => s.setThinking)
   const setWebSearch = useStore((s) => s.setWebSearch)
@@ -201,6 +203,33 @@ export default function App() {
             </small>
           </div>
 
+          {/* 推理强度（对齐原版 ChatPage 输入区「模型」胶囊里的能力预设）：
+              工作模式 极高/均衡/快速，交互模式 均衡/快速/关闭。
+              此前这个值被写死在主进程里（high/none），工作模式永远拿不到 Max 档。 */}
+          {mode !== 'chat' ? (
+            <label className="topbar__effort" title="推理强度（越高越慢，长程复杂任务建议拉满）">
+              推理
+              <select
+                value={reasoningEffort}
+                onChange={(e) => setReasoningEffort(e.target.value)}
+                disabled={running}
+              >
+                {mode === 'interactive' ? (
+                  <>
+                    <option value="high">均衡</option>
+                    <option value="low">快速</option>
+                    <option value="none">关闭</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="max">极高</option>
+                    <option value="high">均衡</option>
+                    <option value="low">快速</option>
+                  </>
+                )}
+              </select>
+            </label>
+          ) : null}
           <button
             className="toggle"
             data-on={thinkingEnabled}

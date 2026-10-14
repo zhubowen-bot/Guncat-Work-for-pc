@@ -55,6 +55,7 @@ import type {
   ToolCallRecordDto,
   WorkRunRequest
 } from '../../ipc/contract'
+import { REASONING_EFFORTS } from '../../ipc/contract'
 
 type Emit = (event: GuncatEvent) => void
 
@@ -329,7 +330,10 @@ export class SessionManager {
     // 本地联网搜索配置（整体 JSON）。原版由 SettingsPanel 编辑、ChatViewModel 落盘；
     // 桌面端此前既没读也没下发，LocalWebSearch.bind() 从来没有调用者 ——
     // 结果是「本地联网搜索」那套配置（引擎 / 各引擎 Key / maxResults）在桌面上形同不存在。
-    Constants.LS_KEY_LOCAL_SEARCH_CONFIG
+    Constants.LS_KEY_LOCAL_SEARCH_CONFIG,
+    // 推理强度（按形态分两个键，与原版一致）。渲染层的档位选择器读写它们。
+    Constants.LS_KEY_REASONING_EFFORT,
+    Constants.LS_KEY_INTERACTIVE_EFFORT
   ]
 
   private async loadStringPrefs(): Promise<Record<string, string>> {
@@ -794,7 +798,7 @@ export class SessionManager {
     SubagentService.bind(
       config,
       request.thinkingEnabled,
-      request.thinkingEnabled ? 'high' : 'none',
+      SessionManager.resolveEffort(request),
       (context: never, convId: string, name: string, argsJson: string, abortSignal?: never) =>
         WorkToolRunner.execute(context, convId, name, argsJson, abortSignal ?? null)
     )
@@ -823,7 +827,7 @@ export class SessionManager {
     ]
 
     const mode: string = request.mode === 'interactive' ? 'interactive' : 'work'
-    const reasoningEffort: string = request.thinkingEnabled ? 'high' : 'none'
+    const reasoningEffort: string = SessionManager.resolveEffort(request)
     const maxSteps: number = Constants.WORK_MAX_STEPS
 
     handle.busy = true
@@ -1394,7 +1398,22 @@ export class SessionManager {
     }
   }
 
-  static toApiConfigDto(config: ApiConfig): ApiConfigDto {
+  /**
+   * 解析推理强度。
+   *
+   * 请求里给了合法取值就用它（原版按形态分档：工作 Max/High/Low，交互 High/Low/Off）；
+   * 否则退回按「深度思考」开关推的默认值（开着 high、关掉 none）——
+   * 这也是桌面端此前**唯一**的行为：写死，于是工作模式永远拿不到 Max 档。
+   */
+  private static resolveEffort(request: { thinkingEnabled: boolean; reasoningEffort?: string }): string {
+    const asked: string | undefined = request.reasoningEffort
+    if (asked !== undefined && REASONING_EFFORTS.includes(asked)) {
+      return asked
+    }
+    return request.thinkingEnabled ? 'high' : 'none'
+  }
+
+  private static toApiConfigDto(config: ApiConfig): ApiConfigDto {
     return {
       provider: config.provider,
       baseUrl: config.baseUrl,

@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
+import http from 'node:http'
 import { root, alias } from './esbuild-aliases.mjs'
 
 const dir = path.join(root, '.smoke')
@@ -623,6 +624,86 @@ try {
 }
 check('一次性提醒触发后被移除（不会每拍重复响）', Array.isArray(schedLeft) && schedLeft.length === 0)
 session.stopScheduleTicker()
+
+// --- 推理强度：此前在主进程里被写死成 high/none（审计 P1-5） ---
+//
+// 内核本来就支持 max/high/low（AgentLoopService 下发给三种协议），
+// 但 SessionManager 一直写 `thinkingEnabled ? 'high' : 'none'` ——
+// 工作模式拿不到 Max 档（长程任务的推理预算被砍），也没法选 Low 提速。
+// 这里用一个本地服务把真正发出去的请求体抓下来看。
+const capturedBodies = []
+const effortServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    capturedBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => effortServer.listen(0, '127.0.0.1', () => resolve()))
+const effortPort = effortServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(effortPort),
+  apiKey: 'sk-effort-test',
+  model: 'effort-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convEffort = await inv('conversations:create', agents[0].id, 'work')
+
+await inv('work:run', {
+  conversationId: convEffort.id,
+  text: '选最高档',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false,
+  reasoningEffort: 'max'
+})
+const maxBody = capturedBodies.find((b) => b.includes('reasoning_effort')) ?? ''
+check(
+  '推理强度按请求透传（工作模式此前永远拿不到 Max 档）',
+  maxBody.includes('"reasoning_effort":"max"'),
+  maxBody.slice(maxBody.indexOf('reasoning_effort') - 20, maxBody.indexOf('reasoning_effort') + 30)
+)
+check('深度思考开关仍然照常下发', maxBody.includes('"thinking":{"type":"enabled"}'))
+
+capturedBodies.length = 0
+await inv('work:run', {
+  conversationId: convEffort.id,
+  text: '不传强度',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+check(
+  '不传强度时退回默认 high（与改动前一致，不改变既有行为）',
+  capturedBodies.some((b) => b.includes('"reasoning_effort":"high"'))
+)
+
+capturedBodies.length = 0
+await inv('work:run', {
+  conversationId: convEffort.id,
+  text: '非法强度',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false,
+  reasoningEffort: 'turbo'
+})
+check(
+  '非法强度被拒（不会把任意字符串塞进请求体）',
+  capturedBodies.some((b) => b.includes('"reasoning_effort":"high"')) &&
+    !capturedBodies.some((b) => b.includes('turbo'))
+)
+effortServer.closeAllConnections?.()
+effortServer.close()
 
 // --- 导出回答为 Word ---
 // 渲染进程走的是带保存对话框的通道（替身返回取消）
