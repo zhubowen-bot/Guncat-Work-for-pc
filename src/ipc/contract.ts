@@ -27,6 +27,12 @@ export const INVOKE = {
   /** 会话的任务统计与当前目标（原版 DetailsPanelView 的统计卡 + 目标卡） */
   conversationStats: 'conversation:stats',
   /**
+   * 本会话的产物汇总（原版对话流末尾的 Codex 风格 Changes 卡）。
+   * 汇总逻辑是已移植的 `core/common/WorkArtifacts.WorkArtifactUtil.collect`，
+   * 在桌面端此前**零引用**（连 core 内部都没人 import）。
+   */
+  conversationArtifacts: 'conversation:artifacts',
+  /**
    * 配置方案（多套 API 配置）。原版 SettingsPanel 顶部的「配置方案 / 配置名称」就是它；
    * 桌面端此前 ApiProfileDto、saveApiProfiles 通道、StorageManager 的读写**全都在**，
    * 只有渲染层从来没有调用点 —— 用户无法保存/切换第二套配置。
@@ -172,6 +178,30 @@ export interface GoalDto {
   status: string
   rounds: number
   maxRounds: number
+}
+
+/** diff 缩略的一行（对应原版 WorkArtifactsCard 的 ArtifactDiffRow） */
+export interface ArtifactDiffRowDto {
+  type: string
+  text: string
+}
+
+/** 产物汇总里的一个文件 */
+export interface ArtifactFileDto {
+  path: string
+  /** 是否有可展示的行级 diff（Office/二进制产物没有） */
+  hasDiff: boolean
+  adds: number
+  dels: number
+  /** 最多 8 行的 diff 缩略（对齐原版 diffPreviewRows 的上限） */
+  rows: ArtifactDiffRowDto[]
+}
+
+/** 产物汇总卡的数据（对应 core 的 WorkArtifactSummary） */
+export interface WorkArtifactsDto {
+  files: ArtifactFileDto[]
+  totalAdds: number
+  totalDels: number
 }
 
 export interface SearchEngineDto {

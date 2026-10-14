@@ -118,6 +118,7 @@ const required = [
   'attachments:pick',
   'work:steer',
   'conversation:stats',
+  'conversation:artifacts',
   'message:exportDocx',
   'asr:transcribe'
 ]
@@ -854,6 +855,90 @@ check(
   JSON.stringify(statsGoal.goal)
 )
 check('没有目标时不编造（返回 null）', (await inv('conversation:stats', convNew.id)).goal === null)
+
+// --- 产物汇总（审计 P2-8）：一轮工作产出了哪些文件 ---
+//
+// 汇总逻辑是已移植的 `WorkArtifactUtil.collect`，在桌面端此前**零引用**
+// （连 core 内部都没人 import），于是界面上完全看不到这轮的产物清单。
+const artifactBodies = []
+const artifactServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    artifactBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    if (artifactBodies.length === 1) {
+      res.write(
+        'data: ' +
+          JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_write_1',
+                      type: 'function',
+                      function: {
+                        name: 'write_file',
+                        arguments: JSON.stringify({ path: 'reports/周报.md', content: '# 周报\n' })
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }) +
+          '\n\n'
+      )
+    } else {
+      res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: '已生成周报' } }] }) + '\n\n')
+    }
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => artifactServer.listen(0, '127.0.0.1', () => resolve()))
+const artifactPort = artifactServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(artifactPort),
+  apiKey: 'sk-artifact-test',
+  model: 'artifact-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convArtifact = await inv('conversations:create', agents[0].id, 'work')
+check(
+  '没跑过时产物清单为空（不编造）',
+  (await inv('conversation:artifacts', convArtifact.id)).files.length === 0
+)
+await inv('work:run', {
+  conversationId: convArtifact.id,
+  text: '写一份周报',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const artifactsDto = await inv('conversation:artifacts', convArtifact.id)
+check(
+  '写出来的文件进了产物清单（WorkArtifactUtil.collect 此前零引用）',
+  artifactsDto.files.some((f) => f.path === 'reports/周报.md'),
+  artifactsDto.files.map((f) => f.path).join(', ') || '(空)'
+)
+check(
+  '总增减与各文件之和一致（统计不是各算各的）',
+  artifactsDto.totalAdds === artifactsDto.files.reduce((sum, f) => sum + f.adds, 0) &&
+    artifactsDto.totalDels === artifactsDto.files.reduce((sum, f) => sum + f.dels, 0),
+  `+${artifactsDto.totalAdds} -${artifactsDto.totalDels} / 文件 ${JSON.stringify(artifactsDto.files.map((f) => ({ p: f.path, a: f.adds, d: f.dels, hd: f.hasDiff })))}`
+)
+artifactServer.closeAllConnections?.()
+artifactServer.close()
 
 effortServer.closeAllConnections?.()
 effortServer.close()

@@ -143,6 +143,10 @@ const api = {
   stats: (conversationId: string): Promise<import('../ipc/contract').ConversationStatsDto> =>
     ipcRenderer.invoke(INVOKE.conversationStats, conversationId),
 
+  /** 本会话的产物汇总（对话流末尾的 Changes 卡） */
+  artifacts: (conversationId: string): Promise<import('../ipc/contract').WorkArtifactsDto> =>
+    ipcRenderer.invoke(INVOKE.conversationArtifacts, conversationId),
+
   messages: {
     /** 把一条回答导出为 Word */
     exportDocx: (

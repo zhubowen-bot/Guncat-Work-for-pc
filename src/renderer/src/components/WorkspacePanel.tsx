@@ -1,4 +1,4 @@
-﻿// 工作区面板（对齐原版 WorkspaceBar：标题 + 上传/导出 + 文件清单 + 底部统计）。
+// 工作区面板（对齐原版 WorkspaceBar：标题 + 上传/导出 + 文件清单 + 底部统计）。
 //
 // 用户报障「工作区上传文件有问题，找不到入口」的根因很具体：
 // 桌面版此前只有「拖拽文件到窗口」这一条导入路径，而拖拽在界面上**没有任何提示**，
@@ -216,31 +216,7 @@ export function WorkspacePanel() {
   const loadWorkspace = useStore((s) => s.loadWorkspace)
   const pickFiles = useStore((s) => s.pickWorkspaceFiles)
   const pushNotice = useStore((s) => s.pushNotice)
-
-  // 文件预览。workspace:read 这条 IPC 一直在（主进程侧做了 2MB 上限与越界校验），
-  // 但渲染层此前从来没有调用点 —— 原版 WorkspaceBar 是点一下文件就能看内容的。
-  const [preview, setPreview] = useState<{
-    path: string
-    text: string
-    truncated: boolean
-  } | null>(null)
-  const [previewLoading, setPreviewLoading] = useState('')
-
-  async function openPreview(path: string): Promise<void> {
-    if (activeId === null) {
-      return
-    }
-    setPreviewLoading(path)
-    try {
-      const result = await window.guncat.workspace.read(activeId, path)
-      setPreview({ path, text: result.text, truncated: result.truncated })
-    } catch (e) {
-      // 主进程对二进制/超限文件会给出可读原因，这里原样呈现
-      pushNotice('warn', String(e instanceof Error ? e.message : e))
-    } finally {
-      setPreviewLoading('')
-    }
-  }
+  const preview = useWorkspacePreview(activeId)
 
   const toolCalls = (active?.messages ?? []).reduce((sum, m) => sum + m.toolCalls.length, 0)
   const files = workspace.filter((e) => !e.isDirectory).length
@@ -347,14 +323,14 @@ export function WorkspacePanel() {
                   className="file-item__name file-item__name--link"
                   title={`${entry.path}\n点击预览内容`}
                   disabled={running}
-                  onClick={() => void openPreview(entry.path)}
+                  onClick={() => void preview.open(entry.path)}
                 >
                   {entry.path}
                 </button>
               )}
               {entry.isDirectory ? null : (
                 <span className="file-item__size">
-                  {previewLoading === entry.path ? '读取中…' : formatSize(entry.size)}
+                  {preview.loading === entry.path ? '读取中…' : formatSize(entry.size)}
                 </span>
               )}
               <button
@@ -388,24 +364,61 @@ export function WorkspacePanel() {
       ) : null}
 
       {/* 预览用弹层而不是挤在面板里：工作区只有 300 多像素宽，正文根本读不了 */}
-      {preview !== null ? (
-        <div className="preview-overlay" onClick={() => setPreview(null)}>
-          <div className="preview" onClick={(e) => e.stopPropagation()}>
-            <div className="preview__head">
-              <strong title={preview.path}>{preview.path}</strong>
-              {preview.truncated ? <span className="preview__tag">已截断</span> : null}
-              <button
-                className="icon-btn"
-                title="关闭预览"
-                onClick={() => setPreview(null)}
-              >
-                <IconClose size={15} />
-              </button>
-            </div>
-            <pre className="preview__body">{preview.text}</pre>
-          </div>
-        </div>
-      ) : null}
+      {preview.overlay}
     </aside>
   )
+}
+
+/**
+ * 工作区文件预览。
+ *
+ * `workspace:read` 这条 IPC 一直在（主进程侧做了 2MB 上限与越界校验），
+ * 原版 WorkspaceBar 是点一下文件就能看内容的 —— 桌面端此前渲染层没有调用点。
+ * 抽成 hook 是因为产物汇总卡（时间线末尾）也要能点开文件预览，
+ * 两处各写一份弹层与读取逻辑没有意义。
+ */
+export function useWorkspacePreview(activeId: string | null) {
+  const pushNotice = useStore((s) => s.pushNotice)
+  const [state, setState] = useState<{ path: string; text: string; truncated: boolean } | null>(
+    null
+  )
+  const [loading, setLoading] = useState('')
+
+  async function open(path: string): Promise<void> {
+    if (activeId === null) {
+      return
+    }
+    setLoading(path)
+    try {
+      const result = await window.guncat.workspace.read(activeId, path)
+      setState({ path, text: result.text, truncated: result.truncated })
+    } catch (e) {
+      // 主进程对二进制/超限文件会给出可读原因，这里原样呈现
+      pushNotice('warn', String(e instanceof Error ? e.message : e))
+    } finally {
+      setLoading('')
+    }
+  }
+
+  function close(): void {
+    setState(null)
+  }
+
+  const overlay =
+    state === null ? null : (
+      <div className="preview-overlay" onClick={close}>
+        <div className="preview" onClick={(e) => e.stopPropagation()}>
+          <div className="preview__head">
+            <strong title={state.path}>{state.path}</strong>
+            {state.truncated ? <span className="preview__tag">已截断</span> : null}
+            <button className="icon-btn" title="关闭预览" onClick={close}>
+              <IconClose size={15} />
+            </button>
+          </div>
+          <pre className="preview__body">{state.text}</pre>
+        </div>
+      </div>
+    )
+
+  return { open, close, loading, overlay }
 }

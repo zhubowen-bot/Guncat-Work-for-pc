@@ -52,6 +52,7 @@ import {
   formatTaskDuration,
   workspaceFileIcon
 } from '@renderer/components/WorkspacePanel'
+import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
 import { marqueeText } from '@renderer/components/MessageView'
 import type { MessageDto } from '@ipc/contract'
 
@@ -210,6 +211,53 @@ export function renderTaskStatsEmpty(): string {
 export { formatTaskDuration }
 export function renderDurations(): string[] {
   return [0, 8400, 83400, 125000].map((ms) => formatTaskDuration(ms))
+}
+
+/**
+ * 产物汇总卡（原版对话流末尾的 Codex 风格 Changes 卡）。
+ * 默认展开列文件；每个文件的行级改动**默认收起** —— 这两条都要能断言到。
+ */
+export function renderArtifacts(): string {
+  return renderToStaticMarkup(
+    createElement(WorkArtifactsCard, {
+      artifacts: {
+        files: [
+          {
+            path: 'reports/季度复盘.docx',
+            hasDiff: false,
+            adds: 0,
+            dels: 0,
+            rows: []
+          },
+          {
+            path: 'src/core/main.ts',
+            hasDiff: true,
+            adds: 3,
+            dels: 1,
+            rows: [
+              { type: 'same', text: 'const a = 1' },
+              { type: 'del', text: 'const b = 2' },
+              { type: 'add', text: 'const b = 3' },
+              { type: 'add', text: 'const c = 4' }
+            ]
+          }
+        ],
+        totalAdds: 3,
+        totalDels: 1
+      },
+      onPreview: () => {}
+    })
+  )
+}
+
+/** 没有产物时整张卡不渲染 */
+export function renderArtifactsEmpty(): string {
+  return renderToStaticMarkup(
+    createElement(WorkArtifactsCard, {
+      artifacts: { files: [], totalAdds: 0, totalDels: 0 },
+      onPreview: () => {}
+    })
+  )
 }
 
 /**

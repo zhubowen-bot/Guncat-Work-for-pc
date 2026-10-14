@@ -15,6 +15,7 @@ import type {
   MultimodalConfigDto,
   PickedAttachmentDto,
   RendererStage,
+  WorkArtifactsDto,
   SearchEngineDto,
   WorkspaceEntryDto,
   WorkRunRequest
@@ -95,6 +96,8 @@ export interface GuncatApi {
   steer(conversationId: string, text: string): Promise<boolean>
   /** 会话的任务统计与当前目标（工作区面板的统计卡与目标卡） */
   stats(conversationId: string): Promise<ConversationStatsDto>
+  /** 本会话的产物汇总（对话流末尾的 Changes 卡） */
+  artifacts(conversationId: string): Promise<WorkArtifactsDto>
   messages: {
     exportDocx(
       conversationId: string,

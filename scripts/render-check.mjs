@@ -1,4 +1,4 @@
-﻿// 交互模式渲染器的无头验证：用 react-dom/server 把界面程序渲染成 HTML 字符串，
+// 交互模式渲染器的无头验证：用 react-dom/server 把界面程序渲染成 HTML 字符串，
 // 断言关键组件确实出现在产物里。
 //
 // 为什么值得做：Electron GUI 在本机跑不起来，但「元素树 → React 组件树」这一段
@@ -657,6 +657,35 @@ check(
   '任务用时的量级分档正确（无数据 / 秒 / 分秒）',
   durations[0] === '—' && durations[1] === '8.4 秒' && durations[2] === '1 分 23 秒' && durations[3] === '2 分 5 秒',
   durations.join(' | ')
+)
+
+// --- 产物汇总卡（审计 P2-8） ---
+//
+// 事故形状：一轮工作跑完，用户看不到「这轮产出了/改了哪些文件、各加了多少行」，
+// 只能去工作区列表里自己找。汇总逻辑（core/common/WorkArtifacts）在桌面端零引用 ——
+// 连 core 内部都没人 import。
+console.log('\n26. 产物汇总卡（Changes）')
+const artifactsHtml = mod.renderArtifacts()
+check('折叠头显示产物数量与总增减', artifactsHtml.includes('2 个文件') && artifactsHtml.includes('artifacts__head'))
+check('默认展开列出文件（对齐原版 expanded 初值 true）', artifactsHtml.includes('artifacts__list'))
+check(
+  'Office 产物与源码文件都在列表里',
+  artifactsHtml.includes('reports/季度复盘.docx') && artifactsHtml.includes('src/core/main.ts')
+)
+check(
+  '每个文件有自己的 +N -M',
+  artifactsHtml.includes('artifact__counts') && artifactsHtml.includes('+3')
+)
+check('有 diff 的文件才给展开箭头（Office 产物没有）', artifactsHtml.includes('artifact__caret'))
+check(
+  '行级改动默认收起（对齐原版 expandedDiffFiles 的初值）',
+  !artifactsHtml.includes('artifact__diff')
+)
+check('每行都有「预览」入口', artifactsHtml.includes('artifact__preview') && artifactsHtml.includes('预览'))
+check(
+  '没有产物时整张卡不渲染',
+  mod.renderArtifactsEmpty().length === 0,
+  mod.renderArtifactsEmpty().length + ' 字节'
 )
 
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)

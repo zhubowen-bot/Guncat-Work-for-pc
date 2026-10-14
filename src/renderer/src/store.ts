@@ -19,6 +19,7 @@ import type {
   ConversationDto,
   ConversationStatsDto,
   ConversationSummaryDto,
+  WorkArtifactsDto,
   GuncatEvent,
   MessageDto,
   WorkspaceEntryDto
@@ -76,6 +77,11 @@ interface State {
    * 桌面端此前只有「N 个文件 / N 个目录 / N 次工具调用」，且是全会话累计。
    */
   stats: ConversationStatsDto | null
+  /**
+   * 本会话的产物汇总（对话流末尾的 Changes 卡）。
+   * 数据由主进程用已移植的 `WorkArtifactUtil.collect` 算出来 —— 那个模块此前零引用。
+   */
+  artifacts: WorkArtifactsDto | null
   notice: Notice | null
   settingsOpen: boolean
   /**
@@ -114,6 +120,7 @@ interface State {
   abort(): Promise<void>
   loadWorkspace(): Promise<void>
   loadStats(): Promise<void>
+  loadArtifacts(): Promise<void>
   deleteWorkspaceEntry(path: string): Promise<void>
   clearWorkspace(): Promise<void>
   exportWorkspace(): Promise<void>
@@ -277,6 +284,7 @@ export const useStore = create<State>((set, get) => {
     settings: null,
     workspace: [],
     stats: null,
+    artifacts: null,
     notice: null,
     settingsOpen: false,
     workspaceOpen: true,
@@ -291,6 +299,7 @@ export const useStore = create<State>((set, get) => {
         // 一轮结束：统计卡（用时/速度/命中/轮数）与目标卡都该刷新
         if (event.type === 'turn:finished' && get().activeId === event.conversationId) {
           void get().loadStats()
+          void get().loadArtifacts()
         }
         // 外部文件到达（拖拽 / 命令行 / 系统「打开方式」）→ 导入当前会话工作区
         if (event.type === 'files:pending') {
@@ -335,6 +344,7 @@ export const useStore = create<State>((set, get) => {
       })
       await get().loadWorkspace()
       await get().loadStats()
+      await get().loadArtifacts()
     },
 
     async createConversation() {
@@ -538,6 +548,19 @@ export const useStore = create<State>((set, get) => {
         set({ stats: await window.guncat.stats(activeId) })
       } catch {
         set({ stats: null })
+      }
+    },
+
+    async loadArtifacts() {
+      const activeId = get().activeId
+      if (activeId === null) {
+        set({ artifacts: null })
+        return
+      }
+      try {
+        set({ artifacts: await window.guncat.artifacts(activeId) })
+      } catch {
+        set({ artifacts: null })
       }
     },
 

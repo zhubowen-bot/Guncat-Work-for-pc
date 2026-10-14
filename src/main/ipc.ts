@@ -293,6 +293,11 @@ export function registerIpcHandlers(session: SessionManager): void {
     session.conversationStats(conversationId)
   )
 
+  // ===== 产物汇总（对话流末尾的 Codex 风格 Changes 卡） =====
+  ipcMain.handle(INVOKE.conversationArtifacts, async (_e, conversationId: string) =>
+    session.workArtifacts(conversationId)
+  )
+
   // ===== 应用信息 =====
   ipcMain.handle(INVOKE.appInfo, async (): Promise<AppInfoDto> => {
     return {

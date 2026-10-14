@@ -9,6 +9,8 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { SpeechBar } from './components/SpeechBar'
 import { MODE_HINT, agentById } from './conversations'
 import { AgentGlyph } from './components/AgentGlyph'
+import { WorkArtifactsCard } from './components/WorkArtifactsCard'
+import { useWorkspacePreview } from './components/WorkspacePanel'
 import { useSpeech, speechTextOf } from './speech/speechStore'
 import { IconBrain, IconClose, IconGlobe } from './icons'
 
@@ -56,6 +58,10 @@ export default function App() {
   const engines = useStore((s) => s.engines)
   const activeAgentId = useStore((s) => s.activeAgentId)
   const workspaceOpen = useStore((s) => s.workspaceOpen)
+  const artifacts = useStore((s) => s.artifacts)
+  // 工作区面板收起时，产物卡的「预览」也要能弹出来 —— 弹层挂在 App 这一层
+  // （面板展开时由面板自己渲染，避免两份弹层同时出现）。
+  const preview = useWorkspacePreview(active?.id ?? null)
   // 工作区面板由「侧栏底部的『工作区』」控制，**不再按模式隐藏**：
   // 原版 ChatPage 只判 isWide && detailsOpen、不判模式 ——
   // 聊天模式下来路（拖拽 / 命令行 / 第二实例）落进该会话工作区的文件同样要能在这里看到。
@@ -276,13 +282,20 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              <Timeline
-                messages={active.messages}
-                mode={mode}
-                running={running}
-                lastAssistantId={lastAssistantId}
-                onEditToInput={fillDraft}
-              />
+              <>
+                <Timeline
+                  messages={active.messages}
+                  mode={mode}
+                  running={running}
+                  lastAssistantId={lastAssistantId}
+                  onEditToInput={fillDraft}
+                />
+                {/* 产物汇总卡挂在对话流末尾（对齐原版 ChatPage 把 WorkArtifactsCard
+                    放在时间线之后）：聊天模式没有产物概念，不给。 */}
+                {mode !== 'chat' && artifacts !== null && !running ? (
+                  <WorkArtifactsCard artifacts={artifacts} onPreview={(path) => void preview.open(path)} />
+                ) : null}
+              </>
             )}
           </div>
         </div>
@@ -297,6 +310,9 @@ export default function App() {
       </main>
 
       {showWorkspace ? <WorkspacePanel /> : null}
+
+      {/* 产物卡与工作区面板共用同一个预览弹层（见 useWorkspacePreview） */}
+      {!showWorkspace ? preview.overlay : null}
 
       <SettingsDialog />
       <SpeechBar />

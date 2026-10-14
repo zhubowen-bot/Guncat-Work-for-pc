@@ -35,6 +35,12 @@ import { GuncatUiRuntime, GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
 import { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
 import { ScheduleService } from '@core/service/ScheduleService'
 import { GoalService } from '@core/service/GoalService'
+import {
+  WorkArtifactFile,
+  WorkArtifactSummary,
+  WorkArtifactUtil
+} from '@core/common/WorkArtifacts'
+import { FileDiff } from '@core/common/DiffUtil'
 // 附件链路：MultimodalService（先行解析）与 FileUploadService（Files API）此前是零引用的
 // 已移植能力，见 makeAttachments 的说明。
 import { MultimodalService } from '@core/service/MultimodalService'
@@ -46,6 +52,7 @@ import type {
   AppSettingsDto,
   ApiConfigDto,
   ApiProfileDto,
+  ArtifactDiffRowDto,
   ChatRegenerateRequest,
   ChatSendRequest,
   ConversationDto,
@@ -55,6 +62,7 @@ import type {
   MessageDto,
   MultimodalConfigDto,
   ToolCallRecordDto,
+  WorkArtifactsDto,
   WorkRunRequest
 } from '../../ipc/contract'
 import { REASONING_EFFORTS } from '../../ipc/contract'
@@ -1523,6 +1531,50 @@ export class SessionManager {
       updatedAt: conv.messages.length > 0 ? conv.messages[conv.messages.length - 1].timestamp : conv.createdAt,
       messages: conv.messages.map((m) => SessionManager.toMessageDto(m))
     }
+  }
+
+  /**
+   * 会话的产物汇总（原版对话流末尾的 Codex 风格 Changes 卡）。
+   *
+   * 汇总逻辑直接用已移植的 `WorkArtifactUtil.collect` —— 它在桌面端此前**零引用**
+   * （连 core 内部都没有人 import），于是「这一轮产出了/改了哪些文件、各加了多少行」
+   * 在界面上完全看不到，用户只能去工作区列表里自己找。
+   */
+  workArtifacts(conversationId: string): WorkArtifactsDto {
+    const conv: Conversation | undefined = this.find(conversationId)
+    if (conv === undefined) {
+      return { files: [], totalAdds: 0, totalDels: 0 }
+    }
+    const summary: WorkArtifactSummary = WorkArtifactUtil.collect(conv.messages)
+    return {
+      files: summary.files.map((file) => ({
+        path: file.path,
+        hasDiff: file.hasDiff,
+        adds: file.adds,
+        dels: file.dels,
+        rows: SessionManager.diffPreviewRows(file)
+      })),
+      totalAdds: summary.totalAdds,
+      totalDels: summary.totalDels
+    }
+  }
+
+  /** diff 缩略：最多 8 行（对齐原版 WorkArtifactsCard.diffPreviewRows 的上限） */
+  private static diffPreviewRows(file: WorkArtifactFile): ArtifactDiffRowDto[] {
+    const rows: ArtifactDiffRowDto[] = []
+    const diff: FileDiff | null = file.diff
+    if (diff === null) {
+      return rows
+    }
+    for (const hunk of diff.hunks) {
+      for (const line of hunk.lines) {
+        if (rows.length >= 8) {
+          return rows
+        }
+        rows.push({ type: line.type, text: line.text })
+      }
+    }
+    return rows
   }
 
   /**
