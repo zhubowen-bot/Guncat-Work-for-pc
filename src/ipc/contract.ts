@@ -20,6 +20,11 @@ export const INVOKE = {
    */
   attachmentsPick: 'attachments:pick',
   /**
+   * 工作模式执行中插话（原版流式时的「发送(插话)」按钮）。
+   * 不打断当前请求，文本在下一轮开始前并入消息，返回是否被接受。
+   */
+  workSteer: 'work:steer',
+  /**
    * 配置方案（多套 API 配置）。原版 SettingsPanel 顶部的「配置方案 / 配置名称」就是它；
    * 桌面端此前 ApiProfileDto、saveApiProfiles 通道、StorageManager 的读写**全都在**，
    * 只有渲染层从来没有调用点 —— 用户无法保存/切换第二套配置。

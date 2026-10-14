@@ -4,13 +4,15 @@ import { useAutoResize } from '../hooks/useAutoResize'
 import { useVoiceInput } from '../speech/useVoiceInput'
 import { useStore } from '../store'
 import { MODE_HINT } from '../conversations'
-import { IconClose, IconFile, IconMic, IconPaperclip, IconSend, IconStop, IconStopCircle } from '../icons'
+import { IconClose, IconFile, IconMic, IconPaperclip, IconSend, IconSteer, IconStop, IconStopCircle } from '../icons'
 
 interface Props {
   running: boolean
   mode: string
   /** 发送。附件只在聊天模式有意义（工作/交互模式走的是工作区，不是附件直传） */
   onSend(text: string, attachmentPaths: string[]): void
+  /** 执行中插话（工作/交互模式）；返回是否被接受 */
+  onSteer(text: string): Promise<boolean>
   onAbort(): void
 }
 
@@ -24,7 +26,7 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-export function Composer({ running, mode, onSend, onAbort }: Props) {
+export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
   const [text, setText] = useState('')
   // 已选附件。原版输入区就是这样一条预览带：缩略图 + 文件名 + 逐项删除。
   // 桌面端此前**完全没有附件入口** —— ChatSendRequest.attachmentPaths 一直没人赋值。
@@ -84,6 +86,22 @@ export function Composer({ running, mode, onSend, onAbort }: Props) {
     onSend(value, attachments.map((a) => a.path))
     setText('')
     setAttachments([])
+  }
+
+  /**
+   * 执行中插话：文本进插话队列，在**下一轮开始前**并入消息（不打断当前请求）。
+   * 主进程说「当前没在跑」时就退回普通发送，免得文本挂在队列里等下一次任务。
+   */
+  async function steer(): Promise<void> {
+    const value = text.trim()
+    if (value === '') {
+      return
+    }
+    const accepted = await onSteer(value)
+    setText('')
+    if (!accepted) {
+      onSend(value, [])
+    }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
@@ -171,10 +189,25 @@ export function Composer({ running, mode, onSend, onAbort }: Props) {
         </button>
 
         {running ? (
-          <button className="composer__send composer__send--stop" title="停止生成" onClick={onAbort}>
-            <IconStopCircle size={20} />
-            <span className="composer__send-label">停止</span>
-          </button>
+          <>
+            {/* 插话只在 Agent Loop 的两种形态给：聊天模式的请求是「一问一答」，
+                中途补话没有「下一轮」可挂，只能中止重来（原版也是这么分的）。 */}
+            {mode !== 'chat' ? (
+              <button
+                className="composer__send composer__send--steer"
+                title="插话（不打断当前执行，在下一轮生效）"
+                disabled={text.trim() === ''}
+                onClick={() => void steer()}
+              >
+                <IconSteer size={18} />
+                <span className="composer__send-label">插话</span>
+              </button>
+            ) : null}
+            <button className="composer__send composer__send--stop" title="停止生成" onClick={onAbort}>
+              <IconStopCircle size={20} />
+              <span className="composer__send-label">停止</span>
+            </button>
+          </>
         ) : (
           <button
             className="composer__send"

@@ -1596,6 +1596,18 @@ select {
   color: var(--text);
 }
 
+/* 插话按钮：与「停止」并列，但用强调色区分主次（停止是危险动作） */
+.composer__send--steer {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.composer__send--steer:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* 附件入口（聊天模式）：与麦克风同规格的圆形按钮 */
 .composer__clip {
   display: inline-flex;

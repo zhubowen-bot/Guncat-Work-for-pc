@@ -135,6 +135,10 @@ const api = {
       ipcRenderer.invoke(INVOKE.attachmentsPick)
   },
 
+  /** 工作模式执行中插话；返回是否被接受（false 时应改走普通发送） */
+  steer: (conversationId: string, text: string): Promise<boolean> =>
+    ipcRenderer.invoke(INVOKE.workSteer, conversationId, text),
+
   messages: {
     /** 把一条回答导出为 Word */
     exportDocx: (

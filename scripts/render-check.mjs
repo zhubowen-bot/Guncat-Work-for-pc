@@ -523,6 +523,20 @@ check(
 check('发送按钮仍在', composerChat.includes('composer__send'))
 check('语音输入按钮仍在', composerChat.includes('composer__mic'))
 
+// 执行中的输入区（审计 P1-4：此前只有「停止」，想补充要求只能中止重来）
+const composerWorkRunning = mod.renderComposer('work', true)
+const composerChatRunning = mod.renderComposer('chat', true)
+check(
+  '工作模式执行中给出「插话」按钮（不打断当前执行，下一轮生效）',
+  composerWorkRunning.includes('composer__send--steer') && composerWorkRunning.includes('插话')
+)
+check('执行中仍然有「停止」', composerWorkRunning.includes('composer__send--stop'))
+check(
+  '聊天模式执行中不给插话（一问一答没有「下一轮」可挂）',
+  !composerChatRunning.includes('composer__send--steer') &&
+    composerChatRunning.includes('composer__send--stop')
+)
+
 // --- 侧栏：引擎分组 / 工作区入口（审计 P2-14、P2-15） ---
 console.log('\n23. 侧栏（引擎分组 / 工作区入口）')
 const sidebarHtml = mod.renderSidebar()

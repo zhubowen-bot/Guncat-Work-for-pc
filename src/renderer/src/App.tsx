@@ -50,6 +50,7 @@ export default function App() {
   const setThinking = useStore((s) => s.setThinking)
   const setWebSearch = useStore((s) => s.setWebSearch)
   const send = useStore((s) => s.send)
+  const steer = useStore((s) => s.steer)
   const abort = useStore((s) => s.abort)
   const fillDraft = useStore((s) => s.fillDraft)
   const engines = useStore((s) => s.engines)
@@ -290,6 +291,7 @@ export default function App() {
           running={running}
           mode={mode}
           onSend={(text, attachmentPaths) => void send(text, attachmentPaths)}
+          onSteer={steer}
           onAbort={() => void abort()}
         />
       </main>

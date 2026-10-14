@@ -145,12 +145,13 @@ export function renderSidebar(): string {
  * 输入区。附件入口（回形针）只在聊天模式给 —— 工作/交互模式的素材入口是工作区，
  * 两条路是不同的事，这里把这条分界钉住。
  */
-export function renderComposer(mode: string): string {
+export function renderComposer(mode: string, running = false): string {
   return renderToStaticMarkup(
     createElement(Composer, {
-      running: false,
+      running,
       mode,
       onSend: () => {},
+      onSteer: async () => true,
       onAbort: () => {}
     })
   )

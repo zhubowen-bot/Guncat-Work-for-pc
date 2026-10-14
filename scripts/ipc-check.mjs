@@ -116,6 +116,7 @@ const required = [
   'intake:import',
   'intake:pickFiles',
   'attachments:pick',
+  'work:steer',
   'message:exportDocx',
   'asr:transcribe'
 ]
@@ -702,6 +703,105 @@ check(
   capturedBodies.some((b) => b.includes('"reasoning_effort":"high"')) &&
     !capturedBodies.some((b) => b.includes('turbo'))
 )
+
+// --- 插话（审计 P1-4）：此前全库 `steer` 零命中，想补充要求只能中止重来 ---
+//
+// 真正的判据不是「接口返回 true」，而是**插话文本真的出现在下一轮请求体里**。
+// 用一个会拖住第一轮的本地服务（先给工具调用、再给结论），
+// 在第一轮工具执行期间插话，然后检查第二轮请求体里有没有那句话。
+const steerBodies = []
+// 第一轮的响应**故意挂住**：这样「执行中」是一个确定的窗口，而不是抢时间。
+// 抢时间的写法不可靠 —— 工具跑得太快时，等请求体出现再插话，整个任务可能已经结束了。
+let releaseSteerRound1 = null
+const steerServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    steerBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    if (steerBodies.length === 1) {
+      releaseSteerRound1 = () => {
+        // 要求调一次工具 → 循环会真的执行工具并进入第二轮
+        res.write(
+          'data: ' +
+            JSON.stringify({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: 'call_steer_1',
+                        type: 'function',
+                        function: { name: 'get_workspace_tree', arguments: '{}' }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }) +
+            '\n\n'
+        )
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }
+      return
+    }
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: '收到补充要求' } }] }) + '\n\n')
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => steerServer.listen(0, '127.0.0.1', () => resolve()))
+const steerPort = steerServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(steerPort),
+  apiKey: 'sk-steer-test',
+  model: 'steer-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convSteer = await inv('conversations:create', agents[0].id, 'work')
+check('没在跑的时候插话被拒（渲染层会改走普通发送）', (await inv('work:steer', convSteer.id, '你好')) === false)
+
+const steerRun = inv('work:run', {
+  conversationId: convSteer.id,
+  text: '先看看工作区',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+for (let i = 0; i < 250 && steerBodies.length === 0; i++) {
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+check('第一轮请求已发出（此时任务确实在执行中）', steerBodies.length === 1, `${steerBodies.length} 轮`)
+const steerAccepted = await inv('work:steer', convSteer.id, '别忘了顺带把结果写成文档')
+check('执行中插话被接受', steerAccepted === true)
+if (releaseSteerRound1 !== null) {
+  releaseSteerRound1()
+}
+await steerRun
+check(
+  '插话文本真的进了下一轮请求体（不是只返回一个 true）',
+  steerBodies.length >= 2 && steerBodies[steerBodies.length - 1].includes('别忘了顺带把结果写成文档'),
+  `${steerBodies.length} 轮请求`
+)
+const convSteerDto = await inv('conversation:get', convSteer.id)
+check(
+  '插话也作为用户消息落在会话里（用户看得见自己说了什么）',
+  (convSteerDto?.messages ?? []).some(
+    (m) => m.role === 'user' && String(m.content).includes('别忘了顺带把结果写成文档')
+  )
+)
+steerServer.closeAllConnections?.()
+steerServer.close()
+
 effortServer.closeAllConnections?.()
 effortServer.close()
 

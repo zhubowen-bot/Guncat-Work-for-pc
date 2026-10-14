@@ -494,6 +494,55 @@ export class SessionManager {
     AgentLoopService.abort()
   }
 
+  // ===== 插话（工作模式执行中补充要求） =====
+  //
+  // 审计发现：原版流式时输入区同时给「发送(插话)」与「停止」两个按钮，
+  // 插话走 workSteerQueue、在**下一轮开始前**注入；桌面端全库 `steer` 零命中，
+  // 提交时 `if (running) return`，长任务跑到一半想补充要求只能中止重来。
+  //
+  // 实现上不做「打断当前请求」——原版也不打断：文本进队列，本轮工具跑完、
+  // 下一轮开始前作为一条 user 消息并入 messages，模型自然就看到新要求了。
+
+  private steerQueue: Map<string, string[]> = new Map()
+
+  /**
+   * 插话。返回是否被接受 —— 不在跑的时候返回 false，
+   * 调用方应当改走普通发送（否则文本会挂在队列里等下一次任务）。
+   */
+  steerWork(conversationId: string, text: string): boolean {
+    const conv: Conversation | undefined = this.find(conversationId)
+    if (conv === undefined || !this.handle(conversationId).busy) {
+      return false
+    }
+    const trimmed: string = text.trim()
+    if (trimmed === '') {
+      return false
+    }
+    const queue: string[] = this.steerQueue.get(conversationId) ?? []
+    queue.push(trimmed)
+    this.steerQueue.set(conversationId, queue)
+
+    // 立刻落到会话里，让用户看得见「已经说进去了」（模型在下一轮读到同一段文本）
+    const userMsg: Message = Message.ofUser(generateMessageId(), trimmed, trimmed, [])
+    conv.messages.push(userMsg)
+    this.emit({
+      type: 'message:added',
+      conversationId,
+      message: SessionManager.toMessageDto(userMsg)
+    })
+    this.emit({ type: 'notice', level: 'info', text: '已插话，将在下一轮生效' })
+    return true
+  }
+
+  /** 取出并清空插话队列（每轮开始前调用） */
+  private drainSteer(conversationId: string): string[] {
+    const queue: string[] = this.steerQueue.get(conversationId) ?? []
+    if (queue.length > 0) {
+      this.steerQueue.delete(conversationId)
+    }
+    return queue
+  }
+
   // ===== 定时提醒推进 =====
   //
   // 审计发现：ScheduleService.tick 在桌面端**零调用点** ——
@@ -841,6 +890,12 @@ export class SessionManager {
       for (let step: number = 0; step < maxSteps; step++) {
         if (handle.abort.aborted) {
           break
+        }
+
+        // 插话在**轮与轮之间**注入（对齐原版 workSteerQueue 的时机）：
+        // 放这里而不是打断当前请求，模型能带着上一轮的工具结果一起看到新要求。
+        for (const steerText of this.drainSteer(conv.id)) {
+          messages.push(LoopMessage.user(steerText))
         }
 
         // 每一轮在 UI 上是一条 assistant 消息（思考 → 工具 → 正文）

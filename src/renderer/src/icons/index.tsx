@@ -193,6 +193,16 @@ export function IconPlus(props: IconProps) {
   )
 }
 
+/** 插话（在既有流程里加一条旁注/补充说明） */
+export function IconSteer(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 6.5h9M4 12h16M4 17.5h9" />
+      <path d="M16.5 5.5l3 2.5-3 2.5" />
+    </Svg>
+  )
+}
+
 /** 附件（回形针，对应原版 MessageInputView 的附件入口） */
 export function IconPaperclip(props: IconProps) {
   return (

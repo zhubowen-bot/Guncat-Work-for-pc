@@ -1,4 +1,4 @@
-﻿// IPC 注册：把渲染进程的调用路由到 SessionManager，并把事件推回去。
+// IPC 注册：把渲染进程的调用路由到 SessionManager，并把事件推回去。
 import { ipcMain, app, shell, dialog } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -280,6 +280,13 @@ export function registerIpcHandlers(session: SessionManager): void {
       }))
     )
   })
+
+  // ===== 插话（工作模式执行中补充要求） =====
+  // 返回是否被接受：不在跑的时候渲染层改走普通发送，
+  // 免得文本挂在队列里等下一次任务。
+  ipcMain.handle(INVOKE.workSteer, async (_e, conversationId: string, text: string) =>
+    session.steerWork(conversationId, text)
+  )
 
   // ===== 应用信息 =====
   ipcMain.handle(INVOKE.appInfo, async (): Promise<AppInfoDto> => {

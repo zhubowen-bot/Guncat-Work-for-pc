@@ -95,6 +95,11 @@ interface State {
   toggleWorkspace(open?: boolean): void
   reloadSettings(): Promise<void>
   send(text: string, attachmentPaths?: string[]): Promise<void>
+  /**
+   * 执行中插话（工作/交互模式）。返回 true 表示已进插话队列、下一轮生效；
+   * false 表示当前并没有在跑，调用方应改走普通发送。
+   */
+  steer(text: string): Promise<boolean>
   /** 重新生成最后一条回答 */
   regenerate(): Promise<void>
   /** 交互模式：把界面控件的绑定值写回消息并持久化 */
@@ -445,8 +450,24 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    async regenerate() {
+    async steer(text) {
       const activeId = get().activeId
+      if (activeId === null) {
+        return false
+      }
+      const value = text.trim()
+      if (value === '') {
+        return false
+      }
+      try {
+        return await window.guncat.steer(activeId, value)
+      } catch (e) {
+        get().pushNotice('error', `插话失败：${String(e)}`)
+        return false
+      }
+    },
+
+    async regenerate() {      const activeId = get().activeId
       if (activeId === null) {
         return
       }
