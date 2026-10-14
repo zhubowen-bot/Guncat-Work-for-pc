@@ -128,7 +128,9 @@ export function rendererDir(): string {
 
 /** 渲染进程就绪的看门狗：超时未就绪则判定卡住，交给上层处理（通常是安全模式重启） */
 let stalledHandler: (info: { pagePath: string; preloadPath: string }) => void = () => {}
-let watchdogMs = 10000
+// 6 秒而不是 10 秒：实测主进程约在启动后 10 秒会以 STATUS_BREAKPOINT 终止，
+// 看门狗必须抢在它前面，否则永远等不到自愈的机会。
+let watchdogMs = 6000
 
 export function setRendererStalledHandler(
   fn: (info: { pagePath: string; preloadPath: string }) => void

@@ -124,73 +124,124 @@ if (fs.existsSync(exeSource)) {
 // 批处理的 if/goto 控制流直接被拆坏（实测表现为 "'…' is not recognized"）。
 // chcp 65001 放在文件里也救不了，因为解析从第一行就开始了。
 // 中文说明一律放到 使用说明.txt。
-const cmdHeader = [
-  '@echo off',
-  'chcp 65001 >nul 2>&1',
-  'cd /d "%~dp0"',
-  'setlocal',
-  'set "LOG=%~dp0diag-log.txt"',
-  'set "APPDIR=%APPDATA%\\Guncat Work"',
-  'set "BOOTLOG=%APPDIR%\\logs\\startup.log"',
-  'set "CRASH=-2147483645"',
-  'set /a STEP=0'
-]
 
-function attempt(label, args) {
-  return [
-    'set /a STEP+=1',
-    `echo. >> "%LOG%"`,
-    `echo ========== [%STEP%] ${label} ========== >> "%LOG%"`,
-    `echo [%STEP%] ${label}`,
-    `"Guncat Work.exe" ${args} --enable-logging >> "%LOG%" 2>&1`,
-    'set "CODE=%ERRORLEVEL%"',
-    `echo exit code: %CODE% >> "%LOG%"`,
-    'if exist "%BOOTLOG%" copy /y "%BOOTLOG%" "%~dp0startup-%STEP%.log" >nul',
-    'if "%CODE%"=="0" goto done'
-  ]
-}
+/**
+ * 兼容模式启动器。
+ * 事故：默认启动（渲染进程带沙箱）在这台机器上起不来 —— 主进程能跑，
+ * 但渲染进程在 did-start-loading 之后就再无动静，约 10 秒后主进程以
+ * STATUS_BREAKPOINT(CHECK 失败) 终止，用户看到白屏或无反应。
+ * 因此提供一个把沙箱与 GPU 全部关掉的启动入口。
+ */
+fs.writeFileSync(
+  path.join(outDir, 'run-compat.cmd'),
+  [
+    '@echo off',
+    'cd /d "%~dp0"',
+    'start "" "Guncat Work.exe" --no-sandbox --disable-gpu --disable-software-rasterizer',
+    'exit /b 0'
+  ].join('\r\n') + '\r\n',
+  'latin1'
+)
+
+/**
+ * 诊断脚本用 PowerShell 而不是批处理：
+ *   批处理没有超时、拿不到进程存活状态、也不好逐轮隔离环境。
+ * 这里的关键改进是**每轮给一个独立的 --user-data-dir**：
+ *   上一版因为共用同一份用户数据，第一轮留下的单实例锁直接让第二轮启动失败
+ *   （Lock file can not be created），于是最该验证的 --no-sandbox 那轮根本没跑成。
+ *   独立目录同时也排除了「用户数据损坏导致 Chromium 起不来」这一可能。
+ */
+const diagPs1 = [
+  "# Guncat Work diagnostics. ASCII only (see note in package-portable.mjs).",
+  "$ErrorActionPreference = 'Continue'",
+  "Set-Location -LiteralPath $PSScriptRoot",
+  "$exe = Join-Path $PSScriptRoot 'Guncat Work.exe'",
+  "$log = Join-Path $PSScriptRoot 'diag-log.txt'",
+  "$bootLog = Join-Path $env:APPDATA 'Guncat Work\\logs\\startup.log'",
+  "Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue",
+  "",
+  "function Write-Log($text) { Add-Content -LiteralPath $log -Value $text -Encoding UTF8 }",
+  "",
+  "$modes = @(",
+  "  @{ Name = 'normal';               Args = @() },",
+  "  @{ Name = 'no-sandbox';           Args = @('--no-sandbox', '--disable-gpu') },",
+  "  @{ Name = 'safe-mode';            Args = @('--guncat-safe-mode') },",
+  "  @{ Name = 'diag-page';            Args = @('--guncat-diag', '--no-sandbox', '--disable-gpu') }",
+  ")",
+  "",
+  "Write-Log '===== Guncat Work diagnostics ====='",
+  "Write-Log ('time: ' + (Get-Date).ToString('s'))",
+  "Write-Log ('os: ' + [System.Environment]::OSVersion.VersionString)",
+  "Write-Log ('user: ' + $env:USERNAME)",
+  "Write-Log 'Each mode runs with its own --user-data-dir to avoid lock conflicts.'",
+  "",
+  "$index = 0",
+  "foreach ($mode in $modes) {",
+  "  $index++",
+  "  $udd = Join-Path $PSScriptRoot ('.udd-' + $index)",
+  "  Remove-Item -LiteralPath $udd -Recurse -Force -ErrorAction SilentlyContinue",
+  "",
+  "  Get-Process -Name 'Guncat Work' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue",
+  "  Start-Sleep -Milliseconds 800",
+  "",
+  "  Write-Log ''",
+  "  Write-Log ('========== [' + $index + '/4] ' + $mode.Name + ' ==========')",
+  "  Write-Host ('[' + $index + '/4] ' + $mode.Name)",
+  "",
+  "  $argList = @($mode.Args) + @(('--user-data-dir=' + $udd), '--enable-logging')",
+  "  $outFile = Join-Path $PSScriptRoot ('stdout-' + $index + '.txt')",
+  "  $errFile = Join-Path $PSScriptRoot ('stderr-' + $index + '.txt')",
+  "",
+  "  $proc = Start-Process -FilePath $exe -ArgumentList $argList -PassThru -NoNewWindow -RedirectStandardOutput $outFile -RedirectStandardError $errFile",
+  "",
+  "  # wait up to 25s: if it is still alive a window is probably up;",
+  "  # otherwise treat it as a stall and end it.",
+  "  $waited = 0",
+  "  while (-not $proc.HasExited -and $waited -lt 50) { Start-Sleep -Milliseconds 500; $waited++ }",
+  "",
+  "  if ($proc.HasExited) {",
+  "    $code = $proc.ExitCode",
+  "    Write-Log ('exit code: ' + $code)",
+  "    if ($code -eq -2147483645) { Write-Log 'NOTE: STATUS_BREAKPOINT - Chromium hit a fatal check' }",
+  "  } else {",
+  "    Write-Log 'STILL RUNNING after 25s - a window is probably up. Closing it.'",
+  "    Write-Log 'RESULT: this mode survives; the app is usable with these flags.'",
+  "    $proc | Stop-Process -Force -ErrorAction SilentlyContinue",
+  "    Start-Sleep -Milliseconds 500",
+  "  }",
+  "",
+  "  if (Test-Path -LiteralPath $bootLog) {",
+  "    Copy-Item -LiteralPath $bootLog -Destination (Join-Path $PSScriptRoot ('startup-' + $index + '.log')) -Force -ErrorAction SilentlyContinue",
+  "    $tail = Get-Content -LiteralPath $bootLog -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -Last 6",
+  "    Write-Log 'boot log tail:'",
+  "    foreach ($line in $tail) { Write-Log ('  ' + $line) }",
+  "  }",
+  "}",
+  "",
+  "Write-Log ''",
+  "Write-Log '===== done ====='",
+  "Write-Host ''",
+  "Write-Host 'Done. Send these files:'",
+  "Write-Host '  diag-log.txt, startup-1..4.log, stderr-1..4.txt'",
+  "Write-Host ('  and ' + $bootLog)",
+  ""
+].join('\r\n')
+
+fs.writeFileSync(path.join(outDir, 'diagnose.ps1'), diagPs1, 'latin1')
 
 fs.writeFileSync(
   path.join(outDir, 'diagnose.cmd'),
   [
-    ...cmdHeader,
-    'echo ===== Guncat Work diagnostics ===== > "%LOG%"',
-    'echo time: %date% %time% >> "%LOG%"',
-    'echo os: %OS% %PROCESSOR_ARCHITECTURE% >> "%LOG%"',
+    '@echo off',
+    'cd /d "%~dp0"',
+    'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0diagnose.ps1"',
     'echo.',
-    'echo This will try 4 launch modes. Each run writes to the log file.',
-    'echo If a window appears, close it and this script will continue.',
-    'echo.',
-    ...attempt('normal', ''),
-    ...attempt('no-sandbox', '--no-sandbox --disable-gpu'),
-    ...attempt('safe-mode', '--guncat-safe-mode'),
-    ...attempt('diag-page', '--guncat-diag --no-sandbox --disable-gpu'),
-    ':done',
-    'echo. >> "%LOG%"',
-    'echo ===== last exit code: %CODE% ===== >> "%LOG%"',
-    'echo.',
-    'echo Done. Please send these files:',
-    'echo   - diag-log.txt              (this folder)',
-    'echo   - startup-1.log ... startup-4.log   (this folder)',
-    'echo   - %BOOTLOG%',
     'pause'
   ].join('\r\n') + '\r\n',
   'latin1'
 )
 
-// 桌面快捷方式（带应用图标；Windows 快捷方式只认 .ico）
-fs.writeFileSync(
-  path.join(outDir, 'create-desktop-shortcut.cmd'),
-  [
-    ...cmdHeader,
-    'powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut([Environment]::GetFolderPath(\'Desktop\') + \'\\Guncat Work.lnk\'); $lnk.TargetPath = \'%~dp0Guncat Work.exe\'; $lnk.WorkingDirectory = \'%~dp0\'; $lnk.IconLocation = \'%~dp0resources\\resources\\app-icon.ico\'; $lnk.Description = \'Guncat Work\'; $lnk.Save()"',
-    'echo.',
-    'echo A "Guncat Work" shortcut was created on your desktop.',
-    'pause'
-  ].join('\r\n') + '\r\n',
-  'latin1'
-)
-step('写入 diagnose.cmd 与 create-desktop-shortcut.cmd（纯 ASCII）')
+step('写入 run-compat.cmd 与 diagnose.cmd / diagnose.ps1（纯 ASCII）')
 
 // ===== 7. 简短说明（UTF-8 带 BOM，记事本直接可读） =====
 fs.writeFileSync(
@@ -221,14 +272,20 @@ fs.writeFileSync(
       '────────────────────────────────────────',
       '如果双击后窗口没有出现（白屏 / 闪退）：',
       '',
-      '  双击本目录的「diagnose.cmd」。它会依次尝试四种启动方式，',
-      '  每种都把输出与退出码写进本目录的 diag-log.txt，',
-      '  并把应用自身的启动日志另存为 startup-1.log … startup-4.log。',
-      '  把这几份文件发出来即可定位。',
+      '  第一步：双击本目录的「run-compat.cmd」。',
+      '  它会关掉渲染进程沙箱与 GPU 后启动。目前最可能的原因就在这里 ——',
+      '  沙箱初始化失败会让渲染进程起不来，主进程随后（约 10 秒）以 CHECK 失败终止，',
+      '  表现就是白屏或「双击没反应」。',
       '',
-      '  四种方式分别是：正常 / 禁用沙箱与 GPU / 安全模式 / 极简诊断页。',
-      '  若只有「极简诊断页」能显示，说明渲染进程没问题、是界面产物加载失败；',
-      '  若四种都白屏，则是渲染进程或 GPU 层的问题。',
+      '  第二步：若第一步仍是白屏，双击「diagnose.cmd」。',
+      '  它会依次尝试四种启动方式（正常 / 禁沙箱禁 GPU / 安全模式 / 极简诊断页），',
+      '  **每一轮都用独立的用户数据目录**，因此不会有单实例锁互相干扰',
+      '  （上一版正是栽在这里：第一轮残留的锁让第二轮直接启动失败，',
+      '   最该验证的「禁沙箱」那轮根本没跑成）。',
+      '  结果写进 diag-log.txt，每轮的启动日志另存为 startup-1..4.log。',
+      '',
+      '  第 4 轮是关键分水岭：极简诊断页能显示 = 渲染进程没问题、是界面加载的问题；',
+      '  连它也白屏 = 渲染进程或 GPU 层的问题。',
       '────────────────────────────────────────'
     ].join('\r\n'),
   'utf8'
