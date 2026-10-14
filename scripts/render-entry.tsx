@@ -4,6 +4,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 import { GuncatUiBlock } from '@renderer/guncat-ui/GuncatUiBlock'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
+import { docxFileName } from '@renderer/fileName'
+
+/** 导出文件名推导 —— 纯函数，可直接断言 */
+export { docxFileName }
 
 const PROGRAM = [
   '$amount = 30',

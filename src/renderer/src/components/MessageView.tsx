@@ -5,6 +5,7 @@ import { GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
 import { Markdown } from './Markdown'
 import { Disclosure, ToolCallRow } from './Disclosure'
 import { GuncatUiBlock } from '../guncat-ui/GuncatUiBlock'
+import { docxFileName } from '../fileName'
 import { useSpeech, speechTextOf } from '../speech/speechStore'
 import { useStore } from '../store'
 
@@ -114,7 +115,7 @@ export function MessageView({ message, interactive }: Props) {
                 .exportDocx(
                   conversationId ?? '',
                   message.id,
-                  `${(textToRender || body).slice(0, 20).replace(/[\\/:*?"<>|]/g, '') || 'Guncat 回答'}.docx`
+                  docxFileName(textToRender || body)
                 )
                 .then((r) => {
                   if (r.saved) {

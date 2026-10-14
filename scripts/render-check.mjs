@@ -89,6 +89,39 @@ check(
   composedHtml.includes('说明文字在前') && composedHtml.includes('季度销售复盘')
 )
 
+// --- 导出 Word 的文件名推导 ---
+// 事故（用户实测）：最初直接拿正文前 20 个字符当文件名，而正文里几乎必然带换行 ——
+// Windows 的保存对话框直接报「文件名无效」，导出功能等于不可用。
+// 这类 bug 无法靠「看着像对的」发现，必须逐类非法字符断言。
+const name = mod.docxFileName
+check(
+  '文件名：正文里的换行被折叠（这是本次事故的直接原因）',
+  !/[\r\n]/.test(name('第一行\n第二行\n\n第三行')),
+  name('第一行\n第二行')
+)
+check('文件名：制表符等空白也被折叠', !/\s{2,}/.test(name('甲\t乙  丙')), name('甲\t乙  丙'))
+check('文件名：去掉 Windows 禁止的九个字符', !/[\\/:*?"<>|]/.test(name('a\\b/c:d*e?f"g<h>i|j')), name('a\\b/c:d*e?f"g<h>i|j'))
+check('文件名：去掉控制字符', !/[\u0000-\u001f\u007f]/.test(name('甲\u0001乙\u007f丙')))
+check(
+  '文件名：不以点或空格结尾（Win32 会静默丢弃它们）',
+  (() => {
+    const n = name('结尾有点......   ')
+    return !/\.docx$/.test(n) || n === '结尾有点.docx'
+  })(),
+  name('结尾有点......   ')
+)
+check('文件名：以 .docx 结尾', name('任意正文').endsWith('.docx'))
+check('文件名：超长正文被截断', name('甲'.repeat(200)).length < 60, `${name('甲'.repeat(200)).length} 字符`)
+check('文件名：正文全是非法字符时回退到默认名', name('\\/:*?"<>|') === 'Guncat 回答.docx', name('\\/:*?"<>|'))
+check('文件名：空正文回退到默认名', name('') === 'Guncat 回答.docx')
+// 用户实际踩到的那一条：正文以「如下」开头且带换行
+const realCase = name('沙箱测试完成，各项能力逐项验证如下\n\n1. 文件读写\n2. CSV 转换')
+check(
+  '文件名：复现用户的实际场景（带换行的长正文）',
+  !/[\r\n]/.test(realCase) && realCase.endsWith('.docx') && realCase.length < 60,
+  realCase
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')
