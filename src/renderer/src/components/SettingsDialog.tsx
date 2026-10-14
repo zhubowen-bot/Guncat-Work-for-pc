@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ApiConfigDto, SearchEngineDto } from '@ipc/contract'
 import { useStore } from '../store'
+import { useSpeech } from '../speech/speechStore'
 import { IconClose } from '../icons'
 
 const PROVIDERS: Array<{ id: string; label: string; baseUrl: string; hint: string }> = [
@@ -96,6 +97,10 @@ export function SettingsDialog() {
   const settings = useStore((s) => s.settings)
   const reloadSettings = useStore((s) => s.reloadSettings)
   const pushNotice = useStore((s) => s.pushNotice)
+  // 自动朗读的状态与开关都在 speechStore 里（持久化到 reader_enabled），
+  // 这里只是把它接到设置面板上，避免两处各存一份偏好。
+  const autoRead = useSpeech((s) => s.autoRead)
+  const setAutoRead = useSpeech((s) => s.setAutoRead)
 
   const [draft, setDraft] = useState<ApiConfigDto>(EMPTY)
   const [mmBaseUrl, setMmBaseUrl] = useState('')
@@ -531,6 +536,23 @@ export function SettingsDialog() {
             </div>
           ) : null}
 
+          {/* 自动朗读开关：对应原版 ChatPage 顶栏的 autoReadEnabled。
+              放在「语音输入」分隔线之前 —— 它属于朗读，不属于转写。 */}
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={autoRead}
+              onChange={(e) => setAutoRead(e.target.checked)}
+            />
+            <span>
+              自动朗读回答
+              <em>
+                开启后每轮回答生成完会自动念一遍（音色与语速在朗读控制条里调）；
+                关掉时正在念的会立刻停下
+              </em>
+            </span>
+          </label>
+
           <div
             style={{
               borderTop: '1px solid var(--border)',
@@ -546,6 +568,7 @@ export function SettingsDialog() {
             桌面端没有端侧识别可用，走 OpenAI 兼容的 /audio/transcriptions 接口。
             留空则复用上面的「多模态预解析」地址与 Key。
           </div>
+
 
           <div className="field">
             <label>转写 Base URL（可选）</label>

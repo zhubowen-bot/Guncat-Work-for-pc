@@ -523,6 +523,22 @@ check(
 check('发送按钮仍在', composerChat.includes('composer__send'))
 check('语音输入按钮仍在', composerChat.includes('composer__mic'))
 
+// --- 侧栏：引擎分组 / 工作区入口（审计 P2-14、P2-15） ---
+console.log('\n23. 侧栏（引擎分组 / 工作区入口）')
+const sidebarHtml = mod.renderSidebar()
+check(
+  '引擎区分成「Agent 引擎（推荐）」与「聊天引擎」两段（此前是一段平铺）',
+  sidebarHtml.includes('Agent 引擎（推荐）') && sidebarHtml.includes('聊天引擎')
+)
+check(
+  '聊天引擎段是可折叠的（默认折叠，对齐原版 AgentDrawerView）',
+  sidebarHtml.includes('sidebar__label--toggle') && sidebarHtml.includes('data-open="false"')
+)
+check(
+  '侧栏底部有「工作区」入口（此前完全没有，聊天模式下来路文件无处可见）',
+  sidebarHtml.includes('工作区') && sidebarHtml.includes('foot-btn')
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

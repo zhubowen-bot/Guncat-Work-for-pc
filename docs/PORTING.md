@@ -157,8 +157,13 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 （`JsCodeService` 里新增一行 `timeoutMs: timeoutMs` 透传）。因此：
 
 - 死循环会在**调用方预算内**被终止，而不是「放弃等待但后台继续烧 CPU」；
-- `abandoned` 计数在桌面端**永不触发**（代码保留以兼容上游）；
 - 脚本的「最后一条表达式的值即返回值」语义由 `vm` 的完成值天然满足，与上游契约一致。
+
+**边界（容易说错，这里写明）**：`vm` 的 `timeout` 只覆盖 `runInContext` 的**同步**执行段。
+脚本里 `await` 一个永不 settle 的 Promise 属于异步悬挂，不在这个预算内 ——
+那条路仍走上游的 `abandoned` 兜底（`JsCodeService.awaitWithTimeout` 放弃等待并累计，
+两次后停用本会话的 `run_js`）。也就是说：**同步死循环可被引擎硬中断；异步悬挂仍靠放弃等待。**
+早先这里写的是「abandoned 在桌面端永不触发」，那只对同步死循环成立。
 
 沙箱边界与上游完全一致：无网络、无文件系统、无 `require`/`import`；
 文件只能通过 `inputs` / `read()` 进、`write()` 出。

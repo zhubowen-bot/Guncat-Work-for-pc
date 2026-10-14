@@ -27,10 +27,16 @@ interface SpeechState {
   voiceURI: string
   rate: number
   loaded: boolean
+  /**
+   * 自动朗读：每轮回答结束后自动念一遍。
+   * 对齐原版 ChatPage 的 autoReadEnabled 开关（持久化在 reader_enabled）。
+   */
+  autoRead: boolean
 
   init(): Promise<void>
   setVoice(uri: string): void
   setRate(rate: number): void
+  setAutoRead(value: boolean): void
   speak(messageId: string, text: string): void
   pause(): void
   resume(): void
@@ -39,6 +45,7 @@ interface SpeechState {
 
 const PREF_VOICE = 'reader_voice'
 const PREF_RATE = 'reader_rate'
+const PREF_AUTO_READ = 'reader_enabled'
 
 function api(): SpeechSynthesis | null {
   if (typeof window === 'undefined' || typeof window.speechSynthesis === 'undefined') {
@@ -79,6 +86,7 @@ export const useSpeech = create<SpeechState>((set, get) => ({
   voiceURI: '',
   rate: 1.5,
   loaded: false,
+  autoRead: false,
 
   async init() {
     const synth = api()
@@ -114,10 +122,13 @@ export const useSpeech = create<SpeechState>((set, get) => ({
     // 读取上次保存的音色与语速
     let voiceURI = ''
     let rate = 1.5
+    let autoRead = false
     try {
       const settings = await window.guncat.settings.load()
       const savedVoice = settings.prefs?.[PREF_VOICE] ?? ''
       const savedRate = settings.prefs?.[PREF_RATE] ?? ''
+      // 缺省为关：自动朗读会在每轮回答后出声，必须由用户显式打开
+      autoRead = settings.prefs?.[PREF_AUTO_READ] === 'true'
       if (savedVoice !== '') {
         voiceURI = savedVoice
       }
@@ -140,12 +151,21 @@ export const useSpeech = create<SpeechState>((set, get) => ({
       voiceURI = (female ?? voices.find((v) => v.isDefault) ?? voices[0])?.uri ?? ''
     }
 
-    set({ supported: true, voices, voiceURI, rate, loaded: true })
+    set({ supported: true, voices, voiceURI, rate, loaded: true, autoRead })
   },
 
   setVoice(uri) {
     set({ voiceURI: uri })
     void window.guncat.settings.saveString(PREF_VOICE, uri)
+  },
+
+  setAutoRead(value) {
+    set({ autoRead: value })
+    void window.guncat.settings.saveString(PREF_AUTO_READ, value ? 'true' : 'false')
+    // 关掉自动朗读时，正在念的这句也停掉 —— 否则「关了还在响」
+    if (!value && get().speaking) {
+      get().stop()
+    }
   },
 
   setRate(rate) {

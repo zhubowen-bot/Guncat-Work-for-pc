@@ -222,6 +222,33 @@ select {
 .sidebar__count {
   font-size: 10px;
   color: var(--text-faint);
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 可折叠的分段标题（聊天引擎）：整行是点击热区，右侧给一个开合箭头 */
+.sidebar__label--toggle {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.sidebar__label--toggle:hover {
+  color: var(--text);
+}
+
+.sidebar__chevron {
+  display: inline-flex;
+  align-items: center;
+  transition: transform 0.15s;
+}
+
+.sidebar__chevron[data-open='true'] {
+  transform: rotate(180deg);
 }
 
 .sidebar__engines {

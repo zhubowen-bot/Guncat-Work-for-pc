@@ -48,6 +48,12 @@ interface State {
   workspace: WorkspaceEntryDto[]
   notice: Notice | null
   settingsOpen: boolean
+  /**
+   * 右侧工作区面板是否展开。
+   * 原版侧栏底部就有「工作区」入口，且只看 `isWide && detailsOpen`、**不判模式** ——
+   * 聊天模式下来路（拖拽 / 命令行 / 第二实例）落进该会话工作区的文件同样能在这里看到。
+   */
+  workspaceOpen: boolean
   /** 「填入输入框 / 重新编辑」请求：由消息操作行写入，输入框消费后清空 */
   pendingDraft: { text: string; at: number } | null
 
@@ -62,6 +68,7 @@ interface State {
   setThinking(value: boolean): void
   setWebSearch(value: boolean): void
   openSettings(open: boolean): void
+  toggleWorkspace(open?: boolean): void
   reloadSettings(): Promise<void>
   send(text: string, attachmentPaths?: string[]): Promise<void>
   /** 重新生成最后一条回答 */
@@ -233,6 +240,7 @@ export const useStore = create<State>((set, get) => {
     workspace: [],
     notice: null,
     settingsOpen: false,
+    workspaceOpen: true,
     pendingDraft: null,
 
     async init() {
@@ -358,6 +366,10 @@ export const useStore = create<State>((set, get) => {
 
     openSettings(open) {
       set({ settingsOpen: open })
+    },
+
+    toggleWorkspace(open) {
+      set((state) => ({ workspaceOpen: open ?? !state.workspaceOpen }))
     },
 
     async reloadSettings() {

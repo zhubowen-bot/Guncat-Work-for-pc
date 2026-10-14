@@ -40,7 +40,7 @@ import {
   IconTrash,
   IconWork
 } from '@renderer/icons'
-import { AgentItem, ConvItem } from '@renderer/components/Sidebar'
+import { AgentItem, ConvItem, Sidebar } from '@renderer/components/Sidebar'
 import { GroupedTurn, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
 import { Composer } from '@renderer/components/Composer'
@@ -131,6 +131,14 @@ export function renderWorkspaceFileIcons(): Record<string, string> {
     out[name] = renderToStaticMarkup(workspaceFileIcon(name))
   }
   return out
+}
+
+/**
+ * 侧栏（SSR 下 zustand 读初始状态：引擎与会话都是空的）。
+ * 空列表也能钉住几件与数据无关的事：引擎区分成两段、聊天段默认折叠、底部有工作区入口。
+ */
+export function renderSidebar(): string {
+  return renderToStaticMarkup(createElement(Sidebar))
 }
 
 /**

@@ -12,6 +12,8 @@ import { useStore } from '../store'
 import { APP_ICON_SRC, AgentGlyph } from './AgentGlyph'
 import {
   IconChat,
+  IconChevronDown,
+  IconFolder,
   IconInteractive,
   IconPlus,
   IconSettings,
@@ -116,9 +118,16 @@ export function Sidebar() {
   const deleteConversation = useStore((s) => s.deleteConversation)
   const openSettings = useStore((s) => s.openSettings)
   const running = useStore((s) => s.running)
+  const workspaceOpen = useStore((s) => s.workspaceOpen)
+  const toggleWorkspace = useStore((s) => s.toggleWorkspace)
 
   const [collapsed, setCollapsed] = useState(false)
+  // 聊天引擎默认折叠（对齐原版 AgentDrawerView 的 chatEngineOpen = false）
+  const [chatEngineOpen, setChatEngineOpen] = useState(false)
   const now = Date.now()
+
+  const agentEngines = engines.filter((a) => a.id === 'work' || a.id === 'interactive')
+  const chatEngines = engines.filter((a) => a.id !== 'work' && a.id !== 'interactive')
 
   if (collapsed) {
     return (
@@ -171,9 +180,14 @@ export function Sidebar() {
         </button>
       </div>
 
-      <div className="sidebar__label">引擎</div>
+      {/* 引擎区分两段（对齐原版 AgentDrawerView 的「Agent引擎（推荐）」+「聊天引擎」）：
+          work / interactive 是 Agent Loop 的两个形态，推荐位；其余是聊天智能体，
+          整行可点、默认折叠 —— 9 个平铺会把侧栏撑得很长，也分不出主次。 */}
+      <div className="sidebar__label sidebar__label--row">
+        <span>Agent 引擎（推荐）</span>
+      </div>
       <div className="sidebar__engines">
-        {engines.map((agent) => (
+        {agentEngines.map((agent) => (
           <AgentItem
             key={agent.id}
             agent={agent}
@@ -182,6 +196,32 @@ export function Sidebar() {
           />
         ))}
       </div>
+
+      <button
+        className="sidebar__label sidebar__label--row sidebar__label--toggle"
+        title={chatEngineOpen ? '收起聊天引擎' : '展开聊天引擎'}
+        onClick={() => setChatEngineOpen((v) => !v)}
+      >
+        <span>聊天引擎</span>
+        <span className="sidebar__count">
+          {chatEngines.length}
+          <span className="sidebar__chevron" data-open={chatEngineOpen}>
+            <IconChevronDown size={13} />
+          </span>
+        </span>
+      </button>
+      {chatEngineOpen ? (
+        <div className="sidebar__engines">
+          {chatEngines.map((agent) => (
+            <AgentItem
+              key={agent.id}
+              agent={agent}
+              active={activeAgentId === agent.id}
+              onSelect={(id) => void selectAgent(id)}
+            />
+          ))}
+        </div>
+      ) : null}
 
       <div className="sidebar__label sidebar__label--row">
         <span>会话</span>
@@ -233,6 +273,15 @@ export function Sidebar() {
         >
           <IconWork size={17} />
           <span>工作</span>
+        </button>
+        <button
+          className="foot-btn"
+          title={workspaceOpen ? '收起工作区面板' : '展开工作区面板'}
+          data-active={workspaceOpen}
+          onClick={() => toggleWorkspace()}
+        >
+          <IconFolder size={17} />
+          <span>工作区</span>
         </button>
         <button className="foot-btn" title="设置" onClick={() => openSettings(true)}>
           <IconSettings size={17} />

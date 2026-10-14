@@ -9,6 +9,7 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { SpeechBar } from './components/SpeechBar'
 import { MODE_HINT, agentById } from './conversations'
 import { AgentGlyph } from './components/AgentGlyph'
+import { useSpeech, speechTextOf } from './speech/speechStore'
 import { IconBrain, IconClose, IconGlobe } from './icons'
 
 function Notice() {
@@ -51,11 +52,40 @@ export default function App() {
   const fillDraft = useStore((s) => s.fillDraft)
   const engines = useStore((s) => s.engines)
   const activeAgentId = useStore((s) => s.activeAgentId)
-  const showWorkspace = mode !== 'chat'
+  const workspaceOpen = useStore((s) => s.workspaceOpen)
+  // 工作区面板由「侧栏底部的『工作区』」控制，**不再按模式隐藏**：
+  // 原版 ChatPage 只判 isWide && detailsOpen、不判模式 ——
+  // 聊天模式下来路（拖拽 / 命令行 / 第二实例）落进该会话工作区的文件同样要能在这里看到。
+  const showWorkspace = workspaceOpen
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
   const intakeFiles = useStore((s) => s.intakeFiles)
+
+  // 自动朗读（对齐原版 ChatPage 的 autoReadEnabled）：一轮结束就把最后一条回答念出来。
+  // 只看 running 由 true → false 的那一次跃迁 —— 否则打开应用、切换会话都会触发朗读。
+  const autoRead = useSpeech((s) => s.autoRead)
+  const speak = useSpeech((s) => s.speak)
+  const wasRunning = useRef(false)
+  useEffect(() => {
+    const justFinished = wasRunning.current && !running
+    wasRunning.current = running
+    if (!autoRead || !justFinished) {
+      return
+    }
+    const messages = active?.messages ?? []
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') {
+        const text = speechTextOf(
+          messages[i].displayContent !== '' ? messages[i].displayContent : messages[i].content
+        )
+        if (text.trim() !== '') {
+          speak(messages[i].id, text)
+        }
+        return
+      }
+    }
+  }, [running, autoRead, active, speak])
 
   // 最新一条 assistant 才是「可交互的那一轮」
   const lastAssistantId = (() => {
