@@ -462,6 +462,13 @@ select {
   width: 100%;
 }
 
+/* 小号按钮：工作区面板头部那颗「上传」用的尺寸 */
+.btn--sm {
+  padding: 4px 9px;
+  font-size: 12px;
+  gap: 4px;
+}
+
 .sidebar__new {
   height: 38px;
   font-weight: 500;
@@ -1694,6 +1701,10 @@ select {
 }
 
 .workspace__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   padding: 22px 14px;
   text-align: center;
   font-size: 12px;
@@ -1703,6 +1714,28 @@ select {
 
 .workspace__empty-sub {
   font-size: 11px;
+}
+
+/* 空工作区里的「上传文件」：空态恰恰是最需要这个入口的时候 */
+.workspace__empty-btn {
+  margin-top: 6px;
+  width: auto;
+  padding: 6px 14px;
+  border-radius: 16px;
+  color: var(--accent);
+  border-color: var(--border);
+}
+
+.workspace__glyph {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  flex: none;
+}
+
+.workspace__upload {
+  color: var(--accent);
+  flex: none;
 }
 
 .workspace__foot {

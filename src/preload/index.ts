@@ -104,7 +104,12 @@ const api = {
       conversationId: string,
       paths: string[]
     ): Promise<{ names: string[]; imported: number; failed: string[] }> =>
-      ipcRenderer.invoke(INVOKE.intakeImport, conversationId, paths)
+      ipcRenderer.invoke(INVOKE.intakeImport, conversationId, paths),
+    /** 弹系统文件选择框并导入（工作区面板的「上传」按钮） */
+    pickFiles: (
+      conversationId: string
+    ): Promise<{ names: string[]; imported: number; failed: string[]; canceled: boolean }> =>
+      ipcRenderer.invoke(INVOKE.intakePickFiles, conversationId)
   },
 
   messages: {

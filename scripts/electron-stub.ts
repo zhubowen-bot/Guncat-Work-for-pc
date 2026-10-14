@@ -238,7 +238,8 @@ export const app = {
 
 export const dialog = {
   async showOpenDialog(): Promise<{ canceled: boolean; filePaths: string[] }> {
-    return { canceled: true, filePaths: [] }
+    calls.push({ fn: 'dialog.showOpenDialog', args: [] })
+    return nextOpenDialog ?? { canceled: true, filePaths: [] }
   },
   async showSaveDialog(): Promise<{ canceled: boolean; filePath?: string }> {
     return { canceled: true }
@@ -246,6 +247,14 @@ export const dialog = {
   showErrorBox(title: string, content: string): void {
     calls.push({ fn: 'dialog.showErrorBox', args: [title, content] })
   }
+}
+
+/** 下一次 dialog.showOpenDialog 的返回值（null 表示默认「用户取消」） */
+let nextOpenDialog: { canceled: boolean; filePaths: string[] } | null = null
+
+/** 让验证脚本模拟「用户在文件选择框里挑了几个文件」 */
+export function __setOpenDialog(result: { canceled: boolean; filePaths: string[] } | null): void {
+  nextOpenDialog = result
 }
 
 export const shell = {

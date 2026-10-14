@@ -165,6 +165,24 @@ export function registerIpcHandlers(session: SessionManager): void {
     return await session.intakePaths(conversationId, paths)
   })
 
+  /**
+   * 工作区「上传」按钮：弹系统文件选择框，再把选中的文件导入工作区。
+   * 与拖拽走的是同一条落盘链路（session.intakePaths），只是入口换成了看得见的按钮。
+   */
+  ipcMain.handle(INVOKE.intakePickFiles, async (_e, conversationId: string) => {
+    const window = getMainWindow()
+    const result = await dialog.showOpenDialog(window ?? undefined!, {
+      title: '上传文件到工作区',
+      buttonLabel: '上传',
+      properties: ['openFile', 'multiSelections']
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { names: [], imported: 0, failed: [], canceled: true }
+    }
+    const outcome = await session.intakePaths(conversationId, result.filePaths)
+    return { ...outcome, canceled: false }
+  })
+
   /** 把一条回答导出为 Word（复用移植的 DocxBuilder，含 LaTeX → OMML） */
   ipcMain.handle(
     INVOKE.messageExportDocx,

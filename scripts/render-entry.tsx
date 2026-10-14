@@ -43,6 +43,7 @@ import {
 import { AgentItem, ConvItem } from '@renderer/components/Sidebar'
 import { GroupedTurn, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
+import { WorkspacePanel, workspaceFileIcon } from '@renderer/components/WorkspacePanel'
 import { marqueeText } from '@renderer/components/MessageView'
 import type { MessageDto } from '@ipc/contract'
 
@@ -111,6 +112,25 @@ export function renderGroupedTurn(running = false, pendingBody = false): string 
 
 /** 思考跑马灯取文本末尾 400 字并压成单行（原版 getMarqueeText） */
 export { marqueeText }
+export { workspaceFileIcon }
+
+/**
+ * 工作区面板（SSR 下 zustand 读初始状态：没有会话、工作区为空）。
+ * 用户报障「工作区上传文件找不到入口」——这里钉住那个入口在**空态**下也存在。
+ */
+export function renderWorkspacePanel(): string {
+  return renderToStaticMarkup(createElement(WorkspacePanel))
+}
+
+/** 工作区文件行的扩展名图标：返回「扩展名 → 渲染出来的 SVG」映射，供断言分类是否生效 */
+export function renderWorkspaceFileIcons(): Record<string, string> {
+  const names = ['a.png', 'a.pdf', 'a.zip', 'a.py', 'a.mp4', 'a.mp3', 'a.unknown']
+  const out: Record<string, string> = {}
+  for (const name of names) {
+    out[name] = renderToStaticMarkup(workspaceFileIcon(name))
+  }
+  return out
+}
 
 /** Markdown 渲染：断言脚注回跳不是第三方默认的「↩」符号 */
 export function renderMarkdown(): string {

@@ -81,6 +81,8 @@ interface State {
   consumeDraft(): void
   /** 端侧增强：把外部文件导入当前会话工作区 */
   intakeFiles(paths: string[]): Promise<void>
+  /** 端侧增强：弹系统文件选择框并导入（工作区面板的「上传」按钮） */
+  pickWorkspaceFiles(): Promise<void>
 }
 
 function applyEvent(state: State, event: GuncatEvent): Partial<State> {
@@ -517,6 +519,39 @@ export const useStore = create<State>((set, get) => {
         )
       } catch (e) {
         get().pushNotice('error', `导入失败：${String(e)}`)
+      }
+    },
+
+    /**
+     * 工作区面板的「上传」按钮：弹系统文件选择框，把选中的文件导入当前会话工作区。
+     * 与拖拽走同一条落盘链路，只是换成用户找得到的入口（原版 WorkspaceBar 的「上传」）。
+     */
+    async pickWorkspaceFiles() {
+      let activeId = get().activeId
+      // 还没会话就先建一个，否则对话框选完文件却无处可放
+      if (activeId === null) {
+        const conv = await get().createConversation()
+        activeId = conv.id
+      }
+      try {
+        const result = await window.guncat.intake.pickFiles(activeId)
+        if (result.canceled) {
+          return
+        }
+        await get().loadWorkspace()
+        const parts: string[] = []
+        if (result.imported > 0) {
+          parts.push(`已导入 ${result.imported} 个文件：${result.names.join('、')}`)
+        }
+        if (result.failed.length > 0) {
+          parts.push(`${result.failed.length} 个未导入`)
+        }
+        get().pushNotice(
+          result.imported > 0 ? 'info' : 'warn',
+          parts.join('；') || '没有可导入的文件'
+        )
+      } catch (e) {
+        get().pushNotice('error', `上传失败：${String(e)}`)
       }
     }
   }

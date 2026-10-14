@@ -491,6 +491,22 @@ check(
   mdFeatureHtml.includes('code-block__pre')
 )
 
+// --- 工作区面板：上传入口必须看得见（用户报障「找不到入口」） ---
+console.log('\n21. 工作区面板（上传入口 / 文件分类图标）')
+const wsHtml = mod.renderWorkspacePanel()
+check('面板头部有「上传」按钮', wsHtml.includes('workspace__upload') && wsHtml.includes('上传'))
+check('空工作区里也有一个显眼的上传入口', wsHtml.includes('workspace__empty-btn'))
+check('空态把「怎么加文件」说清楚（不再是只有拖拽这条隐形路径）', decode(wsHtml).includes('拖进窗口'))
+check('导出 zip / 打开文件夹 / 刷新 三个入口都还在', wsHtml.includes('打包导出为 zip'))
+
+const wsIcons = mod.renderWorkspaceFileIcons()
+const iconOf = (name) => wsIcons[name]
+check('图片 / PDF / 压缩包 / 源码 / 视频 / 音频各用各的图标', (() => {
+  const kinds = ['a.png', 'a.pdf', 'a.zip', 'a.py', 'a.mp4', 'a.mp3'].map(iconOf)
+  return new Set(kinds).size === kinds.length
+})(), Object.entries(wsIcons).map(([k, v]) => `${k}=${v.length}`).join(' '))
+check('未知类型回退通用文件图标', iconOf('a.unknown') !== '' && iconOf('a.unknown') !== iconOf('a.py'))
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

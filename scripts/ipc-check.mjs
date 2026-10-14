@@ -21,7 +21,7 @@ fs.writeFileSync(
 export { SessionManager } from '@main/session/SessionManager'
 export { collectFileArgs } from '@main/intake'
 export { resolveTranscriptionUrl, loadAsrConfig, transcribeAudio } from '@main/asr'
-export { __invoke, __channels, __events, __reset } from 'electron'
+export { __invoke, __channels, __events, __calls, __setOpenDialog, __reset } from 'electron'
 export { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 `
 )
@@ -107,6 +107,7 @@ const required = [
   'app:rendererStage',
   'settings:saveString',
   'intake:import',
+  'intake:pickFiles',
   'message:exportDocx',
   'asr:transcribe'
 ]
@@ -372,6 +373,28 @@ check('工作区变更事件已推送', events.some((e) => e.type === 'workspace
 
 const readBack = await inv('workspace:read', conv3.id, '素材.txt')
 check('导入内容可读回', readBack.text === 'hello intake', JSON.stringify(readBack.text))
+
+// --- 工作区「上传」按钮：弹系统文件选择框并导入 ---
+// 用户报障「工作区上传文件找不到入口」——原版 WorkspaceBar 头部有可见的「上传」按钮，
+// 桌面版此前只有拖拽（界面上没有任何提示）。这里把那条链路整条钉住。
+const uploadDir = path.join(dataRoot, 'upload')
+fs.mkdirSync(uploadDir, { recursive: true })
+const up1 = path.join(uploadDir, '报表.csv')
+fs.writeFileSync(up1, 'x,y\n3,4\n', 'utf8')
+
+mod.__setOpenDialog({ canceled: true, filePaths: [] })
+const uploadCanceled = await inv('intake:pickFiles', conv3.id)
+check('上传：用户取消时不导入任何文件', uploadCanceled.canceled === true && uploadCanceled.imported === 0)
+check(
+  '上传：确实弹了系统文件选择框',
+  mod.__calls().some((c) => c.fn === 'dialog.showOpenDialog')
+)
+
+mod.__setOpenDialog({ canceled: false, filePaths: [up1] })
+const uploadOk = await inv('intake:pickFiles', conv3.id)
+check('上传：选中的文件被导入工作区', uploadOk.canceled === false && uploadOk.imported === 1, uploadOk.names.join(', '))
+check('上传后文件真的在工作区里', (await inv('workspace:list', conv3.id)).some((e) => e.path === '报表.csv'))
+mod.__setOpenDialog(null)
 
 // --- 导出回答为 Word ---
 // 渲染进程走的是带保存对话框的通道（替身返回取消）

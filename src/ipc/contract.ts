@@ -54,6 +54,14 @@ export const INVOKE = {
 
   /** 端侧增强：文件收件（拖拽 / 系统「打开方式」/ 命令行参数） */
   intakeImport: 'intake:import',
+  /**
+   * 端侧增强：弹出系统文件选择框，把选中的文件导入工作区。
+   *
+   * 为什么必须有这条：鸿蒙版 WorkspaceBar 的头部有一个显眼的「上传」按钮
+   * （空态文案就是「工作区为空, 点击"上传"添加文件」）。桌面版此前只有
+   * 「拖拽到窗口」这一条路 —— 而拖拽在界面上没有任何提示，用户根本找不到入口。
+   */
+  intakePickFiles: 'intake:pickFiles',
   /** 端侧增强：把一条回答导出为 Word */
   messageExportDocx: 'message:exportDocx',
   /** 端侧增强：语音输入（录音 → 转写） */

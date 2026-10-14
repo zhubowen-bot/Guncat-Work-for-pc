@@ -1,9 +1,26 @@
-// 工作区面板（对齐原版 DetailsPanelView：面板头 + 本轮统计 + 文件清单）。
+// 工作区面板（对齐原版 WorkspaceBar：标题 + 上传/导出 + 文件清单 + 底部统计）。
 //
-// 原版是右侧详情列：标题 + 「实时」标记 + 刷新 + 收起；下面是统计卡与文件卡。
-// 桌面端右列宽度有限，这里保留标题/实时标记/刷新与文件清单，统计卡用一行紧凑指标。
+// 用户报障「工作区上传文件有问题，找不到入口」的根因很具体：
+// 桌面版此前只有「拖拽文件到窗口」这一条导入路径，而拖拽在界面上**没有任何提示**，
+// 用户不可能猜到。原版 WorkspaceBar 的头部就有一颗看得见的「上传」按钮，
+// 空态文案更是直接写着「工作区为空, 点击"上传"添加文件」。
+// 这里把那个入口补回来，并且空态也给一颗按钮 —— 空工作区恰恰是最需要它的时候。
 import { useStore } from '../store'
-import { IconDot, IconDownload, IconFile, IconFolder, IconRefresh, IconTrash } from '../icons'
+import {
+  IconAudio,
+  IconCode,
+  IconDot,
+  IconDownload,
+  IconFile,
+  IconFolder,
+  IconImage,
+  IconPdf,
+  IconPlus,
+  IconRefresh,
+  IconTrash,
+  IconVideo,
+  IconZip
+} from '../icons'
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) {
@@ -15,33 +32,140 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+/**
+ * 按扩展名映射类别图标（逐组取自原版 WorkspaceFileIcons.iconFor）。
+ * 未知类型回退通用文档图标 —— 一行文件列表里，能一眼分出「这是图还是表」很有用。
+ */
+export function workspaceFileIcon(path: string, size = 15): React.ReactElement {
+  const dot = path.lastIndexOf('.')
+  const ext = dot >= 0 ? path.slice(dot + 1).toLowerCase() : ''
+  switch (ext) {
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+    case 'webp':
+    case 'bmp':
+    case 'svg':
+    case 'heic':
+      return <IconImage size={size} />
+    case 'pdf':
+      return <IconPdf size={size} />
+    case 'zip':
+    case 'rar':
+    case '7z':
+    case 'tar':
+    case 'gz':
+    case 'tgz':
+      return <IconZip size={size} />
+    case 'docx':
+    case 'doc':
+    case 'rtf':
+    case 'odt':
+    case 'pptx':
+    case 'ppt':
+    case 'xlsx':
+    case 'xls':
+    case 'csv':
+    case 'tsv':
+    case 'md':
+    case 'markdown':
+    case 'txt':
+    case 'log':
+      return <IconFile size={size} />
+    case 'json':
+    case 'xml':
+    case 'html':
+    case 'htm':
+    case 'css':
+    case 'js':
+    case 'jsx':
+    case 'ts':
+    case 'tsx':
+    case 'py':
+    case 'java':
+    case 'kt':
+    case 'kts':
+    case 'swift':
+    case 'c':
+    case 'cpp':
+    case 'h':
+    case 'hpp':
+    case 'cs':
+    case 'go':
+    case 'rs':
+    case 'rb':
+    case 'php':
+    case 'sql':
+    case 'sh':
+    case 'bat':
+    case 'gradle':
+    case 'yaml':
+    case 'yml':
+    case 'toml':
+      return <IconCode size={size} />
+    case 'mp3':
+    case 'wav':
+    case 'm4a':
+    case 'aac':
+    case 'flac':
+    case 'ogg':
+      return <IconAudio size={size} />
+    case 'mp4':
+    case 'mov':
+    case 'avi':
+    case 'mkv':
+    case 'webm':
+      return <IconVideo size={size} />
+    default:
+      return <IconFile size={size} />
+  }
+}
+
 export function WorkspacePanel() {
   const workspace = useStore((s) => s.workspace)
   const activeId = useStore((s) => s.activeId)
   const active = useStore((s) => s.active)
+  const running = useStore((s) => s.running)
   const deleteEntry = useStore((s) => s.deleteWorkspaceEntry)
   const clear = useStore((s) => s.clearWorkspace)
   const exportZip = useStore((s) => s.exportWorkspace)
   const openFolder = useStore((s) => s.openWorkspaceFolder)
   const loadWorkspace = useStore((s) => s.loadWorkspace)
+  const pickFiles = useStore((s) => s.pickWorkspaceFiles)
   const pushNotice = useStore((s) => s.pushNotice)
 
-  const disabled = activeId === null
   const toolCalls = (active?.messages ?? []).reduce((sum, m) => sum + m.toolCalls.length, 0)
   const files = workspace.filter((e) => !e.isDirectory).length
   const dirs = workspace.length - files
 
+  // 原版 WorkspaceBar：任务执行中禁掉上传/导出，避免和正在跑的工具抢工作区
+  const uploadDisabled = running
+
   return (
     <aside className="workspace">
       <div className="workspace__head">
+        <span className="workspace__glyph">
+          <IconFolder size={15} />
+        </span>
         <strong>工作区</strong>
         <span className="workspace__live" title="会话工作区变化会实时刷新">
           <IconDot size={9} />
           实时
         </span>
+        {/* 「上传」就是用户一直在找的那个入口（原版 WorkspaceBar.buildHeaderButton('上传')） */}
+        <button
+          className="btn btn--ghost btn--sm workspace__upload"
+          disabled={uploadDisabled}
+          title={uploadDisabled ? '任务执行中，稍后再上传' : '选择文件加入工作区'}
+          onClick={() => void pickFiles()}
+        >
+          <IconPlus size={13} />
+          上传
+        </button>
         <button
           className="icon-btn"
-          disabled={disabled}
+          disabled={activeId === null}
           title="刷新"
           onClick={() => void loadWorkspace()}
         >
@@ -49,7 +173,7 @@ export function WorkspacePanel() {
         </button>
         <button
           className="icon-btn"
-          disabled={disabled}
+          disabled={activeId === null}
           title="在文件管理器中打开"
           onClick={() => void openFolder()}
         >
@@ -57,7 +181,7 @@ export function WorkspacePanel() {
         </button>
         <button
           className="icon-btn"
-          disabled={disabled || workspace.length === 0}
+          disabled={activeId === null || workspace.length === 0 || running}
           title="打包导出为 zip"
           onClick={() => void exportZip()}
         >
@@ -65,7 +189,7 @@ export function WorkspacePanel() {
         </button>
       </div>
 
-      {!disabled ? (
+      {workspace.length > 0 ? (
         <div className="workspace__stats">
           <span>{`${files} 个文件`}</span>
           {dirs > 0 ? <span>{`${dirs} 个目录`}</span> : null}
@@ -74,21 +198,28 @@ export function WorkspacePanel() {
       ) : null}
 
       <div className="workspace__list">
-        {disabled ? (
-          <div className="workspace__empty">先新建一个会话</div>
-        ) : workspace.length === 0 ? (
+        {workspace.length === 0 ? (
           <div className="workspace__empty">
-            工作区还是空的
-            <br />
-            <span className="workspace__empty-sub">
-              工作 / 交互模式下，工具产出的文件都会落在这里
-            </span>
+            {running ? (
+              '任务执行中…'
+            ) : (
+              <>
+                <span>工作区为空</span>
+                <span className="workspace__empty-sub">
+                  点上面的「上传」添加文件，或把文件直接拖进窗口
+                </span>
+                <button className="btn btn--block workspace__empty-btn" onClick={() => void pickFiles()}>
+                  <IconPlus size={14} />
+                  上传文件
+                </button>
+              </>
+            )}
           </div>
         ) : (
           workspace.map((entry) => (
             <div className="file-item" key={entry.path}>
               <span className="file-item__icon">
-                {entry.isDirectory ? <IconFolder size={15} /> : <IconFile size={15} />}
+                {entry.isDirectory ? <IconFolder size={15} /> : workspaceFileIcon(entry.path)}
               </span>
               <span className="file-item__name" title={entry.path}>
                 {entry.path}
@@ -99,6 +230,7 @@ export function WorkspacePanel() {
               <button
                 className="icon-btn file-item__del"
                 title="删除"
+                disabled={running}
                 onClick={() => {
                   void deleteEntry(entry.path).then(() => {
                     pushNotice('info', `已删除 ${entry.path}`)
@@ -112,9 +244,13 @@ export function WorkspacePanel() {
         )}
       </div>
 
-      {!disabled && workspace.length > 0 ? (
+      {workspace.length > 0 ? (
         <div className="workspace__foot">
-          <button className="btn btn--ghost btn--block btn--danger" onClick={() => void clear()}>
+          <button
+            className="btn btn--ghost btn--block btn--danger"
+            disabled={running}
+            onClick={() => void clear()}
+          >
             <IconTrash size={14} />
             清空工作区
           </button>

@@ -244,6 +244,72 @@ export function IconFile(props: IconProps) {
   )
 }
 
+// ===== 工作区文件行按扩展名分类的图标（原版 WorkspaceFileIcons.iconFor） =====
+
+/** 图片（原版 sys.symbol.picture） */
+export function IconImage(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3.6" y="5" width="16.8" height="14" rx="2.2" />
+      <circle cx="9" cy="10.2" r="1.5" />
+      <path d="m4.4 17.4 4.6-4.6 3.4 3.4 2.6-2.6 4.4 4.4" />
+    </Svg>
+  )
+}
+
+/** PDF（原版 sys.symbol.pdf_doc） */
+export function IconPdf(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M13.6 3.4H8.2a2 2 0 0 0-2 2v13.2a2 2 0 0 0 2 2h7.6a2 2 0 0 0 2-2V7.4l-4.2-4Z" />
+      <path d="M13.6 3.4v4h4.2" />
+      <path d="M9.6 16.6v-3.4h.9a1 1 0 0 1 0 2h-.9" />
+      <path d="M13.2 13.2h1a1.7 1.7 0 0 1 0 3.4h-1v-3.4Z" />
+    </Svg>
+  )
+}
+
+/** 压缩包（原版 sys.symbol.doc_zipper） */
+export function IconZip(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M13.6 3.4H8.2a2 2 0 0 0-2 2v13.2a2 2 0 0 0 2 2h7.6a2 2 0 0 0 2-2V7.4l-4.2-4Z" />
+      <path d="M13.6 3.4v4h4.2" />
+      <path d="M11.4 11.6h1.2M11.4 13.6h1.2M11.4 15.6h1.2" />
+    </Svg>
+  )
+}
+
+/** 源码（原版 sys.symbol.code） */
+export function IconCode(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="m9.2 8.4-4 3.6 4 3.6" />
+      <path d="m14.8 8.4 4 3.6-4 3.6" />
+    </Svg>
+  )
+}
+
+/** 音频（原版 sys.symbol.waveform） */
+export function IconAudio(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4.4 10.4v3.2M8.2 7.4v9.2M12 5.2v13.6M15.8 8v8M19.6 10.4v3.2" />
+    </Svg>
+  )
+}
+
+/** 视频（原版 sys.symbol.movie） */
+export function IconVideo(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3.4" y="5.6" width="17.2" height="12.8" rx="2.2" />
+      <path d="M8 5.6v12.8M16 5.6v12.8" />
+      <path d="M3.4 9.4h4.6M3.4 14.6h4.6M16 9.4h4.6M16 14.6h4.6" />
+    </Svg>
+  )
+}
+
 /** 复制 */
 export function IconCopy(props: IconProps) {
   return (
