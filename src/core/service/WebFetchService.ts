@@ -61,7 +61,7 @@ export class WebFetchService {
         readTimeout: 45000,
         usingProtocol: http.HttpProtocol.HTTP1_1,
         header: {
-          'User-Agent': 'Mozilla/5.0 (HarmonyOS) GuncatWork/6.1',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GuncatWork/6.3',
           'Accept': 'text/html,application/json,text/plain;q=0.9,*/*;q=0.5'
         }
       }).then((resp: http.HttpResponse) => {

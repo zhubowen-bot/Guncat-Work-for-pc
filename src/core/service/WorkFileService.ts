@@ -650,7 +650,7 @@ export class WorkFileService {
     return WorkFileService.toolWrite(root, '.searches.md', block, true);
   }
 
-  // search_web: 手机本地直连搜索引擎(不经过模型服务商服务端)。
+  // search_web: 本机直连搜索引擎(不经过模型服务商服务端)。
   // 结果清单送回模型的同时自动登记到 .searches.md —— 本地搜索虽然会在对话历史留下
   // 工具调用, 但旧轮次的结果会被上下文压缩/修剪, 落盘记录永远可由 read_file 找回。
   private static async toolSearchWeb(root: string, query: string): Promise<ToolExecResult> {
@@ -668,7 +668,7 @@ export class WorkFileService {
       block = block + '- [' + outcome.items[i].title + '](' + outcome.items[i].url + ')\n';
     }
     WorkFileService.toolWrite(root, '.searches.md', block, true);
-    let head: string = '【本地兜底联网搜索】(手机直连 · ' + outcome.engineLabel +
+    let head: string = '【本地兜底联网搜索】(本机直连 · ' + outcome.engineLabel +
       ' · 结果已自动登记到 .searches.md)\n\n';
     return WorkFileService.ok(head + outcome.contentForAI);
   }

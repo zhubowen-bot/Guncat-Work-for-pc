@@ -185,10 +185,24 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 | `core/service/JsCodeService.ts` | ① `timer` 类型同上；② `JsRunOptions` 里新增 `timeoutMs` 透传 | ①同上；②让 vm 按调用方预算硬中断（见 4.1） |
 | `core/service/FileUploadService.ts` | `stringToBuffer()` 返回值加 `as ArrayBuffer` | TS 的 `Uint8Array.buffer` 类型是 `ArrayBufferLike`（含 `SharedArrayBuffer`） |
 | `core/service/PdfTextExtractor.ts` | 三处 `doc.loadDocument(abs)` → `await doc.loadDocumentAsync(abs)`；取每页文本/渲染前 `await page.prepare()`；`renderOnePage` 由同步的 `getAreaPixelMapWithOptions`/`getPagePixelMap` 改为 `await page.renderToPixelMap(w,h)` | 桌面端的 PDF 后端（PDF.js）全程异步，鸿蒙侧那条同步原生链在 Node 下不存在。差异只落在这两个入口上，其余移植逻辑不变 |
-| `core/service/WorkToolRunner.ts` | `rasterizeSvgFile` 去掉「写临时规整文件 → `image.createImageSource` 解码 → 清理」那一圈，改为 `rasterizeSvgToPng()`；参数去掉 `cacheDir` | Electron 的 `nativeImage` 只解码位图，SVG 必须走 `@napi-rs/canvas`；改动同时消掉了临时文件与 cacheDir 依赖 |
+| `core/service/WorkToolRunner.ts` | ① `rasterizeSvgFile` 去掉「写临时规整文件 → `image.createImageSource` 解码 → 清理」那一圈，改为 `rasterizeSvgToPng()`；参数去掉 `cacheDir`。② 抓网页的 UA 从 `Mozilla/5.0 (Linux; HarmonyOS) GuncatWork` 改成桌面 UA | ①Electron 的 `nativeImage` 只解码位图，SVG 必须走 `@napi-rs/canvas`；同时消掉了临时文件与 cacheDir 依赖。②UA 声称鸿蒙会让部分站点返回移动端页面 |
 | `core/platform/kit/PDFKit.ts` | 新增 `PdfBackend.openAsync?`、`PdfPageBackend.prepare?`、`PdfDocument.loadDocumentAsync`、`PdfPage.prepare()`；两个同步渲染方法改为抛出「请用异步 renderToPixelMap」 | 承载上述异步差异；平台适配层本来就不是逐字移植的部分 |
+| `core/platform/kit/NetworkKit.ts` | `buildSignal` 的 `readTimeout` 由一次性整段超时改成**读空闲**计时（每收到一块数据 `refreshReadTimer`）；`connectTimeout` 单独覆盖「未拿到响应头」那一段；`destroy()` 清理两个计时器 | 端口代码传的是鸿蒙的读空闲语义（工作 300000 / 聊天 180000）。当成整段超时的话，**任何超过 5 分钟的流式都会被硬掐断** |
+| `core/platform/kit/ImageKit.ts` | 新增 `image.createPixelMapFromBuffer()` | PDF.js 渲染出来的是 PNG 字节，端口代码期望 PixelMap；让 Electron 的依赖只经由本模块 |
+| `core/service/HarnessTools.ts` | 删除 `ask_user_question` 的工具定义与调度分支（保留一条同步兜底返回）；删除 `AskUserBridge` 导入 | 本平台没有向用户提问的界面（原版的 `views/AskUserCard.ets` 未移植），不删就会一直挂到 5 分钟超时。详见 `docs/PORTING.md` 末节 |
+| `core/service/SubagentService.ts` | 子代理工具白名单移除 `'ask_user_question'` | 同上 |
+| `core/service/AgentLoopService.ts` | ① 三处写文档工具说明与「需求分析」流程条目里的「必须先 ask_user_question 前置提问」改为「不得调用、改用最合理默认假设并在总结集中说明」；② 静态工具清单删掉该条目；③ 平台文案：`HarmonyOS 平台原生构建` → 桌面端、`手机竖屏/手机其他目录/手机可读格式` → 平台无关措辞 | ①不给提问界面就不能再要求模型去调用它，否则必然挂起。③逐字保留的原版文案会让模型自称鸿蒙手机应用、按手机窄屏排版 |
+| `core/common/PromptBuilder.ts` | 同上三项（工具说明、需求分析条目、工具清单、平台文案）；交互模式「不要 ask_user_question」改为「不要用提问工具」 | 同上 |
+| `core/service/WorkFileService.ts` | 三个写文档工具的描述改写；`search_web` 结果头部与注释里的「手机直连」改为「本机直连」 | 同上 |
+| `core/service/WorkSkillService.ts` | ppt/docx/xlsx 技能描述里的「新建前须前置提问」改为新口径 | 同上 |
+| `core/service/LocalWebSearch.ts` | 工具自述与结果文案里的「手机本地网络 / 手机内置 / 手机直连」改为「本机」 | 原版这么说是因为它真的跑在手机上；桌面端会据此说错话 |
+| `core/service/WebFetchService.ts` | `User-Agent` 从 `Mozilla/5.0 (HarmonyOS) GuncatWork/6.1` 改成桌面 UA | 同上 |
+| `core/common/GuncatUiLibrary.ts` | 组件提示文案「横向卡片轮播(手机上比网格更好读)」改为「在窄栏里比网格更好读」；「横向条形图(手机竖屏最易读)」改为「排名类数据在窄栏里最易读」 | 交互模式的组件选择说明，同样是平台措辞 |
+| `resources/skills/{docx,xlsx,ppt}/SKILL.md`、`ppt/reference/design-guide.md` | 「前置提问门」整节改为「默认假设门」（保留 5 项默认值表，改为自己取值并写进总结） | 与上面的 ask_user_question 下线配套 |
 
 > 除上表外，`src/core/` 下**没有**对上游逻辑做过任何语义修改。
+> 同步上游时请按本表逐条重新施加 —— 尤其 `ask_user_question` 那几条：
+> 整体覆盖上游而不重新施加的话，那个工具会复活，而桌面端没有它的 UI，模型会一直挂到超时。
 
 ---
 

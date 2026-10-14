@@ -1,4 +1,4 @@
-// LocalWebSearch: 本地内置联网搜索(手机直连搜索引擎/搜索 API, 不经过模型服务商)
+// LocalWebSearch: 本地内置联网搜索(本机直连搜索引擎/搜索 API, 不经过模型服务商)
 // 移植自参考项目 chatcube 的 WebSearchService(外部引擎 + Function Calling 路径):
 //   - 引擎注册表: Bing(本地 HTML 爬取, 无 Key)/Brave/Tavily/Exa/Metaso/Firecrawl
 //   - 统一 local_web_search function tool, 由模型决定是否调用; 服务端联网搜索(webSearchEnabled)完全独立并存
@@ -56,7 +56,7 @@ export const LOCAL_SEARCH_TOOL_DESC_CHAT_FALLBACK: string =
 
 // 工作模式工具描述(说明是手机本地处理; 结果自动登记到 .searches.md)
 export const LOCAL_SEARCH_TOOL_DESC_WORK: string =
-  '利用手机本地网络直接联网搜索(手机直连搜索引擎/搜索 API, 不经过模型服务商的服务端工具)。' +
+  '利用本机网络直接联网搜索(本机直连搜索引擎/搜索 API, 不经过模型服务商的服务端工具)。' +
   '用于获取实时信息、验证事实、查找资料。每次搜索有真实成本: 先自行判断是否真的需要联网, ' +
   '常见稳定知识直接作答; 需要搜索时生成聚焦的关键词, 证据不足才多次搜索。' +
   '引用来源一律使用标准 Markdown 链接 [title](url), 不要写 [1]、[2] 编号。' +
@@ -64,11 +64,11 @@ export const LOCAL_SEARCH_TOOL_DESC_WORK: string =
 
 // 工作模式工具描述(服务端联网搜索开启时的兜底版: 引导模型优先走服务端 web_search)
 export const LOCAL_SEARCH_TOOL_DESC_WORK_FALLBACK: string =
-  '【兜底工具 · 默认不要调用】手机本地直连搜索引擎的备用搜索通道(要占用本机网络与你自己配的引擎密钥, ' +
+  '【兜底工具 · 默认不要调用】本机直连搜索引擎的备用搜索通道(要占用本机网络与你自己配的引擎密钥, ' +
   '比服务端搜索慢、覆盖也更窄)。' +
   '本次请求**已启用服务端联网搜索(web_search)**: 需要联网时请直接用它 —— 由服务商实时执行, 结果更新更全。' +
   '只有以下情形才调用本工具: ① 服务端搜索报错或明确不可用; ② 服务端搜索已返回但为空/与问题无关; ' +
-  '③ 用户明确要求用手机内置搜索。' +
+  '③ 用户明确要求用本机内置搜索。' +
   '同一个问题不要两种搜索各来一遍; 也不要因为"本地搜索会自动登记到 .searches.md"就优先选它 —— ' +
   '服务端搜索的结果用一次 record_search 登记即可, 那只是一步, 不是选它的理由。' +
   '调用时生成聚焦的关键词; 引用来源一律使用标准 Markdown 链接 [title](url), 不要写 [1]、[2] 编号; ' +

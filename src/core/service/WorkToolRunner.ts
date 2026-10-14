@@ -823,7 +823,7 @@ export class WorkToolRunner {
     let req: http.HttpRequest = http.createHttp();
     WorkToolRunner.registerToolRequest(req);
     try {
-      let headers: Record<string, string> = { 'user-agent': 'Mozilla/5.0 (Linux; HarmonyOS) GuncatWork' };
+      let headers: Record<string, string> = { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GuncatWork' };
       let resp: http.HttpResponse = await req.request(url, {
         method: http.RequestMethod.GET,
         expectDataType: http.HttpDataType.ARRAY_BUFFER,

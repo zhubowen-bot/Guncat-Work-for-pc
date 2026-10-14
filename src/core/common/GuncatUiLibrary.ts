@@ -207,7 +207,7 @@ export class GuncatUiLibrary {
     out.push(new UiComp('AccordionItem', g2, '折叠项: value + trigger + content。',
       [s('value', true), s('trigger', true), els('content', true)]));
     out.push(new UiComp('Carousel', g2,
-      '横向卡片轮播(手机上比网格更好读)。children 传卡片数组, 每项一屏卡片。',
+      '横向卡片轮播(在窄栏里比网格更好读)。children 传卡片数组, 每项一屏卡片。',
       [els('children', true), sOpt('variant')]));
     out.push(new UiComp('Steps', g2, '步骤条。items 传 StepsItem 数组。',
       [els('items', true)]));
@@ -233,7 +233,7 @@ export class GuncatUiLibrary {
       '面积图, 用于累积/占比趋势。variant 取 linear|natural|step。',
       [strings('labels', true), els('series', true), sOpt('variant'), sOpt('xLabel'), sOpt('yLabel'), num('height', false)]));
     out.push(new UiComp('HorizontalBarChart', g4,
-      '横向条形图(手机竖屏最易读的排名图)。variant 取 grouped|stacked。',
+      '横向条形图(排名类数据在窄栏里最易读)。variant 取 grouped|stacked。',
       [strings('labels', true), els('series', true), sOpt('variant'), sOpt('xLabel'), sOpt('yLabel')]));
     out.push(new UiComp('PieChart', g4,
       '饼图/环形图。labels 与 values 一一对应; variant 取 pie|donut。',
