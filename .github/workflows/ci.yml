@@ -1,0 +1,70 @@
+name: CI
+
+# 覆盖范围（边界是有意划定的，不是遗漏）
+#
+#   ✅ 类型检查（src/core 移植内核 + main + preload + renderer）
+#   ✅ 三端构建产物（main / preload / renderer）
+#   ✅ 四套无头冒烟：内核 / 渲染 / IPC 契约 / 启动链路
+#   ✅ 渲染层「禁用字符」扫描（emoji 与当图标用的符号）
+#
+#   ❌ Windows 打包产物（npm run dist）与真实 GUI 启动：需要下载 Electron
+#      二进制并以窗口方式运行，托管 runner 上不稳定，也不该由 CI 承担。
+#      请在本地跑 `npm run dist` 并双击产物核对。
+#
+# 一条命令跑完全部：`npm run verify`（= typecheck + smoke）。详见 CONTRIBUTING.md。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: 类型检查 + 无头冒烟
+    # 固定 runner 版本：ubuntu-latest 会随 GitHub 迁移镜像，固定版本可避免
+    # 某天构建毫无征兆地变化。
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+
+      # 本项目用 npm（不是 pnpm），仓库里只有 package-lock.json。
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      # smoke 链第一步就是 npm run build，因此三端产物也在这里被打出来。
+      - name: 构建（main / preload / renderer）
+        run: npm run build
+
+      # 下面四套与 npm run smoke 里的顺序一致，拆成独立步骤只为让失败点一眼可见。
+      # 它们都用 esbuild 施加与 electron.vite.config.ts 完全相同的别名规则，
+      # 跑的就是构建产物真实依赖的那套解析规则。
+      - name: 内核冒烟（移植内核 + 工具链 + 三协议）
+        run: npm run smoke:core
+
+      - name: 渲染冒烟（react-dom/server 逐项断言）
+        run: npm run smoke:render
+
+      - name: IPC 契约冒烟（每个通道真实 invoke 一遍）
+        run: npm run smoke:ipc
+
+      - name: 启动链路冒烟（electron 替身跑真实入口）
+        run: npm run smoke:startup
+
+      - name: 渲染层禁用字符扫描
+        run: node scripts/check-emoji.mjs src/renderer

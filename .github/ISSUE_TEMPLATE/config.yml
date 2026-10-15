@@ -1,0 +1,19 @@
+# 允许自由开 Issue（不强制套模板，降低提问题的门槛）
+blank_issues_enabled: true
+
+contact_links:
+  - name: 启动排障（窗口没出现 / 一片空白）
+    url: https://github.com/zhubowen-bot/Guncat-Work-for-pc/blob/main/docs/STARTUP-TROUBLESHOOTING.md
+    about: 两份日志分别在哪、怎么带日志启动、兼容（安全）模式是怎么一回事
+
+  - name: 移植说明（与上游鸿蒙版的分歧清单）
+    url: https://github.com/zhubowen-bot/Guncat-Work-for-pc/blob/main/docs/PORTING.md
+    about: 改代码之前先看这里：别名替换策略、平台适配对照、对上游文件做过的每一处手术
+
+  - name: 交互模式实现说明
+    url: https://github.com/zhubowen-bot/Guncat-Work-for-pc/blob/main/docs/INTERACTIVE-MODE.md
+    about: guncat-ui lang 数据流、76 个组件覆盖、容错设计、两层无头验证
+
+  - name: 参与贡献（开发环境与验证矩阵）
+    url: https://github.com/zhubowen-bot/Guncat-Work-for-pc/blob/main/CONTRIBUTING.md
+    about: 环境要求、编码约定、怎么跑测试、PR 流程

@@ -1,0 +1,115 @@
+name: Bug 报告
+description: 报告一个可复现的问题（窗口起不来、显示异常、生成结果不对等）
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！为了能快速定位，请尽量把下面的信息填全。
+
+        如果是「窗口没出现 / 一片空白 / 双击没反应」这类启动问题，**先看
+        [启动排障](https://github.com/zhubowen-bot/Guncat-Work-for-pc/blob/main/docs/STARTUP-TROUBLESHOOTING.md)**，
+        里面已经写明两份日志分别在哪、怎么带日志启动。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述
+      description: 发生了什么？你期望发生什么？
+      placeholder: |
+        例如：工作模式里让它生成 PPT，产物卡片点开后是空的，但工作区里文件确实存在。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 越具体越好，能稳定复现的问题才有机会被修
+      placeholder: |
+        1. 切到工作模式
+        2. 输入「……」
+        3. 等产物卡片出现后点开
+        4. 面板是空的
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 运行模式
+      description: 问题出现在哪个模式？（应用启动默认落在交互模式）
+      options:
+        - 交互模式（Intelligent UI）
+        - 工作模式（Agent Loop / Harness）
+        - 聊天模式（通用 / 专家智能体）
+        - 不确定
+    validations:
+      required: true
+
+  - type: dropdown
+    id: distribution
+    attributes:
+      label: 运行方式
+      description: 是打包产物还是开发模式？两者的启动链路不同
+      options:
+        - 打包产物（双击 Guncat Work.exe）
+        - 开发模式（npm run dev）
+        - 两者都有
+    validations:
+      required: true
+
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: 接入协议
+      options:
+        - OpenAI Completions
+        - OpenAI Responses
+        - Anthropic Messages
+        - 不确定 / 未配置
+
+  - type: input
+    id: model
+    attributes:
+      label: 使用的模型
+      placeholder: 例如 DeepSeek V4.1 Flash / 火山方舟 doubao-seed-1-6
+
+  - type: input
+    id: app-version
+    attributes:
+      label: 应用版本
+      description: 设置页可见，或看 README 顶部的版本徽章
+      placeholder: 例如 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: system
+    attributes:
+      label: 操作系统版本
+      placeholder: 例如 Windows 11 23H2 (22631.4460) / macOS 15.1 / Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 截图 / 日志
+      description: |
+        显示类问题请附截图（拖进来即可）。
+
+        启动类问题请附这两份日志：
+        - 程序目录下的 `启动日志.txt`（由 `诊断启动.cmd` 产生）
+        - `%APPDATA%\Guncat Work\logs\startup.log`（应用逐里程碑的启动日志）
+      render: text
+
+  - type: checkboxes
+    id: self-check
+    attributes:
+      label: 提交前自查
+      options:
+        - label: 我已确认不是 API Key / 额度 / 网络问题
+        - label: 我已搜索过现有 Issue，没有重复
+          required: true
