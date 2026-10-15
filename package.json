@@ -22,7 +22,10 @@
     "smoke:startup": "node scripts/startup-check.mjs",
     "dump:components": "node scripts/dump-components.mjs",
     "dist": "npm run build && node scripts/package-portable.mjs",
-    "dist:only": "node scripts/package-portable.mjs"
+    "dist:only": "node scripts/package-portable.mjs",
+    "dist:setup": "node scripts/package-installer.mjs",
+    "dist:setup:ui": "node scripts/package-installer.mjs --ui-only --shots",
+    "dist:all": "npm run build && node scripts/package-portable.mjs && node scripts/package-installer.mjs --skip-build"
   },
   "//dependencies": "本应用的运行时代码全部由 vite 打进 out/，因此 npm 层面没有 runtime dependencies。唯一的例外是 PDF 后端的两块东西 —— pdfjs-dist 与 @napi-rs/canvas（原生 .node）—— 它们不能进 bundle，由 scripts/package-portable.mjs 手工拷进产物的 resources/app/node_modules 下；两者都在 devDependencies 里，只参与构建与打包。",
   "devDependencies": {

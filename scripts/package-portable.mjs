@@ -35,7 +35,14 @@ const pkgJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf
 const version = pkgJson.version
 // 输出目录带版本号：一来用户一眼知道拿的是哪版，二来避免旧目录被占用
 // （比如用户还开着上一次的 cmd 窗口，其工作目录就在里面）导致整个打包失败。
-const outDir = path.join(root, 'release', `${appName}-${version}`)
+//
+// GUNCAT_PACKAGE_OUTDIR 是给 scripts/package-installer.mjs 用的出口：安装包需要的是
+// **同一份产物**，但它不该污染 release/ 下的便携目录（安装包里还要额外塞 uninstall.exe，
+// 那些文件不该出现在便携版里）。所以允许调用方把产物装到自己的临时目录里去。
+const outDirOverride = process.env.GUNCAT_PACKAGE_OUTDIR
+const outDir = outDirOverride
+  ? path.resolve(outDirOverride)
+  : path.join(root, 'release', `${appName}-${version}`)
 const electronDist = path.join(root, 'node_modules', 'electron', 'dist')
 
 function fail(message) {
