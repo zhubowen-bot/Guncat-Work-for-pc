@@ -64,6 +64,22 @@ function check(name, condition, detail = '') {
   }
 }
 
+/**
+ * 等一条主进程推来的事件（附件解析是**后台**逐个做的，pick 不会等它）。
+ * 轮询而不是订阅：事件都在 events 数组里，重复进出的事件也用同一种写法查。
+ */
+async function waitForEvent(predicate, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const hit = events.find(predicate)
+    if (hit !== undefined) {
+      return hit
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  return null
+}
+
 const dataRoot = path.join(os.tmpdir(), `guncat-ipc-${Date.now()}`)
 // 启动日志也写到临时目录：注册 IPC 不再触发日志，但「渲染进程阶段上报」会写日志 ——
 // 绝不能因此覆盖用户真实的那份启动日志（排查问题时要看的正是它）。
@@ -582,6 +598,186 @@ check(
   String(attachList[0]?.name)
 )
 check('附件类型按扩展名归类', attachList[0]?.type === 'file', String(attachList[0]?.type))
+
+// --- 附件先行解析（对齐原版 enqueueFiles：选完立刻出现卡片，解析逐个回报） ---
+//
+// 事故形状：附件此前只在**发送时**才解析，用户选完文件后看不到任何进度，
+// 也不知道这份文件到底解析完了没有。原版的口径是：卡片先以「解析中...」出现，
+// 解析完再变成「已就绪 / 解析失败」，且解析中的文件不允许发送。
+//
+// 先用「未开启先行解析」的配置走内联路径验证时序（不碰网络），
+// 再用一个假的多模态服务验证「解析结果被缓存、发送时不会重复解析」。
+const mmBefore = (await inv('settings:load')).multimodalConfig
+const inlineFile = path.join(intakeDir, '先行解析内联.txt')
+fs.writeFileSync(inlineFile, '内联附件内容', 'utf8')
+await inv('settings:saveMultimodalConfig', { ...mmBefore, preparseEnabled: false, apiKey: '' })
+
+events.length = 0
+mod.__setOpenDialog({ canceled: false, filePaths: [inlineFile] })
+const pickedParsing = await inv('attachments:pick')
+mod.__setOpenDialog(null)
+check(
+  '选完文件立刻返回，状态是「解析中」（卡片先出现，不等解析做完）',
+  pickedParsing.length === 1 && pickedParsing[0].status === 'parsing',
+  JSON.stringify(pickedParsing.map((a) => a.status))
+)
+check(
+  '立刻返回的那一份仍带齐预览信息（路径 / 文件名 / 大小 / 缩略图）',
+  pickedParsing[0]?.path === inlineFile &&
+    pickedParsing[0]?.name === '先行解析内联.txt' &&
+    pickedParsing[0]?.size > 0 &&
+    typeof pickedParsing[0]?.thumbnail === 'string',
+  JSON.stringify({ name: pickedParsing[0]?.name, size: pickedParsing[0]?.size })
+)
+const inlineParsed = await waitForEvent(
+  (e) => e.type === 'attachment:parsed' && e.path === inlineFile
+)
+check(
+  '解析完成后推 attachment:parsed 事件（status=ready）',
+  inlineParsed !== null && inlineParsed.status === 'ready',
+  JSON.stringify(inlineParsed)
+)
+
+// 解析不出来的文件必须回报失败，并把原因带上 —— 卡片红底只说明「坏了」，
+// 具体原因（这里是不存在）要靠 tooltip 查得到。
+const missingFile = path.join(intakeDir, '不存在的附件.txt')
+events.length = 0
+mod.__setOpenDialog({ canceled: false, filePaths: [missingFile] })
+await inv('attachments:pick')
+mod.__setOpenDialog(null)
+const missingParsed = await waitForEvent(
+  (e) => e.type === 'attachment:parsed' && e.path === missingFile
+)
+check(
+  '解析不出来的文件回报 status=error 并带上原因',
+  missingParsed !== null &&
+    missingParsed.status === 'error' &&
+    typeof missingParsed.error === 'string' &&
+    missingParsed.error !== '',
+  JSON.stringify(missingParsed)
+)
+
+// 假的多模态服务：只数请求次数并回一句可识别的文字。
+// 「发送时不再重复解析」这条只能靠请求次数钉住 —— 结果对但没有次数的话，
+// 同一份文件会被调两次接口、传两次 Files API，用户看到的是「发个附件特别慢」。
+const mmBodies = []
+const mmServer = http.createServer((req, res) => {
+  let body = ''
+  req.on('data', (chunk) => {
+    body += chunk
+  })
+  req.on('end', () => {
+    mmBodies.push(body)
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ choices: [{ message: { content: '这是多模态解析出的文字' } }] }))
+  })
+})
+await new Promise((resolve) => mmServer.listen(0, '127.0.0.1', resolve))
+const mmPort = mmServer.address().port
+const mmFile = path.join(intakeDir, '先行解析服务.txt')
+fs.writeFileSync(mmFile, '要被多模态服务读到的内容', 'utf8')
+await inv('settings:saveMultimodalConfig', {
+  baseUrl: `http://127.0.0.1:${mmPort}`,
+  apiKey: 'sk-mm-test',
+  model: 'mm-test-model',
+  preparseEnabled: true
+})
+
+events.length = 0
+mod.__setOpenDialog({ canceled: false, filePaths: [mmFile] })
+await inv('attachments:pick')
+mod.__setOpenDialog(null)
+const mmParsed = await waitForEvent((e) => e.type === 'attachment:parsed' && e.path === mmFile)
+check(
+  '开启先行解析时，解析结果来自多模态服务',
+  mmParsed !== null && mmParsed.status === 'ready' && mmBodies.length === 1,
+  `多模态请求 ${mmBodies.length} 次`
+)
+
+const convMm = await inv('conversations:create', agents[0].id, 'chat')
+await inv('chat:send', {
+  conversationId: convMm.id,
+  text: '看这个文件',
+  mode: 'chat',
+  thinkingEnabled: false,
+  webSearchEnabled: false,
+  attachmentPaths: [mmFile]
+})
+check(
+  '发送时复用解析缓存，不重复调用多模态接口（此前每次发送都要重解析）',
+  mmBodies.length === 1,
+  `多模态请求 ${mmBodies.length} 次`
+)
+const mmMsg = ((await inv('conversation:get', convMm.id))?.messages ?? []).find(
+  (m) => m.role === 'user'
+)
+check(
+  '复用缓存的那份附件带着解析出的文字（缓存不是空壳）',
+  mmMsg?.attachments?.[0]?.parsedText === '这是多模态解析出的文字',
+  String(mmMsg?.attachments?.[0]?.parsedText)
+)
+await new Promise((resolve) => mmServer.close(resolve))
+
+// 先行解析失败（服务端报错）时的兜底：卡片报「解析失败」，但文件仍以 Base64 内联发得出去。
+// 这条是桌面端相对原版的**有意差异**（原版会把 error 的附件从 ready 里过滤掉、也就是不发送）：
+// 这里的失败几乎总是「多模态入口没配好/临时抽风」，把文件一起丢掉才是真的不可用。
+const badBodies = []
+const badServer = http.createServer((req, res) => {
+  req.on('data', () => {})
+  req.on('end', () => {
+    badBodies.push(1)
+    res.writeHead(500, { 'Content-Type': 'application/json' })
+    res.end('{"error":"boom"}')
+  })
+})
+await new Promise((resolve) => badServer.listen(0, '127.0.0.1', resolve))
+const badPort = badServer.address().port
+const badFile = path.join(intakeDir, '先行解析失败.txt')
+fs.writeFileSync(badFile, '解析会失败的内容', 'utf8')
+await inv('settings:saveMultimodalConfig', {
+  baseUrl: `http://127.0.0.1:${badPort}`,
+  apiKey: 'sk-bad-test',
+  model: 'mm-bad-model',
+  preparseEnabled: true
+})
+events.length = 0
+mod.__setOpenDialog({ canceled: false, filePaths: [badFile] })
+await inv('attachments:pick')
+mod.__setOpenDialog(null)
+const badParsed = await waitForEvent((e) => e.type === 'attachment:parsed' && e.path === badFile)
+check(
+  '先行解析失败：卡片收到 status=error 与失败原因',
+  badParsed !== null &&
+    badParsed.status === 'error' &&
+    String(badParsed.error).includes('500') &&
+    String(badParsed.error).includes('内联'),
+  JSON.stringify(badParsed)
+)
+const convBad = await inv('conversations:create', agents[0].id, 'chat')
+await inv('chat:send', {
+  conversationId: convBad.id,
+  text: '这个文件还发得出去吗',
+  mode: 'chat',
+  thinkingEnabled: false,
+  webSearchEnabled: false,
+  attachmentPaths: [badFile]
+})
+const badMsg = ((await inv('conversation:get', convBad.id))?.messages ?? []).find(
+  (m) => m.role === 'user'
+)
+check(
+  '先行解析失败的附件仍退回 Base64 内联发送（不会连文件一起丢掉）',
+  badMsg?.attachments?.length === 1 &&
+    String(badMsg.attachments[0].dataUrl).startsWith('data:text/plain;base64,'),
+  String(badMsg?.attachments?.[0]?.dataUrl).slice(0, 34)
+)
+check(
+  '失败的那次解析也被缓存住了（不会每发一次就重试一遍慢接口）',
+  badBodies.length === 1,
+  `坏接口请求 ${badBodies.length} 次`
+)
+await new Promise((resolve) => badServer.close(resolve))
+await inv('settings:saveMultimodalConfig', mmBefore)
 
 // --- 定时提醒推进：此前 ScheduleService.tick 零调用点 ---
 //

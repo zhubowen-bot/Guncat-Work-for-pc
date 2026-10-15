@@ -77,6 +77,24 @@ class RunHandle {
   busy: boolean = false
 }
 
+/** 单次附件解析的结果：attachment 为 null 表示这个文件不可用，error 说明原因 */
+interface ParsedAttachment {
+  attachment: Attachment | null
+  error: string
+}
+
+/** 缓存条目：配置指纹 + 那次解析的结果（保持对象身份，便于复用） */
+interface CachedAttachment extends ParsedAttachment {
+  sig: string
+}
+
+/** 一批附件解析所需的配置与它们的配置指纹（一次读取，供整批复用） */
+interface AttachmentParseContext {
+  mm: MultimodalConfig
+  api: ApiConfig | null
+  sig: string
+}
+
 export class SessionManager {
   private emit: Emit
   private conversations: Conversation[] = []
@@ -1077,6 +1095,16 @@ export class SessionManager {
           if (handle.abort.aborted) {
             break
           }
+          // 真正开始执行前打上 started 标记并推一次：工具行右端据此从「等待中…」
+          // 变成「执行中…」（原版 stepStatusLabel 的判据，这里分批推同一批记录）
+          call.preparing = false
+          call.started = true
+          this.emit({
+            type: 'tool:started',
+            conversationId: conv.id,
+            messageId: targetMsg.id,
+            call: SessionManager.toToolDto(call)
+          })
           // 真实计时：工具行右端要显示耗时（原版 WorkStepFormat.formatDuration 的口径），
           // 之前这里写死 0，界面上的耗时永远是「0ms」
           const toolStartedAt: number = Date.now()
@@ -1343,82 +1371,224 @@ export class SessionManager {
    *
    * 移植自原版 ChatViewModel.enqueueFiles + parseOneFile + prepareAttachmentFileIds：
    *   · 先行解析（preparseEnabled）：交给 MultimodalService 把内容读成文字；
-   *   · 未开先行解析、或解析失败：退回 Base64 内联（dataUrl），由主模型的多模态能力直接看；
+   *   · 未开先行解析：退回 Base64 内联（dataUrl），由主模型的多模态能力直接看；
    *   · 大文件 / Responses 协议的文档：走 Files API 拿 file_id，按各协议引用。
+   *
+   * 与开头的差别（本次对齐）：解析结果优先取缓存。用户选完文件时主进程就已经解析过了
+   * （见 preparseAttachments），发送路径只该「取一次」，不该把同一份文件再读一遍、
+   * 再调一次多模态接口、再传一次 Files API。
    */
   private async makeAttachments(paths: string[]): Promise<Attachment[]> {
     const out: Attachment[] = []
     if (paths.length === 0) {
       return out
     }
+    const parsed: AttachmentParseContext = await this.attachmentParseContext()
+    for (const p of paths) {
+      const { attachment, error }: ParsedAttachment = await this.attachmentFor(p, parsed)
+      if (attachment === null) {
+        // 彻底不可用（读不出来 / 文件不在了）：不静默丢，说清是哪一个、为什么
+        this.emit({
+          type: 'notice',
+          level: 'warn',
+          text: `附件解析失败，已跳过：${SessionManager.baseName(p)}（${error}）`
+        })
+        continue
+      }
+      // 复制一份再放进消息：同一条缓存可能被多条消息引用，
+      // 消息里的附件不该与缓存共享同一个可变对象（Attachment 是 class，字段可写）。
+      out.push(
+        Attachment.of(
+          attachment.name,
+          attachment.parsedText,
+          attachment.type,
+          attachment.thumbnail,
+          attachment.dataUrl,
+          attachment.fileId
+        )
+      )
+    }
+    return out
+  }
+
+  // ===== 附件先行解析（对齐原版 enqueueFiles / parseOneFile） =====
+
+  /**
+   * 选完文件后立刻预处理（原版 enqueueFiles 的桌面端对应物）。
+   *
+   * 与 pick 的分工：IPC 那边**不 await** 地启动它 —— 选文件的返回值必须立刻回到渲染层，
+   * 卡片才能马上出现在预览条上（此时是「解析中...」）。这里逐个解析，每完成一个就推一条
+   * `attachment:parsed`，渲染层据此把卡片换成「已就绪」或「解析失败」。
+   *
+   * 刻意串行（而不是 Promise.all）：一次选十几个文件时，并行会把多模态接口和内存同时打满，
+   * 而且用户看到的第一个「已就绪」也要等最慢的那个 —— 串行反而逐个更快有反馈（与原始一致）。
+   */
+  async preparseAttachments(paths: string[]): Promise<void> {
+    if (paths.length === 0) {
+      return
+    }
+    const parsed: AttachmentParseContext = await this.attachmentParseContext()
+    for (const p of paths) {
+      const result: ParsedAttachment = await this.attachmentFor(p, parsed)
+      // 两种失败都要报给用户，但严重程度不同：彻底不可用的直接推一条 notice（发送时会被跳过），
+      // 先行解析失败但已退回内联的只在卡片上说明 —— 它仍然能发出去，不该再弹一次警告。
+      if (result.attachment === null) {
+        this.emit({
+          type: 'notice',
+          level: 'warn',
+          text: `${SessionManager.baseName(p)} 解析失败：${result.error}`
+        })
+      }
+      this.emit({
+        type: 'attachment:parsed',
+        path: p,
+        status: result.attachment === null || result.error !== '' ? 'error' : 'ready',
+        ...(result.error !== '' ? { error: result.error } : {})
+      })
+    }
+  }
+
+  /**
+   * 附件解析缓存：路径 → 已解析好的 Attachment（或失败原因）。
+   *
+   * 为什么必须有：选完文件就解析，而发送时**不能再解析一遍** —— 否则同一份文件会被
+   * 多模态接口调两次、被 Files API 传两次。缓存条目里带「配置指纹」，多模态/接口配置一变，
+   * 先前解析出的 parsedText 与上传得到的 file_id 就可能不适用，旧条目自然命中不了、
+   * 会按新配置重新解析。
+   *
+   * 选「指纹失效」而不是「配置变更时主动清空」：后者要在每一处保存配置的分支上都接一根线，
+   * 漏一处就是「改了配置还在用旧结果」这种难查的错；前者的代价只是失效条目在内存里多留一会儿。
+   */
+  private attachmentCache: Map<string, CachedAttachment> = new Map()
+
+  /** 读一次解析所需的配置，并算出这批解析结果的配置指纹 */
+  private async attachmentParseContext(): Promise<AttachmentParseContext> {
     const mm: MultimodalConfig = await StorageManager.loadMultimodalConfig(this.ctx()).catch(
       (): MultimodalConfig => MultimodalConfig.default()
     )
     const api: ApiConfig | null = await StorageManager.loadApiConfig(this.ctx()).catch(
       (): ApiConfig | null => null
     )
-    for (const p of paths) {
-      const name: string = p.split(/[\\/]/).pop() ?? p
-      if (!fs.existsSync(p)) {
-        this.emit({ type: 'notice', level: 'warn', text: `附件不存在，已跳过：${name}` })
-        continue
-      }
-      let bytes: Buffer
-      try {
-        bytes = fs.readFileSync(p)
-      } catch (e: unknown) {
-        this.emit({
-          type: 'notice',
-          level: 'warn',
-          text: `附件读取失败，已跳过：${name}（${e instanceof Error ? e.message : String(e)}）`
-        })
-        continue
-      }
-      const mime: string = SessionManager.guessMime(name)
-      const isImage: boolean = mime.startsWith('image/')
-      const type: string = isImage ? 'image' : 'file'
-      let parsedText: string = ''
-      let dataUrl: string = ''
-      // 先行解析：多模态服务把图片/文档读成文字（没配密钥时静默跳过，下面会退回内联）
-      if (mm.preparseEnabled && mm.apiKey !== '') {
-        try {
-          const result = await MultimodalService.parseFile(
-            mm,
-            name,
-            SessionManager.toArrayBuffer(bytes),
-            mime
-          )
-          parsedText = result.content
-          dataUrl = result.dataUrl
-        } catch (e: unknown) {
-          // 解析失败不该让整条消息发不出去：退回内联，并在界面上说清原因
-          this.emit({
-            type: 'notice',
-            level: 'warn',
-            text: `${name} 解析失败，改为直接内联发送：${e instanceof Error ? e.message : String(e)}`
-          })
-        }
-      }
-      if (parsedText === '' && dataUrl === '') {
-        dataUrl = `data:${mime};base64,${bytes.toString('base64')}`
-      }
-      let fileId: string = ''
-      if (api !== null && SessionManager.shouldUploadViaFilesApi(api, type, bytes.byteLength)) {
-        try {
-          fileId = await FileUploadService.uploadFile(
-            api,
-            name,
-            mime,
-            SessionManager.toArrayBuffer(bytes)
-          )
-        } catch {
-          // 上传失败保留 dataUrl 内联发送（与原版一致）
-          fileId = ''
-        }
-      }
-      out.push(Attachment.of(name, parsedText, type, await this.makeThumbnail(dataUrl), dataUrl, fileId))
+    return { mm, api, sig: SessionManager.attachmentConfigSig(mm, api) }
+  }
+
+  /**
+   * 附件解析结果的「配置指纹」。只取会影响结果的那几项：
+   *   · 多模态入口决定「解析出什么文字」；
+   *   · 接口配置决定「要不要、能不能上传 Files API」（file_id 与 provider 绑定）。
+   * 密钥只取「有没有、多长」，不把明文再复制一份进缓存键。
+   */
+  private static attachmentConfigSig(mm: MultimodalConfig, api: ApiConfig | null): string {
+    const mmSig: string = [
+      mm.baseUrl,
+      mm.model,
+      mm.preparseEnabled ? '1' : '0',
+      mm.apiKey === '' ? '0' : `k${mm.apiKey.length}`
+    ].join('|')
+    const apiSig: string =
+      api === null
+        ? '-'
+        : [api.provider, api.baseUrl, api.apiKey === '' ? '0' : `k${api.apiKey.length}`].join('|')
+    return `${mmSig}#${apiSig}`
+  }
+
+  /** 取（必要时现算）某个路径的解析结果，并写回缓存 */
+  private async attachmentFor(
+    filePath: string,
+    parsed: AttachmentParseContext
+  ): Promise<ParsedAttachment> {
+    const hit: CachedAttachment | undefined = this.attachmentCache.get(filePath)
+    if (hit !== undefined && hit.sig === parsed.sig) {
+      return { attachment: hit.attachment, error: hit.error }
     }
-    return out
+    const result: ParsedAttachment = await this.parseAttachmentFile(filePath, parsed.mm, parsed.api)
+    this.attachmentCache.set(filePath, { sig: parsed.sig, ...result })
+    return result
+  }
+
+  /**
+   * 解析单个文件：读盘 → 先行解析或 Base64 内联 → 必要时上传 Files API。
+   *
+   * 返回值的两种形态，对应的「解析失败」不是同一件事：
+   *   · attachment === null —— **彻底不可用**（文件不在了 / 读不出来），只能跳过；
+   *   · attachment !== null 且 error !== '' —— 先行解析失败，但已退回 Base64 内联，
+   *     文件仍然能发出去（卡片照原版口径显示「解析失败」，tooltip 里说明已内联直传）。
+   */
+  private async parseAttachmentFile(
+    filePath: string,
+    mm: MultimodalConfig,
+    api: ApiConfig | null
+  ): Promise<ParsedAttachment> {
+    const name: string = SessionManager.baseName(filePath)
+    if (!fs.existsSync(filePath)) {
+      return { attachment: null, error: '文件不存在' }
+    }
+    let bytes: Buffer
+    try {
+      bytes = fs.readFileSync(filePath)
+    } catch (e: unknown) {
+      return { attachment: null, error: `读取失败：${e instanceof Error ? e.message : String(e)}` }
+    }
+    const mime: string = SessionManager.guessMime(name)
+    const type: string = mime.startsWith('image/') ? 'image' : 'file'
+    let parsedText: string = ''
+    let dataUrl: string = ''
+    let parseError: string = ''
+    // 先行解析：多模态服务把图片/文档读成文字（没配密钥时静默跳过，下面会退回内联）
+    if (mm.preparseEnabled && mm.apiKey !== '') {
+      try {
+        const result = await MultimodalService.parseFile(
+          mm,
+          name,
+          SessionManager.toArrayBuffer(bytes),
+          mime
+        )
+        parsedText = result.content
+        dataUrl = result.dataUrl
+      } catch (e: unknown) {
+        // 先行解析失败：**仍然退回 Base64 内联**，但状态如实报「解析失败」。
+        //
+        // 与原版的差异（如实记录）：原版把 error 的附件从 ready 里过滤掉，也就是不发送。
+        // 桌面端保留内联兜底，因为这里的失败几乎总是「多模态入口没配好 / 临时抽风」——
+        // 把文件一起丢掉，用户会连一张能直传的图片都发不出去，而失败原因只在卡片上；
+        // 原版没有这条兜底，是它的直传与解析在同一步里，失败了本就无内容可发。
+        // 卡片照原样变红并在 tooltip 里说明「已改为内联直传」，不制造「红卡却发出去了」的困惑。
+        parseError = `${e instanceof Error ? e.message : String(e)}；已改为 Base64 内联发送`
+      }
+    }
+    if (parsedText === '' && dataUrl === '') {
+      dataUrl = `data:${mime};base64,${bytes.toString('base64')}`
+    }
+    let fileId: string = ''
+    if (api !== null && SessionManager.shouldUploadViaFilesApi(api, type, bytes.byteLength)) {
+      try {
+        fileId = await FileUploadService.uploadFile(
+          api,
+          name,
+          mime,
+          SessionManager.toArrayBuffer(bytes)
+        )
+      } catch {
+        // 上传失败保留 dataUrl 内联发送（与原版一致）
+        fileId = ''
+      }
+    }
+    return {
+      attachment: Attachment.of(
+        name,
+        parsedText,
+        type,
+        await this.makeThumbnail(dataUrl),
+        dataUrl,
+        fileId
+      ),
+      error: parseError
+    }
+  }
+
+  /** 取路径里的文件名（`C:\a\b.png` 与 `/a/b.png` 都要对） */
+  private static baseName(filePath: string): string {
+    return filePath.split(/[\\/]/).pop() ?? filePath
   }
 
   /**
@@ -1598,6 +1768,9 @@ export class SessionManager {
       finishedAt: 0,
       // 真实耗时：工具行的右端、图标位的转圈与否都靠它判断（原版同口径）
       durationMs: rec.durationMs,
+      // 「执行中…」与「等待中…」的区分（原版 stepStatusLabel 靠这两个标志）
+      started: rec.started,
+      preparing: rec.preparing,
       diff: rec.meta
     }
   }

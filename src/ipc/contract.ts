@@ -242,9 +242,18 @@ export interface SearchEngineDto {
 }
 
 /**
+ * 附件的解析状态。
+ *
+ * 对齐原版 FileItem.status：选完文件卡片立刻出现（`parsing`），随后逐个解析，
+ * 解析完改成 `ready`（已就绪）或 `error`（解析失败，整卡红底）。
+ * 解析中的附件**不允许发送** —— 原版 sendMessage 里有「文件解析中，请稍候」的守卫。
+ */
+export type AttachmentParseStatus = 'parsing' | 'ready' | 'error'
+
+/**
  * 选中的附件（发送前）。
- * 只带「怎么显示」与「文件在哪」—— 真正的读取与解析放在主进程的发送路径上
- * （多模态配置、API Key 都在那边），避免解析两遍。
+ * 只带「怎么显示」「文件在哪」与「解析到哪一步了」。真正的读取与解析放在主进程
+ * （多模态配置、API Key 都在那边），解析结果经 `attachment:parsed` 事件回报。
  */
 export interface PickedAttachmentDto {
   path: string
@@ -252,6 +261,10 @@ export interface PickedAttachmentDto {
   size: number
   /** 图片的小缩略图（data URL）；非图片为空串，渲染层退回显示文件名 */
   thumbnail: string
+  /** 解析状态；pick 返回时必然是 parsing，之后由事件推进 */
+  status: AttachmentParseStatus
+  /** 解析失败的原因（status === 'error' 时给卡片 tooltip 用） */
+  error?: string
 }
 
 export interface AppSettingsDto {
@@ -292,6 +305,18 @@ export interface ToolCallRecordDto {
    * （决定图标位显示转圈还是类别图标、右侧显示耗时还是「失败」、要不要给展开箭头）。
    */
   durationMs: number
+  /**
+   * 是否已**真正开始执行**（内核在执行前标记）。
+   * 与 `durationMs < 0` 配合决定工具行右端显示哪一句：
+   * `started` → 「执行中…」、否则 → 「等待中…」（原版 WorkTurnView.stepStatusLabel）。
+   */
+  started?: boolean
+  /**
+   * 模型是否还在**生成这个调用的参数**（原版在流式回调里置位）。
+   * 桌面端的内核目前只在参数生成完成时回调一次，因此这个字段实际上恒为 false ——
+   * 界面上的「生成调用中…」分支保留着，等内核补上流式增量回调即可点亮。
+   */
+  preparing?: boolean
   diff: string
 }
 
@@ -428,6 +453,14 @@ export type GuncatEvent =
   /** 外部文件到达（命令行 / 系统「打开方式」/ 第二实例），等渲染进程决定导入哪个会话 */
   | { type: 'files:pending'; paths: string[] }
   | { type: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
+  /**
+   * 某个附件解析完成（成功或失败）。
+   *
+   * 为什么要有这条：`attachments:pick` 是**立刻**返回的（卡片马上出现在预览条上，
+   * 原版口径），解析在主进程后台逐个进行；没有这条事件，卡片就会永远停在「解析中...」，
+   * 用户既不知道能不能发，也看不到失败原因。
+   */
+  | { type: 'attachment:parsed'; path: string; status: 'ready' | 'error'; error?: string }
   | { type: 'ask:user'; conversationId: string; requestId: string; question: string; options: string[] }
 
 export interface AppInfoDto {

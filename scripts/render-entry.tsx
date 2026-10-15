@@ -47,18 +47,20 @@ import { GroupedTurn, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
 import { safeUrlTransform } from '@renderer/components/Markdown'
 import { Composer } from '@renderer/components/Composer'
+import { AttachmentBar } from '@renderer/components/AttachmentBar'
 import {
   TaskGoalCard,
   TaskStatsCard,
   WorkspacePanel,
-  formatTaskDuration,
+  formatElapsedSec,
+  formatWorkTime,
   workspaceFileIcon
 } from '@renderer/components/WorkspacePanel'
 import { LightboxView } from '@renderer/components/ImageLightbox'
 import { TableOcrPanel } from '@renderer/components/TableOcrDialog'
 import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
 import { marqueeText } from '@renderer/components/MessageView'
-import type { MessageDto } from '@ipc/contract'
+import type { MessageDto, PickedAttachmentDto } from '@ipc/contract'
 
 /** 导出文件名推导 —— 纯函数，可直接断言 */
 export { docxFileName }
@@ -194,10 +196,20 @@ export function renderToolRow(
   )
 }
 
-/** 执行中的工具行（转圈 + 不给耗时与展开箭头） */
-export function renderToolRowRunning(): string {
+/**
+ * 执行中的工具行（转圈 + 三分状态文案）。
+ * 注意：展开箭头原版是**无条件渲染**的（审计报告一度写错成「运行中隐藏」，这里按源码校正）。
+ * `started` 用来区分「已开始执行」（执行中…）与「本轮结束但耗时仍为负」（已中断）。
+ */
+export function renderToolRowRunning(
+  variant: 'chat' | 'loop' = 'loop',
+  streaming = true,
+  started = true
+): string {
   return renderToStaticMarkup(
     createElement(ToolCallRow, {
+      variant,
+      streaming,
       call: {
         id: 'call-running',
         name: 'read_file',
@@ -207,6 +219,31 @@ export function renderToolRowRunning(): string {
         startedAt: 0,
         finishedAt: 0,
         durationMs: -1,
+        started,
+        preparing: false,
+        diff: ''
+      }
+    })
+  )
+}
+
+/** 排队等待中的工具行（参数已生成、还没轮到执行 → 「等待中…」） */
+export function renderToolRowQueued(): string {
+  return renderToStaticMarkup(
+    createElement(ToolCallRow, {
+      variant: 'loop',
+      streaming: true,
+      call: {
+        id: 'call-queued',
+        name: 'write_file',
+        argsJson: '{"path":"a.md"}',
+        result: '',
+        status: 'running',
+        startedAt: 0,
+        finishedAt: 0,
+        durationMs: -1,
+        started: false,
+        preparing: false,
         diff: ''
       }
     })
@@ -216,6 +253,7 @@ export function renderToolRowRunning(): string {
 /**
  * 任务统计卡 / 目标卡（原版 DetailsPanelView 的统计卡与目标卡）。
  * 传进来的是一份「有数据」的统计，便于断言四项指标与目标卡都渲染出来。
+ * 参数口径对齐 WorkspacePanel.TaskStatsCard：用时是**整数秒**（原版 elapsedSec）。
  */
 export function renderTaskStats(): string {
   return renderToStaticMarkup(
@@ -223,13 +261,10 @@ export function renderTaskStats(): string {
       'div',
       null,
       createElement(TaskStatsCard, {
-        stats: {
-          elapsedMs: 83400,
-          speed: 42.35,
-          cacheHit: 0.812,
-          rounds: 7,
-          goal: null
-        }
+        elapsedSec: 83,
+        speed: 42.35,
+        cacheHit: 0.812,
+        toolCalls: 7
       }),
       createElement(TaskGoalCard, {
         goal: { objective: '把季度报表补齐并导出', status: 'active', rounds: 3, maxRounds: 40 }
@@ -238,24 +273,21 @@ export function renderTaskStats(): string {
   )
 }
 
-/** 还没跑过 / 没有目标时两张卡都不显示（不该出现一张全是横杠的空卡） */
+/** 没有数据时统计卡仍然在（值显示「—」），目标卡不渲染 */
 export function renderTaskStatsEmpty(): string {
   return renderToStaticMarkup(
     createElement(
       'div',
       null,
-      createElement(TaskStatsCard, {
-        stats: { elapsedMs: 0, speed: -1, cacheHit: -1, rounds: 0, goal: null }
-      }),
+      createElement(TaskStatsCard, { elapsedSec: 0, speed: -1, cacheHit: -1, toolCalls: 0 }),
       createElement(TaskGoalCard, { goal: null })
     )
   )
 }
 
-/** 任务用时的三种量级（秒 / 分秒 / 无数据） */
-export { formatTaskDuration }
+/** 会话工作时间与用时格式（整数秒 / MM:SS / HH:MM:SS） */
 export function renderDurations(): string[] {
-  return [0, 8400, 83400, 125000].map((ms) => formatTaskDuration(ms))
+  return [formatElapsedSec(0), formatElapsedSec(83), formatWorkTime(83), formatWorkTime(3723)]
 }
 
 /**
@@ -386,6 +418,30 @@ export function renderComposer(mode: string, running = false): string {
       onSteer: async () => true,
       onAbort: () => {}
     })
+  )
+}
+
+/**
+ * 附件预览条在三种解析状态下的渲染（对齐原版 ChatPage.ets:958-1042）。
+ *
+ * 为什么单独导出一个「纯 props」版本：Composer 要读 store、还要订阅 IPC 事件，
+ * SSR 里两样都拿不到；而这次对齐真正的口径恰恰全在展示层 ——
+ * 「解析中... / 解析失败 / 已就绪」三段文案、失败整卡淡红底、解析中不显示删除钮。
+ * 状态只能靠夹具喂进来，所以把预览条抽成纯展示组件再逐态断言（同 TableOcrPanel 的做法）。
+ */
+export function renderAttachmentBar(status: 'parsing' | 'ready' | 'error'): string {
+  const att: PickedAttachmentDto = {
+    path: 'C:/tmp/季度报表.png',
+    name: '季度报表.png',
+    size: 204800,
+    // 解析中还没有缩略图（缩略图在解析结果里），此时卡片退回显示文件名；
+    // 已就绪/失败的卡片则显示缩略图 —— 这两条展示路径都要能断言到。
+    thumbnail: status === 'parsing' ? '' : 'data:image/png;base64,iVBORw0KGgo=',
+    status,
+    ...(status === 'error' ? { error: '多模态接口返回 401 Unauthorized' } : {})
+  }
+  return renderToStaticMarkup(
+    createElement(AttachmentBar, { attachments: [att], onRemove: () => {} })
   )
 }
 

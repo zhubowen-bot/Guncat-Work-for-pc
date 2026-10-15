@@ -5,8 +5,8 @@
 // 用户不可能猜到。原版 WorkspaceBar 的头部就有一颗看得见的「上传」按钮，
 // 空态文案更是直接写着「工作区为空, 点击"上传"添加文件」。
 // 这里把那个入口补回来，并且空态也给一颗按钮 —— 空工作区恰恰是最需要它的时候。
-import { useState } from 'react'
-import type { ConversationStatsDto, GoalDto } from '@ipc/contract'
+import { useEffect, useRef, useState } from 'react'
+import type { ConversationDto, ConversationStatsDto, GoalDto } from '@ipc/contract'
 import { useStore } from '../store'
 import {
   IconAudio,
@@ -43,53 +43,108 @@ const GOAL_STATUS_LABEL: Record<string, string> = {
   blocked: '受阻'
 }
 
-/** 任务用时：不足 60 秒给到 0.1 秒，过了给分秒 */
-export function formatTaskDuration(ms: number): string {
-  if (ms <= 0) {
-    return '—'
-  }
-  const seconds = ms / 1000
-  if (seconds < 60) {
-    return `${seconds.toFixed(1)} 秒`
-  }
-  const minutes = Math.floor(seconds / 60)
-  const rest = Math.round(seconds - minutes * 60)
-  return `${minutes} 分 ${rest} 秒`
+/**
+ * 任务用时：原版是**整数秒**（`elapsedSec + ' 秒'`，见 DetailsPanelView.ets:148）。
+ * 这里收的是一个「秒」计数而不是毫秒时间戳 —— 与原版的 workElapsedSec 同口径。
+ */
+export function formatElapsedSec(seconds: number): string {
+  return `${Math.max(0, Math.trunc(seconds))} 秒`
 }
 
 /**
- * 任务统计卡（对齐原版 DetailsPanelView 的四项：任务用时 / 输出速度 / 缓存命中 / 工具轮数）。
- * 还没跑过时（轮数为 0）整张卡不显示 —— 一张全是横杠的卡没有信息量。
- * 速度与命中为「无数据」时显示横杠而不是 0，否则会被误读成「很慢 / 一次都没命中」。
+ * 本轮统计卡（逐条对齐原版 DetailsPanelView.ets:143-157）：
+ * 标题「本轮统计」+ 四行「标签在左、值在右」，卡片 padding 12 / 圆角 12 / 1px 描边。
+ *
+ * 与原版的四点一致性与差异：
+ *   · 任务用时 = 整数秒（原版是 workElapsedSec 这个每秒 +1 的计数）；
+ *   · 输出速度取最后一条 assistant 的 tokenSpeed 并 **Math.round**，无数据显示「—」；
+ *   · 缓存命中同理；工具调用轮数 = **会话内所有 assistant 轮的 toolCalls 之和**
+ *     （原版 detailToolCallTotal 的口径：只看最后一条会恒为 0，因为收尾轮是纯文本）。
+ *   · 原版恒显示这张卡（没数据时值就是「—」），这里也恒显示。
  */
-export function TaskStatsCard({ stats }: { stats: ConversationStatsDto }) {
-  if (stats.rounds <= 0) {
+export function TaskStatsCard({
+  elapsedSec,
+  speed,
+  cacheHit,
+  toolCalls
+}: {
+  elapsedSec: number
+  speed: number
+  cacheHit: number
+  toolCalls: number
+}) {
+  return (
+    <div className="statcard">
+      <div className="statcard__title">本轮统计</div>
+      <StatRow label="任务用时" value={formatElapsedSec(elapsedSec)} />
+      <StatRow label="输出速度" value={speed > 0 ? `${Math.round(speed)} 字符/秒` : '—'} />
+      <StatRow label="缓存命中" value={cacheHit >= 0 ? `${Math.round(cacheHit * 100)}%` : '—'} />
+      <StatRow label="工具调用轮数" value={String(toolCalls)} />
+    </div>
+  )
+}
+
+function StatRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="statrow">
+      <span className="statrow__label">{label}</span>
+      <span className="statrow__value">{value}</span>
+    </div>
+  )
+}
+
+/**
+ * 底部统计行（对齐原版 WorkspaceBar.ets:205-227）：
+ * 会话工作时间 `MM:SS`（≥1 小时给 `HH:MM:SS`，未跑过不显示）、生成速度 `N.N tok/s`、
+ * 缓存命中 `缓存命中 N%`（**只在非流式时**显示）。
+ * 前两项在流式中用次要色、停止后转三级色。
+ */
+export function WorkFooterStats({
+  elapsedSec,
+  speed,
+  cacheHit,
+  streaming
+}: {
+  elapsedSec: number
+  speed: number
+  cacheHit: number
+  streaming: boolean
+}) {
+  if (elapsedSec <= 0 && speed <= 0 && (streaming || cacheHit < 0)) {
     return null
   }
   return (
-    <div className="taskstats">
-      <div className="taskstats__item">
-        <span className="taskstats__label">任务用时</span>
-        <span className="taskstats__value">{formatTaskDuration(stats.elapsedMs)}</span>
-      </div>
-      <div className="taskstats__item">
-        <span className="taskstats__label">输出速度</span>
-        <span className="taskstats__value">
-          {stats.speed > 0 ? `${stats.speed.toFixed(1)} 字/秒` : '—'}
+    <div className="workstats">
+      {elapsedSec > 0 ? (
+        <span className="workstats__item" data-streaming={streaming}>
+          {formatWorkTime(elapsedSec)}
         </span>
-      </div>
-      <div className="taskstats__item">
-        <span className="taskstats__label">缓存命中</span>
-        <span className="taskstats__value">
-          {stats.cacheHit >= 0 ? `${Math.round(stats.cacheHit * 100)}%` : '—'}
+      ) : null}
+      {speed > 0 ? (
+        <span className="workstats__item" data-streaming={streaming}>
+          {`${speed.toFixed(1)} tok/s`}
         </span>
-      </div>
-      <div className="taskstats__item">
-        <span className="taskstats__label">工具轮数</span>
-        <span className="taskstats__value">{stats.rounds}</span>
-      </div>
+      ) : null}
+      {!streaming && cacheHit >= 0 ? (
+        <span className="workstats__item">{`缓存命中 ${Math.round(cacheHit * 100)}%`}</span>
+      ) : null}
     </div>
   )
+}
+
+/** 会话工作时间：MM:SS，超过一小时给 HH:MM:SS（原版 formatWorkTime） */
+export function formatWorkTime(totalSec: number): string {
+  const total = Math.max(0, Math.trunc(totalSec))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const mm = m < 10 ? `0${m}` : String(m)
+  const ss = s < 10 ? `0${s}` : String(s)
+  if (h > 0) {
+    const hh = h < 10 ? `0${h}` : String(h)
+    return `${hh}:${mm}:${ss}`
+  }
+  return `${mm}:${ss}`
 }
 
 /** 当前目标卡（对齐原版 DetailsPanelView 的目标卡）；没有目标时整张卡不显示 */
@@ -203,6 +258,68 @@ export function workspaceFileIcon(path: string, size = 15): React.ReactElement {
   }
 }
 
+/**
+ * 会话工作时间：Agent Loop 形态下每秒 +1，切会话归零。
+ *
+ * 原版把这个计数放在**页面的常驻定时器**里（`ChatPage.ets:227-253`），因为详情面板
+ * 随开随关、计时不能因为关面板而中断。桌面端的面板同样可以收起，所以这里用一个
+ * 基于**会话开始时间**的派生值：只要还在跑，就按「从本轮开始到现在」算秒数；
+ * 跑完则定格在最后一轮的用时上。这样收起再展开也不会丢时间。
+ */
+function useWorkElapsed(activeId: string | null): number {
+  const running = useStore((s) => s.running)
+  const [seconds, setSeconds] = useState(0)
+  const startedAtRef = useRef(0)
+  const frozenRef = useRef(0)
+
+  useEffect(() => {
+    // 切会话：计时归零（原版 lastWorkConvId 变化时 workElapsedSec = 0）
+    startedAtRef.current = 0
+    frozenRef.current = 0
+    setSeconds(0)
+  }, [activeId])
+
+  useEffect(() => {
+    if (running) {
+      if (startedAtRef.current === 0) {
+        startedAtRef.current = Date.now() - frozenRef.current * 1000
+      }
+      const tick = (): void => setSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000))
+      tick()
+      const timer = window.setInterval(tick, 1000)
+      return () => window.clearInterval(timer)
+    }
+    // 停止：定格（原版「任务执行中每秒走字, 停止后定格」）
+    if (startedAtRef.current !== 0) {
+      frozenRef.current = Math.floor((Date.now() - startedAtRef.current) / 1000)
+      setSeconds(frozenRef.current)
+      startedAtRef.current = 0
+    }
+    return undefined
+  }, [running])
+
+  return seconds
+}
+
+/** 取最后一条「有值」的 assistant 指标（原版是倒着找第一条有值的） */
+function lastAssistantValue(
+  messages: WorkspacePanelMessage[],
+  pick: (m: WorkspacePanelMessage) => number
+): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'assistant') {
+      continue
+    }
+    const value = pick(messages[i])
+    if (value > 0 || (value >= 0 && value !== 0)) {
+      return value
+    }
+  }
+  return -1
+}
+
+type WorkspacePanelMessage = ConversationDto['messages'][number]
+
 export function WorkspacePanel() {
   const workspace = useStore((s) => s.workspace)
   const stats = useStore((s) => s.stats)
@@ -218,9 +335,18 @@ export function WorkspacePanel() {
   const pushNotice = useStore((s) => s.pushNotice)
   const preview = useWorkspacePreview(activeId)
 
-  const toolCalls = (active?.messages ?? []).reduce((sum, m) => sum + m.toolCalls.length, 0)
+  // 会话工作时间（原版 ChatPage 的 workTickTimer）：只在 Agent Loop 形态下计时、
+  // 流式期间每秒 +1、切换会话归零。原版把它挂在页面上（面板随开随关，计时不能中断），
+  // 桌面端面板只在展开时挂载，所以这里在「没展开时也继续走」这件事上等价处理：
+  // 计时状态放在组件里，展开面板时从会话开始时间起算即可（见下面 elapsedFrom）。
+  const workElapsedSec = useWorkElapsed(activeId)
+
+  const messages = active?.messages ?? []
+  const toolCalls = messages.reduce((sum, m) => sum + m.toolCalls.length, 0)
+  // 速度与命中取**最后一条有值的** assistant（原版 WorkspaceBar 的 getSpeedText/getCacheHitText）
+  const lastSpeed = lastAssistantValue(messages, (m) => (m.tokenSpeed > 0 ? m.tokenSpeed : 0))
+  const lastCacheHit = lastAssistantValue(messages, (m) => m.cacheHitRate)
   const files = workspace.filter((e) => !e.isDirectory).length
-  const dirs = workspace.length - files
 
   // 原版 WorkspaceBar：任务执行中禁掉上传/导出，避免和正在跑的工具抢工作区
   const uploadDisabled = running
@@ -272,22 +398,41 @@ export function WorkspacePanel() {
         </button>
       </div>
 
-      {workspace.length > 0 ? (
-        <div className="workspace__stats">
-          <span>{`${files} 个文件`}</span>
-          {dirs > 0 ? <span>{`${dirs} 个目录`}</span> : null}
-          <span>{`${toolCalls} 次工具调用`}</span>
-        </div>
-      ) : null}
-
-      {/* 任务统计卡（对齐原版 DetailsPanelView）：任务用时 / 输出速度 / 缓存命中 / 工具轮数。
-          此前桌面端只有上面的文件/目录/工具调用计数，且是**全会话累计**，
-          对应不到原版的「本轮」。这里补的是最近一次任务的真实指标。 */}
-      {stats !== null ? <TaskStatsCard stats={stats} /> : null}
+      {/* 本轮统计卡（对齐原版 DetailsPanelView.ets:143-157）。
+          任务用时用「会话工作秒数」这个每秒 +1 的计数（原版 workElapsedSec 同口径），
+          所以它会**逐秒走字**；速度/命中取最后一条 assistant；
+          工具调用轮数是会话内所有 assistant 轮的调用之和（原版 detailToolCallTotal）。 */}
+      <TaskStatsCard
+        elapsedSec={workElapsedSec}
+        speed={lastSpeed}
+        cacheHit={lastCacheHit}
+        toolCalls={toolCalls}
+      />
 
       {/* 当前目标卡（对齐原版 DetailsPanelView 的目标卡）。
           目标是模型用 create_goal 建的，存在工作区 .goal.json 里。 */}
       {stats !== null ? <TaskGoalCard goal={stats.goal} /> : null}
+
+      {/* 文件卡头（原版是「文件 (N)」+ 上传 / 导出 两个文字按钮） */}
+      <div className="filecard__head">
+        <span className="statcard__title">{`文件 (${files})`}</span>
+        <button
+          className="filecard__action"
+          disabled={uploadDisabled}
+          title={uploadDisabled ? '任务执行中，稍后再上传' : '选择文件加入工作区'}
+          onClick={() => void pickFiles()}
+        >
+          上传
+        </button>
+        <button
+          className="filecard__action"
+          disabled={activeId === null || workspace.length === 0 || running}
+          title="打包导出为 zip"
+          onClick={() => void exportZip()}
+        >
+          导出
+        </button>
+      </div>
 
       <div className="workspace__list">
         {workspace.length === 0 ? (
@@ -362,6 +507,14 @@ export function WorkspacePanel() {
           </button>
         </div>
       ) : null}
+
+      {/* 底部统计行（原版 WorkspaceBar 左下角）：会话工作时间 / tok/s / 缓存命中 */}
+      <WorkFooterStats
+        elapsedSec={workElapsedSec}
+        speed={lastSpeed}
+        cacheHit={lastCacheHit}
+        streaming={running}
+      />
 
       {/* 预览用弹层而不是挤在面板里：工作区只有 300 多像素宽，正文根本读不了 */}
       {preview.overlay}

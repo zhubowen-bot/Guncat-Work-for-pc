@@ -4,7 +4,8 @@ import { useAutoResize } from '../hooks/useAutoResize'
 import { useVoiceInput } from '../speech/useVoiceInput'
 import { useStore } from '../store'
 import { MODE_HINT } from '../conversations'
-import { IconClose, IconFile, IconMic, IconPaperclip, IconSend, IconSteer, IconStop, IconStopCircle } from '../icons'
+import { AttachmentBar } from './AttachmentBar'
+import { IconMic, IconPaperclip, IconRefresh, IconSend, IconSteer, IconStop, IconStopCircle } from '../icons'
 
 interface Props {
   running: boolean
@@ -16,20 +17,12 @@ interface Props {
   onAbort(): void
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`
-  }
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
 export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
   const [text, setText] = useState('')
   // 已选附件。原版输入区就是这样一条预览带：缩略图 + 文件名 + 逐项删除。
-  // 桌面端此前**完全没有附件入口** —— ChatSendRequest.attachmentPaths 一直没人赋值。
+  // 状态改为三态（解析中 / 已就绪 / 解析失败）：pick 立刻返回的是「解析中」，
+  // 真正的解析结果由主进程的 attachment:parsed 事件推进（见下面的订阅）。
+  // 附件仍然只放在这里，不进 store —— 它只在这个组件里被消费。
   const [attachments, setAttachments] = useState<PickedAttachmentDto[]>([])
   const ref = useRef<HTMLTextAreaElement>(null)
   useAutoResize(ref, text)
@@ -51,6 +44,21 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
       element.setSelectionRange(element.value.length, element.value.length)
     }
   }, [pendingDraft, consumeDraft])
+
+  // 订阅主进程的附件解析结果：选完文件返回的是「解析中」，解析是后台逐个做的，
+  // 不订阅这条事件，卡片会永远停在「解析中...」（既发不出去，也没有失败原因）。
+  useEffect(() => {
+    return window.guncat.onEvent((event) => {
+      if (event.type !== 'attachment:parsed') {
+        return
+      }
+      setAttachments((prev) =>
+        prev.map((a) =>
+          a.path === event.path ? { ...a, status: event.status, error: event.error } : a
+        )
+      )
+    })
+  }, [])
 
   const voice = useVoiceInput((spoken) => {
     setText((prev) => (prev.trim() === '' ? spoken : `${prev}${spoken}`))
@@ -78,14 +86,28 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
     }
   }
 
+  /** 还有附件在主进程后台解析时：既不能发，也不能再叠加新文件 */
+  const parsing = attachments.some((a) => a.status === 'parsing')
+
   function submit(): void {
     const value = text.trim()
     if (value === '' && attachments.length === 0) {
       return
     }
+    // 原版 sendMessage 的守卫：文件还在解析时不允许发送（提示语逐字一致）。
+    // 「解析失败」的仍然带上：主进程对它做过兜底（先行解析失败会退回 Base64 内联），
+    // 真正不可用的（文件没了/读不出来）由主进程跳过并给出提示 —— 这里看不出来是哪一种，
+    // 一律丢掉会让用户连一张本来能直传的图片都发不出去。
+    if (parsing) {
+      pushNotice('warn', '文件解析中，请稍候')
+      return
+    }
     // 执行中按回车也要有意义（对齐原版 sendMessage）：工作模式会变成插话，
     // 其他形态由 store 提示「AI 正在回复中，请稍候」。所以这里不再因为 running 直接吞掉输入。
-    onSend(value, attachments.map((a) => a.path))
+    onSend(
+      value,
+      attachments.map((a) => a.path)
+    )
     setText('')
     setAttachments([])
   }
@@ -97,6 +119,11 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
   async function steer(): Promise<void> {
     const value = text.trim()
     if (value === '') {
+      return
+    }
+    // 与发送同一道守卫：解析中不插话（插话会立刻并入下一轮，附件却还没就绪）
+    if (parsing) {
+      pushNotice('warn', '文件解析中，请稍候')
       return
     }
     const accepted = await onSteer(value)
@@ -122,32 +149,10 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
 
   return (
     <div className="composer">
-      {attachments.length > 0 ? (
-        <div className="composer__attachments">
-          {attachments.map((att) => (
-            <span className="attachment" key={att.path} title={att.path}>
-              {att.thumbnail !== '' ? (
-                <img className="attachment__img" src={att.thumbnail} alt={att.name} />
-              ) : (
-                <>
-                  <span className="attachment__tag">
-                    <IconFile size={12} />
-                  </span>
-                  <span className="attachment__name">{att.name}</span>
-                </>
-              )}
-              <span className="attachment__size">{formatSize(att.size)}</span>
-              <button
-                className="attachment__del"
-                title="移除这个附件"
-                onClick={() => setAttachments((prev) => prev.filter((a) => a.path !== att.path))}
-              >
-                <IconClose size={12} />
-              </button>
-            </span>
-          ))}
-        </div>
-      ) : null}
+      <AttachmentBar
+        attachments={attachments}
+        onRemove={(target) => setAttachments((prev) => prev.filter((a) => a.path !== target))}
+      />
 
       <div className="composer__inner">
         <textarea
@@ -164,12 +169,19 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
         {mode === 'chat' ? (
           <button
             type="button"
-            className="composer__clip"
-            title="添加图片或文档（发送给模型直接查看）"
-            disabled={running}
+            className={`composer__clip${parsing ? ' composer__clip--parsing' : ''}`}
+            title={parsing ? '文件解析中，请稍候' : '添加图片或文档（发送给模型直接查看）'}
+            // 解析中不可点（对齐原版 buildUploadButton 的 `!isParsing`）：此时再加一批文件
+            // 只会让「哪张卡对应哪次解析」变得难懂，也让解析队列越排越长。
+            disabled={running || parsing}
             onClick={() => void pickAttachments()}
           >
-            <IconPaperclip size={18} />
+            {/* 解析中：回形针变成旋转的刷新图标 + 品牌浅底（原版是 16ms 转 6° 的旋转） */}
+            {parsing ? (
+              <IconRefresh size={18} className="icon-spin" />
+            ) : (
+              <IconPaperclip size={18} />
+            )}
           </button>
         ) : null}
 

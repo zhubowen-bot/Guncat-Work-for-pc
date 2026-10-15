@@ -4,7 +4,7 @@
 //   助手侧：思考条 → 工具行 → 正文/界面 → 操作行 → 统计行；用户侧：气泡 + 编辑/复制）。
 // 工作 / 交互模式不使用这里的整条气泡，而是由 Timeline 把一个用户请求下的多轮
 // 组装成「任务卡 + 过程 + 最终答复」，这里只提供可复用的助手正文与操作行。
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MessageDto } from '@ipc/contract'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
@@ -69,6 +69,19 @@ export function ThinkingBar({
 }) {
   const [open, setOpen] = useState(false)
   const tail = marqueeText(reasoning)
+  const marqueeRef = useRef<HTMLSpanElement>(null)
+
+  // 跑马灯跟随最新思考内容滚到末端（原版 ChatBubbleView.ets:441-450：每次刷新节拍
+  // 调 scrollTo(xOffset 999999, 150ms EaseOut)）。
+  // 这里用 scrollLeft 置到 scrollWidth，并以 CSS transition 呈现同样的缓动。
+  useEffect(() => {
+    const element = marqueeRef.current
+    if (element === null) {
+      return
+    }
+    element.scrollLeft = element.scrollWidth
+  }, [tail])
+
   return (
     <div className="thinking" data-open={open}>
       <button className="thinking__head" onClick={() => setOpen((v) => !v)}>
@@ -80,7 +93,7 @@ export function ThinkingBar({
         </span>
         {streaming ? <span className="spinner spinner--sm" /> : null}
         {streaming && !open && tail !== '' ? (
-          <span className="thinking__marquee" title={tail}>
+          <span className="thinking__marquee" title={tail} ref={marqueeRef}>
             {tail}
           </span>
         ) : (
@@ -102,12 +115,29 @@ export function marqueeText(raw: string): string {
 }
 
 
-/** 工具调用列表（可折叠；工作/交互模式由 Timeline 决定是否默认展开） */
-export function ToolList({ calls }: { calls: MessageDto['toolCalls'] }) {
+/**
+ * 工具调用列表。
+ * `variant` 决定用哪套行规格（聊天紧凑 / 工作与交互模式更宽松）——
+ * 原版这两个模式是两套独立的 @Builder，参数不同。
+ */
+export function ToolList({
+  calls,
+  variant = 'chat',
+  streaming = false
+}: {
+  calls: MessageDto['toolCalls']
+  variant?: 'chat' | 'loop'
+  streaming?: boolean
+}) {
   return (
     <>
       {calls.map((call) => (
-        <ToolCallRow key={call.id || call.name} call={call} />
+        <ToolCallRow
+          key={call.id || call.name}
+          call={call}
+          variant={variant}
+          streaming={streaming}
+        />
       ))}
     </>
   )
@@ -343,7 +373,7 @@ export function MessageView({
           /* 工具行直接陈列，**不套折叠栏边框卡** —— 原版 ChatBubbleView.buildToolSteps
              就是一组裸行（CLI 式观感）；套一层 .disclosure 会在气泡里多出一个框，
              与「工具行是正文的一部分」这个观感冲突。 */
-          <ToolList calls={message.toolCalls} />
+          <ToolList calls={message.toolCalls} variant="chat" streaming={streaming} />
         ) : null}
         <div className="bubble bubble--ai">
           <AssistantBody message={message} interactive={interactive} />
@@ -352,6 +382,13 @@ export function MessageView({
               流式时给一排还没意义的按钮，既闪又容易误点。 */}
           {!streaming && text.trim() !== '' && showActions ? (
             <MessageActions message={message} text={text} onEditToInput={onEditToInput} />
+          ) : null}
+          {/* 流式光标：气泡底部一条 2×14 的 brand 竖条（原版 ChatBubbleView.ets:656-668，
+              只在「正在流式且已有正文」时出现，左缩进 12） */}
+          {streaming && text !== '' ? (
+            <div className="cursor">
+              <span className="cursor__bar" />
+            </div>
           ) : null}
         </div>
       </div>

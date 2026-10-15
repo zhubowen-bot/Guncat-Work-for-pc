@@ -91,7 +91,7 @@ export interface GuncatApi {
       conversationId: string
     ): Promise<{ names: string[]; imported: number; failed: string[]; canceled: boolean }>
   }
-  /** 聊天模式的附件：选文件（读取与解析在主进程的发送路径上） */
+  /** 聊天模式的附件：选文件（立刻返回 parsing；解析结果经 attachment:parsed 事件回报） */
   attachments: {
     pick(): Promise<PickedAttachmentDto[]>
   }

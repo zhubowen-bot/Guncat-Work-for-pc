@@ -127,12 +127,27 @@ export function Disclosure({
   )
 }
 
-/** 工具调用行：单行摘要 + 点开看结构化卡片（diff / 任务清单），拿不到结构就退回原始 IO */
+/**
+ * 工具调用行：单行摘要 + 点开看结构化卡片（diff / 任务清单），拿不到结构就退回原始 IO。
+ *
+ * 原版有**两种形态**，不是同一套参数：
+ *   · 聊天模式（ChatBubbleView.buildToolSteps）：图标 13、工具名 12px Medium 次要色、
+ *     「·」文字分隔、摘要 11px；
+ *   · 工作/交互模式（WorkTurnView.buildSteps）：图标 14、工具名 13px Normal 主色、
+ *     2×2 圆点分隔、摘要 12px。
+ * 两者的状态文案规则一致（执行中显示三分状态、被打断显示「已中断」）。
+ */
 export function ToolCallRow({
   call,
+  variant = 'chat',
+  streaming = false,
   defaultExpanded = false
 }: {
   call: ToolCallRecordDto
+  /** 'chat' = 聊天模式（紧凑） / 'loop' = 工作与交互模式 */
+  variant?: 'chat' | 'loop'
+  /** 本轮是否还在执行中：决定 `durationMs<0` 的调用是「等待中」还是「已中断」 */
+  streaming?: boolean
   /** 初始展开状态（对应原版的 expandedStepId；渲染验证要能看到卡片内容） */
   defaultExpanded?: boolean
 }) {
@@ -148,22 +163,34 @@ export function ToolCallRow({
   const todos = useTodo ? parseTodoRows(call.result) : []
   // 执行中用转圈代替图标，并且不给耗时与展开箭头（原版以「durationMs 是否为负」为唯一判据）
   const finished = call.durationMs >= 0
-  const failed = status.state === 'error'
-  // 出错时摘要改成**结果的首行**（80 字截断）—— 原版 WorkTurnView.ets:972-978 就是这么做的：
+  const failed = status.state === 'error' && finished
+  // 出错时摘要改成**结果的首行**（80 字截断）—— 原版 WorkTurnView 就是这么做的：
   // 参数摘要这时候没意义，用户要看的是「哪儿错了」。
   const summary = failed ? capText(firstLineOf(call.result), 80) : toolArgsSummary(call.argsJson)
+  const loop = variant === 'loop'
+  // 三分状态：模型还在生成参数 / 已生成但没轮到 / 已真正开始执行。
+  // 三个字段都由内核维护（ToolCallRecord.preparing / started），这里只做展示。
+  const preparing = call.preparing === true
+  const started = call.started === true
+  // 「已中断」的判据逐字对齐原版：`durationMs < 0` 且它**已经不在执行中**
+  // （本轮已结束、也没有 preparing/started 标记）—— 那就是被停止时遗留下来的空结果。
+  const interrupted = !finished && !streaming && !preparing && !started
 
   return (
-    <div className="tool" data-state={status.state}>
+    <div className="tool" data-state={status.state} data-variant={variant}>
       <button className="tool__head" onClick={() => setOpen((v) => !v)}>
-        <span className="tool__icon">
-          {finished ? <IconForKind kind={toolIconKind(call.name)} size={13} /> : <span className="spinner" />}
+        <span className="tool__icon" data-interrupted={interrupted}>
+          {finished || interrupted ? (
+            <IconForKind kind={toolIconKind(call.name)} size={loop ? 14 : 13} />
+          ) : (
+            <span className="spinner" />
+          )}
         </span>
         <span className="tool__name">{toolDisplayName(call.name)}</span>
-        {/* 原版这里是「·」分隔符 + 参数摘要；摘要可能为空，那时连分隔符一起省掉 */}
+        {/* 分隔符：工作/交互模式是 2×2 圆点，聊天模式是「·」文字（原版两处不同） */}
         {summary !== '' ? (
           <>
-            <span className="tool__dot">·</span>
+            {loop ? <span className="tool__sep" /> : <span className="tool__dot">·</span>}
             <span className="tool__args">{summary}</span>
           </>
         ) : null}
@@ -178,19 +205,24 @@ export function ToolCallRow({
             {todos.filter((t) => t.status === 'completed').length}/{todos.length}
           </span>
         ) : null}
-        {/* 右端：错误显示「失败」，否则显示耗时；执行中两者都不显示 */}
-        {status.state === 'error' ? (
+        {/* 右端状态（原版 WorkTurnView.ets:980-996 的四分支） */}
+        {!finished && !interrupted ? (
+          <span className="tool__status" data-state="running">
+            {started ? '执行中…' : preparing ? '生成调用中…' : '等待中…'}
+          </span>
+        ) : !finished ? (
+          <span className="tool__status">已中断</span>
+        ) : failed ? (
           <span className="tool__status" data-state="error">
             失败
           </span>
-        ) : finished ? (
+        ) : (
           <span className="tool__duration">{formatDuration(call.durationMs)}</span>
-        ) : null}
-        {finished ? (
-          <span className="tool__caret" data-open={open}>
-            <IconChevronDown size={12} />
-          </span>
-        ) : null}
+        )}
+        {/* 展开箭头：原版**始终显示**（与是否执行中无关），展开时朝上 */}
+        <span className="tool__caret" data-open={open}>
+          <IconChevronDown size={10} />
+        </span>
       </button>
       {open ? (
         <div className="tool__body">

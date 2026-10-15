@@ -14,6 +14,8 @@
   --text: #0f1115;
   --text-muted: #61666b;
   --text-faint: #81858c;
+  /* 四级文字色（原版 text_quaternary）：用于工具行的 2×2 分隔点这类极轻的装饰 */
+  --text-quaternary: #adb2b8;
   --accent: #4176e6;
   --accent-soft: #e4edfd;
   --ai-msg: #edf3fe;
@@ -21,6 +23,9 @@
   --danger: #ec1313;
   --warn: #b6791f;
   --ok: #22c55e;
+  /* 解析失败的附件卡底色：原版 ChatPage 的 #FBE5E5（浅红）。
+     暗色主题下这个底色太亮，改由下面那条 @media 覆盖。 */
+  --attachment-error-bg: #fbe5e5;
   --code-bg: #f9fafb;
   /* diff 卡片与代码块要用的令牌：取自原版 color.json 的 diff_add / diff_del / code_text */
   --diff-add: #22c55e;
@@ -45,6 +50,7 @@
     --text: #f9fafb;
     --text-muted: #cfd3d6;
     --text-faint: #adb2b8;
+    --text-quaternary: #81858c;
     --accent: #5686fe;
     --accent-soft: #34415b;
     --ai-msg: #2c2c2e;
@@ -52,6 +58,9 @@
     --danger: #f25a5a;
     --warn: #d9a441;
     --ok: #22c55e;
+    /* 暗色下的「解析失败」卡底色：#FBE5E5 会把整条预览带照成白块，
+       换成同色系压暗的一档（原版没有暗色主题，这是桌面端必须自己定的那一步）。 */
+    --attachment-error-bg: #3a2323;
     --code-bg: #1b1b1c;
     --diff-add: #4ed17e;
     --diff-del: #f25a5a;
@@ -1687,7 +1696,33 @@ select {
   text-overflow: ellipsis;
 }
 
-/* 工具行右侧的「·」分隔符（原版 Row 里的 Text('·')） */
+/* 工作/交互模式的工具行：名 13px 主色、摘要 12px、图标 14、2×2 圆点分隔
+   （原版 WorkTurnView.buildSteps 与聊天模式不是同一套参数） */
+.tool[data-variant='loop'] .tool__name {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.tool[data-variant='loop'] .tool__args {
+  font-size: 12px;
+}
+
+/* 分隔点：2×2 圆点（dsh sep），不是「·」字符 */
+.tool__sep {
+  flex: none;
+  width: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text-quaternary);
+  margin: 0 2px;
+}
+
+.tool__icon[data-interrupted='true'] {
+  color: var(--text-faint);
+}
+
+/* 工具行右侧的「·」分隔符（聊天模式；原版 Row 里的 Text('·')） */
 .tool__dot {
   flex: none;
   color: var(--text-faint);
@@ -1926,9 +1961,37 @@ select {
   font-size: 11px;
   color: var(--text-faint);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* 跑马灯：内容超出时横向滚动，JS 每次节拍把 scrollLeft 顶到末端。
+     transition 用来复现原版 scrollTo 的 150ms EaseOut。 */
+  overflow-x: auto;
+  overflow-y: hidden;
   text-align: left;
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+  transition: scroll-left 150ms ease-out;
+}
+
+/* 原版这一条是隐藏滚动条的（Scroll 只用来做跟随） */
+.thinking__marquee::-webkit-scrollbar {
+  display: none;
+}
+
+/* ===== 流式光标（原版 ChatBubbleView.ets:656-668） =====
+   气泡底部一条 2×14 的 brand 竖条、圆角 1，左缩进 12、下边距 6。 */
+.cursor {
+  display: flex;
+  width: 100%;
+  padding-left: 12px;
+  margin-bottom: 6px;
+}
+
+.cursor__bar {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  background: var(--accent);
+  animation: cursor-blink 1s steps(2, start) infinite;
 }
 
 .thinking__gap {
@@ -2130,6 +2193,42 @@ select {
   border: 1px solid var(--border);
 }
 
+/* 附件卡片的三种解析状态（对齐原版 ChatPage.ets:958-1042）：
+   解析中是次要色、已就绪是成功色、解析失败用 danger 色并整卡淡红底。
+   底色用原版的 #FBE5E5（暗色主题下由 --attachment-error-bg 接管，见变量表）。 */
+.attachment__status {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.attachment--error {
+  background: var(--attachment-error-bg);
+  border-color: var(--danger);
+}
+
+.attachment--error .attachment__status {
+  color: var(--danger);
+}
+
+.attachment--ready .attachment__status {
+  color: var(--ok);
+}
+
+/* 附件按钮的解析中态：品牌浅底（原版 brand_light）+ 图标持续旋转 */
+.composer__clip--parsing,
+.composer__clip--parsing:disabled {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  opacity: 1;
+}
+
+/* SVG 图标自身的旋转：`.spinner` 是边框画出来的圆环，套不到图标上 */
+.icon-spin {
+  animation: spin 0.8s linear infinite;
+}
+
 .attachment__size {
   flex: none;
   font-size: 10px;
@@ -2251,33 +2350,83 @@ select {
   border-bottom: 1px solid var(--divider);
 }
 
-/* ===== 任务统计卡 / 目标卡（对齐原版 DetailsPanelView） ===== */
-.taskstats {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--divider);
-}
-
-.taskstats__item {
+/* ===== 本轮统计卡 / 目标卡 / 文件卡头（对齐原版 DetailsPanelView） =====
+   卡片规格：padding 12 / 圆角 12 / 1px divider 描边；标题 11px letterSpacing 1。
+   四行是「标签在左、值在右」，不是一格一格的方块 —— 原版 buildStatRow 就是一行两段。 */
+.statcard {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-sunken);
+  gap: 6px;
+  padding: 12px;
+  margin: 10px 12px 0;
+  border: 1px solid var(--divider);
+  border-radius: 12px;
 }
 
-.taskstats__label {
-  font-size: 10px;
+.statcard__title {
+  font-size: 11px;
+  letter-spacing: 1px;
   color: var(--text-faint);
 }
 
-.taskstats__value {
-  font-size: 13px;
-  font-weight: 600;
+.statrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.statrow__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.statrow__value {
+  font-size: 12px;
   color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 文件卡头：「文件 (N)」+ 上传 / 导出（原版是 11px 品牌色文字按钮） */
+.filecard__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px 6px;
+}
+
+.filecard__head .statcard__title {
+  flex: 1;
+}
+
+.filecard__action {
+  font-size: 11px;
+  color: var(--accent);
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+
+.filecard__action:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.filecard__action:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+/* 底部统计行（原版 WorkspaceBar 左下角）：会话工作时间 + tok/s + 缓存命中 */
+.workstats {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-faint);
+  border-top: 1px solid var(--divider);
+}
+
+.workstats__item[data-streaming='true'] {
+  color: var(--text-muted);
 }
 
 .taskgoal {

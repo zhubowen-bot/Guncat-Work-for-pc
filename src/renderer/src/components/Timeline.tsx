@@ -1,4 +1,4 @@
-// 时间线：按形态决定呈现方式。
+﻿// 时间线：按形态决定呈现方式。
 //
 //   聊天模式  → 逐条气泡（MessageView）。
 //   工作模式  → **一个用户请求 = 一个回合**，回合内每一轮 assistant 按发生顺序**直接陈列**：
@@ -189,7 +189,7 @@ export function WorkTurn({
             {/* 工具行排在正文之后 —— 与发生顺序一致（原版 build() 里 buildSteps 在正文之后） */}
             {round.toolCalls.length > 0 ? (
               <div className="work-round__tools">
-                <ToolList calls={round.toolCalls} />
+                <ToolList calls={round.toolCalls} variant="loop" streaming={streaming} />
               </div>
             ) : null}
 
@@ -320,7 +320,7 @@ export function GroupedTurn({
               {round.reasoning.trim() !== '' ? (
                 <ThinkingBar reasoning={round.reasoning} streaming={false} workMode />
               ) : null}
-              {round.toolCalls.length > 0 ? <ToolList calls={round.toolCalls} /> : null}
+              {round.toolCalls.length > 0 ? <ToolList calls={round.toolCalls} variant="loop" streaming={streaming} /> : null}
               {(round.displayContent !== '' ? round.displayContent : round.content).trim() !== '' ? (
                 <div className="process-round__text">
                   {round.displayContent !== '' ? round.displayContent : round.content}
@@ -339,7 +339,7 @@ export function GroupedTurn({
             />
           ) : null}
           {final !== null && final.toolCalls.length > 0 ? (
-            <ToolList calls={final.toolCalls} />
+            <ToolList calls={final.toolCalls} variant="loop" streaming={running} />
           ) : null}
         </Disclosure>
       ) : null}

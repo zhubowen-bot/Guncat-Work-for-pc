@@ -129,7 +129,7 @@ const api = {
       ipcRenderer.invoke(INVOKE.intakePickFiles, conversationId)
   },
 
-  /** 聊天模式的附件：选文件（读取与解析在主进程的发送路径上） */
+  /** 聊天模式的附件：选文件（返回时状态一律是 parsing，解析结果由 attachment:parsed 事件回报） */
   attachments: {
     pick: (): Promise<import('../ipc/contract').PickedAttachmentDto[]> =>
       ipcRenderer.invoke(INVOKE.attachmentsPick)

@@ -13,6 +13,7 @@ import type {
   ConversationSummaryDto,
   GuncatEvent,
   MultimodalConfigDto,
+  PickedAttachmentDto,
   RendererStage,
   WorkRunRequest
 } from '../ipc/contract'
@@ -270,7 +271,11 @@ export function registerIpcHandlers(session: SessionManager): void {
   // ===== 附件（聊天模式的图片/文档直传） =====
   //
   // 这里只负责「选哪些文件」并给出预览所需的信息；真正的读取与解析放在
-  // SessionManager.makeAttachments —— 多模态配置、API Key 与 Files API 上传都在主进程那条路上。
+  // SessionManager —— 多模态配置、API Key 与 Files API 上传都在主进程那条路上。
+  //
+  // 口径（对齐原版 enqueueFiles）：**选完就把卡片给渲染层**，解析在后台逐个进行。
+  // 早先这里只返回文件信息、把解析整段留到发送时，用户看不到「解析中/已就绪/解析失败」，
+  // 也就无法在发送前知道这份文件到底能不能用。
   ipcMain.handle(INVOKE.attachmentsPick, async () => {
     const window = getMainWindow()
     const result = await dialog.showOpenDialog(window ?? undefined!, {
@@ -292,14 +297,20 @@ export function registerIpcHandlers(session: SessionManager): void {
     if (result.canceled) {
       return []
     }
-    return await Promise.all(
+    const picked: PickedAttachmentDto[] = await Promise.all(
       result.filePaths.map(async (filePath) => ({
         path: filePath,
         name: path.basename(filePath),
         size: fs.existsSync(filePath) ? fs.statSync(filePath).size : 0,
-        thumbnail: await makeAttachmentThumbnail(filePath)
+        thumbnail: await makeAttachmentThumbnail(filePath),
+        status: 'parsing' as const
       }))
     )
+    // 刻意**不 await** 解析：一 await 就成了「等解析完才返回」——
+    // 多模态解析要几秒，卡片会一直不出现（正是本次要修掉的行为）。
+    // 每个文件解析完，主进程会推 attachment:parsed 事件。
+    void session.preparseAttachments(picked.map((a) => a.path))
+    return picked
   })
 
   // ===== 插话（工作模式执行中补充要求） =====

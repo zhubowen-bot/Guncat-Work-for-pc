@@ -598,6 +598,54 @@ check(
     composerChatRunning.includes('composer__send--stop')
 )
 
+// --- 附件预览条的三种解析状态（对齐原版 ChatPage.ets:958-1042） ---
+//
+// 事故形状：附件此前只显示缩略图/文件名/大小，用户看不出这份文件到底解析完了没有。
+// 原版的口径是「选完立刻出现卡片（解析中...）→ 解析完变已就绪 / 解析失败」，
+// 且解析中不给删除钮、失败整卡淡红底并把原因挂 tooltip。
+console.log('\n22b. 附件预览条（解析三态）')
+const barParsing = mod.renderAttachmentBar('parsing')
+const barReady = mod.renderAttachmentBar('ready')
+const barError = mod.renderAttachmentBar('error')
+check('解析中：文案为「解析中...」', barParsing.includes('解析中...'))
+check(
+  '解析中：卡片带 attachment--parsing 类名（次要色由它给）',
+  barParsing.includes('attachment--parsing') && barParsing.includes('data-status="parsing"')
+)
+check(
+  '解析中：不显示删除钮（此时删掉会让后台解析结果无处落地）',
+  !barParsing.includes('attachment__del')
+)
+check(
+  '解析中：还没有缩略图，退回显示文件名',
+  barParsing.includes('attachment__name') && barParsing.includes('季度报表.png')
+)
+check('已就绪：文案为「已就绪」', barReady.includes('已就绪'))
+check(
+  '已就绪：卡片带 attachment--ready 类名（成功色由它给）',
+  barReady.includes('attachment--ready') && barReady.includes('data-status="ready"')
+)
+check(
+  '已就绪：显示缩略图与删除钮（与解析中的两条差异都在）',
+  barReady.includes('attachment__img') && barReady.includes('attachment__del')
+)
+check('解析失败：文案为「解析失败」', barError.includes('解析失败'))
+check(
+  '解析失败：卡片带 attachment--error 类名（整卡淡红底由它给）',
+  barError.includes('attachment--error') && barError.includes('data-status="error"')
+)
+check(
+  '解析失败：失败原因挂在 tooltip 上（红底只说「坏了」，原因要查得到）',
+  barError.includes('多模态接口返回 401 Unauthorized')
+)
+check('解析失败：仍然可以删掉这张卡片', barError.includes('attachment__del'))
+check(
+  '三种状态的类名互不相同（不会把已就绪画成失败色）',
+  new Set(['attachment--parsing', 'attachment--ready', 'attachment--error']).size === 3 &&
+    !barReady.includes('attachment--error') &&
+    !barError.includes('attachment--ready')
+)
+
 // --- 侧栏：引擎分组 / 工作区入口（审计 P2-14、P2-15） ---
 console.log('\n23. 侧栏（引擎分组 / 工作区入口）')
 const sidebarHtml = mod.renderSidebar()
@@ -693,12 +741,29 @@ check(
 )
 const runningRow = mod.renderToolRowRunning()
 check(
-  '执行中的工具行：图标位是转圈、不给耗时、不给展开箭头',
+  '执行中的工具行：图标位是转圈、不给耗时，但**展开箭头始终在**（原版是无条件渲染的）',
   runningRow.includes('spinner') &&
     !runningRow.includes('tool__duration') &&
-    !runningRow.includes('tool__caret')
+    runningRow.includes('tool__caret')
 )
 check('执行中的工具行仍然显示参数摘要', runningRow.includes('docs/a.md'))
+check('已开始执行的显示「执行中…」（原版 stepStatusLabel）', runningRow.includes('执行中…'))
+check('已生成参数但还没轮到的显示「等待中…」', mod.renderToolRowQueued().includes('等待中…'))
+check(
+  '本轮已结束但耗时仍为负 → 「已中断」（停止时遗留的空结果）',
+  // 已中断的判据是 durationMs<0 且本轮已结束、也没有 preparing/started 标记 ——
+  // 因此这里必须把 started 也置回 false，否则渲染成的是「执行中…」。
+  mod.renderToolRowRunning('loop', false, false).includes('已中断') &&
+    !mod.renderToolRowRunning('loop', false, false).includes('spinner')
+)
+check(
+  '工作/交互模式的工具行是另一套规格（2×2 圆点分隔 + data-variant=loop）',
+  runningRow.includes('data-variant="loop"') && runningRow.includes('tool__sep')
+)
+check(
+  '聊天模式仍是「·」文字分隔（两套规格不混用）',
+  mod.renderToolRow('read_file', '{"path":"a.md"}', '内容').includes('tool__dot')
+)
 check(
   '展开时的截断对齐原版 capText（参数 600 / 结果 800）',
   (() => {
@@ -718,16 +783,17 @@ check(
 console.log('\n25. 任务统计卡 / 目标卡')
 const statsHtml = mod.renderTaskStats()
 check(
-  '统计卡四项齐全（任务用时 / 输出速度 / 缓存命中 / 工具轮数）',
-  statsHtml.includes('任务用时') &&
+  '统计卡四项齐全（任务用时 / 输出速度 / 缓存命中 / 工具调用轮数）',
+  statsHtml.includes('本轮统计') &&
+    statsHtml.includes('任务用时') &&
     statsHtml.includes('输出速度') &&
     statsHtml.includes('缓存命中') &&
-    statsHtml.includes('工具轮数')
+    statsHtml.includes('工具调用轮数')
 )
-check('用时按分秒显示', statsHtml.includes('1 分 23 秒'), '83400ms')
-check('速度按字/秒显示', statsHtml.includes('42.4 字/秒'))
-check('缓存命中按百分比显示', statsHtml.includes('81%'))
-check('工具轮数显示', statsHtml.includes('>7<'))
+check('任务用时是整数秒（原版 elapsedSec + 秒）', statsHtml.includes('83 秒'))
+check('输出速度取整 + 单位「字符/秒」', statsHtml.includes('42 字符/秒'))
+check('缓存命中按百分比取整', statsHtml.includes('81%'))
+check('工具调用轮数显示', statsHtml.includes('>7<'))
 check(
   '目标卡显示目标文本、状态与轮次进度',
   statsHtml.includes('把季度报表补齐并导出') &&
@@ -736,14 +802,16 @@ check(
 )
 const statsEmpty = mod.renderTaskStatsEmpty()
 check(
-  '还没跑过 / 没有目标时两张卡都不渲染（不留一张全是横杠的空卡）',
-  !statsEmpty.includes('taskstats') && !statsEmpty.includes('taskgoal'),
-  statsEmpty.length + ' 字节'
+  '没数据时统计卡仍在、值显示「—」；目标卡不渲染',
+  statsEmpty.includes('statcard') && statsEmpty.includes('—') && !statsEmpty.includes('taskgoal')
 )
 const durations = mod.renderDurations()
 check(
-  '任务用时的量级分档正确（无数据 / 秒 / 分秒）',
-  durations[0] === '—' && durations[1] === '8.4 秒' && durations[2] === '1 分 23 秒' && durations[3] === '2 分 5 秒',
+  '用时格式：整数秒 / MM:SS / HH:MM:SS',
+  durations[0] === '0 秒' &&
+    durations[1] === '83 秒' &&
+    durations[2] === '01:23' &&
+    durations[3] === '01:02:03',
   durations.join(' | ')
 )
 
