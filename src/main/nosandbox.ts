@@ -1,7 +1,7 @@
 // 「启动第一刻就带上 --no-sandbox」的判定与参数拼装。
 //
 // 为什么这件事必须发生在最前面，而且必须是**真实命令行参数**：
-//   根因已由崩溃转储确证（见 docs/ROOT-CAUSE-REPORT.md）—— 沙箱开启时 Chromium 建不出
+//   根因已由崩溃转储确证（见 docs/STARTUP-TROUBLESHOOTING.md）—— 沙箱开启时 Chromium 建不出
 //   GPU 子进程（`GPU process launch failed: error_code=18`），fallback 耗尽后在主进程主线程
 //   执行 `LOG(FATAL) << "GPU process isn't usable. Goodbye."`，随即 __debugbreak 自杀
 //   （STATUS_BREAKPOINT，退出码 -2147483645）。崩溃点在 content/browser/gpu/ 里，

@@ -3,7 +3,7 @@
 // 抽成纯函数是为了能被无头验证覆盖：这段逻辑一旦拼错，自动降级会静默失效 ——
 // 用户看到的仍然是白屏，而且没有任何报错指向参数问题。
 //
-// 根因已由崩溃转储确证（docs/ROOT-CAUSE-REPORT.md）：
+// 根因已由崩溃转储确证（docs/STARTUP-TROUBLESHOOTING.md §3-§4）：
 //   沙箱开启时 Chromium 建不出 GPU 子进程，fallback 耗尽后主进程执行
 //   `LOG(FATAL) << "GPU process isn't usable. Goodbye."` 自杀（STATUS_BREAKPOINT）。
 //   14 组对照实验里，**只有 --no-sandbox 能改变结果**：--disable-gpu、

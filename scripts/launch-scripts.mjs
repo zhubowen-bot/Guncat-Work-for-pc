@@ -66,8 +66,8 @@ export function writeAsciiFile(file, text) {
 /**
  * 兼容模式启动器（不提权）。
  *
- * 事故：默认启动（渲染进程带沙箱）在这台机器上起不来 —— 但根因（见
- * docs/ROOT-CAUSE-REPORT.md）不是渲染进程，而是沙箱下 Chromium 建不出 GPU 子进程，
+ * 事故：默认启动（渲染进程带沙箱）在部分 Windows 机器上起不来 —— 但根因（见
+ * docs/STARTUP-TROUBLESHOOTING.md）不是渲染进程，而是沙箱下 Chromium 建不出 GPU 子进程，
  * fallback 耗尽后主进程执行 LOG(FATAL)「GPU process isn't usable. Goodbye.」自杀
  * （STATUS_BREAKPOINT / 退出码 -2147483645）。
  *
@@ -89,8 +89,8 @@ export function buildRunCompatCmd(appName, switches) {
 /**
  * 自提权启动器 —— 最后的逃生口，不是默认路径。
  *
- * 调查结论（§2.9）：原先「提权才好」的判断是**变量未分离**造成的 —— 这个入口同时做了
- * 提权**和**加参数，而真正起作用的是参数（--no-sandbox）。提权的作用至今未获证实，
+ * 调查结论（docs/STARTUP-TROUBLESHOOTING.md §5）：原先「提权才好」的判断是**变量未分离**
+ * 造成的 —— 这个入口同时做了提权**和**加参数，而真正起作用的是参数（--no-sandbox）。提权的作用至今未获证实，
  * 因此它只作为「--no-sandbox 也不管用」时的最后手段保留。
  *
  * 实现要点：

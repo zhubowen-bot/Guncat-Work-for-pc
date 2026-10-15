@@ -228,7 +228,7 @@ if (fs.existsSync(exeTarget) && fs.existsSync(icoPath)) {
 // 打包脚本是 node 直接跑的 .mjs，引 TS 需要额外的编译步骤；两者的同步由
 // startup-check.mjs 的断言保证（它会拿生成出来的脚本文本去比对 COMPAT_SWITCHES）。
 //
-// 只剩 --no-sandbox 一条：14 组对照实验证明只有它能改变结果（见 docs/ROOT-CAUSE-REPORT.md）。
+// 只剩 --no-sandbox 一条：14 组对照实验证明只有它能改变结果（见 docs/STARTUP-TROUBLESHOOTING.md）。
 // 其余开关（--disable-gpu 之类）对这次崩溃毫无帮助，却会把界面降成软件渲染。
 const COMPAT_SWITCHES = ['--no-sandbox']
 
