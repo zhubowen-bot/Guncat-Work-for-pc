@@ -35,7 +35,33 @@ export interface AgentGlyphProps {
   className?: string
   /** 圆角头像（真实智能体的 PNG 需要裁圆；形态图标不需要） */
   rounded?: boolean
+  /** 按**墨迹占比**归一化视觉大小（空态大图标用；侧栏小图标不需要） */
+  inkNormalize?: boolean
   title?: string
+}
+
+/**
+ * 每个随包图标的「墨迹占比」= 非透明像素的包围盒边长 / 画布边长。
+ *
+ * 为什么需要它：各智能体的图标不是同一批素材 —— 有的是 1024×1024 满幅图（占比 1.0），
+ * 有的是 96×96 且自带透明留白（轻简/效率 只有 0.80）。同一个盒子下看着就是「有的大有的小」，
+ * 用户提了两轮。这里的数字是用 @napi-rs/canvas 逐像素量出来的（资源随包固定，不会漂），
+ * 渲染时按 1/占比 放大，让**可见图形**一样大。新增图标量不到就默认 1.0。
+ */
+const ICON_INK: Record<string, number> = {
+  'guncat-3.0-flash': 0.917,
+  'guncat-3.0-mini': 0.802,
+  'guncat-3.0-pro': 0.938,
+  'guncat-3.1-flash': 0.802
+}
+
+/** 描边 SVG 图标的墨迹占比：24 的 viewBox 里图形大致占 20（工作/交互两枚都是这个量级） */
+const VIRTUAL_ICON_INK = 0.83
+
+/** 从 `icons/xxx.png` 这种路径里取图标名（去掉目录与扩展名） */
+function iconKey(icon: string): string {
+  const name = icon.slice(icon.lastIndexOf('/') + 1)
+  return name.endsWith('.png') ? name.slice(0, -4) : name
 }
 
 /**
@@ -47,6 +73,7 @@ export function AgentGlyph({
   size = 20,
   className,
   rounded = true,
+  inkNormalize = false,
   title
 }: AgentGlyphProps): React.ReactElement {
   const [broken, setBroken] = useState(false)
@@ -54,9 +81,12 @@ export function AgentGlyph({
   if (agent !== undefined && agent !== null) {
     const Virtual = VIRTUAL_ICON[agent.id]
     if (Virtual !== undefined) {
-      return <Virtual size={size} className={className} />
+      // 描边图标自带 viewBox 留白：按占比放大，视觉上才与满幅头像一样大
+      const glyphSize = inkNormalize ? Math.round(size / VIRTUAL_ICON_INK) : size
+      return <Virtual size={glyphSize} className={className} />
     }
     if (agent.icon !== '' && !broken) {
+      const ink = inkNormalize ? (ICON_INK[iconKey(agent.icon)] ?? 1) : 1
       return (
         <img
           className={className !== undefined ? className : rounded ? 'agent-avatar agent-avatar--img' : undefined}
@@ -65,7 +95,14 @@ export function AgentGlyph({
           title={title ?? agent.name}
           width={size}
           height={size}
-          style={rounded ? { borderRadius: size / 2 } : undefined}
+          // transform 不参与布局：盒子仍是 size（布局统一），只有图形按墨迹占比放大
+          style={
+            ink < 1
+              ? { borderRadius: size / 2, transform: `scale(${(1 / ink).toFixed(3)})` }
+              : rounded
+                ? { borderRadius: size / 2 }
+                : undefined
+          }
           onError={() => setBroken(true)}
         />
       )

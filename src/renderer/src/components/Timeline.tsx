@@ -320,15 +320,16 @@ export function GroupedTurn({
     return null
   }
 
-  // 本回合是否出现过活动（原版 WorkTurnView.hasActivity 588-591）：
-  // 前面几轮有消息、本轮有工具、**本轮有思考内容**、或流式中且期待思考，四者任一即可。
-  // 此前桌面端漏了后两条 —— 一个只思考没调工具的回合会连活动栏都不出现，
-  // 思考内容被整个藏起来。
-  const hasActivity =
-    prior.length > 0 ||
-    stats.toolCalls > 0 ||
-    (final !== null && final.reasoning.trim() !== '') ||
-    (streaming && thinkingExpected)
+  // 本回合是否有**折叠栏里真的装得下**的东西：工具行、或历史轮的正文。
+  // 刻意不再把「有思考」算进来 —— 思考已经归到外面的思考栏（汇总显示），
+  // 折叠栏里没有内容却还挂一条「已完成 · 思考」，展开是空的，纯粹是个摆设
+  // （用户原话：「思考这些应该放在思考栏里面啊，要不然拿来摆设啊」）。
+  const priorHasContent = prior.some(
+    (round) =>
+      round.toolCalls.length > 0 ||
+      (round.displayContent !== '' ? round.displayContent : round.content).trim() !== ''
+  )
+  const hasActivity = priorHasContent || (final?.toolCalls.length ?? 0) > 0
 
   // 被手动停止的轮次：主进程在收尾时往正文末尾追加了这句标注（原版 appendTurnNote）。
   // 折叠栏据此把「已完成」改成「已停止」—— 明明被打断却写着完成是误导。
@@ -336,13 +337,10 @@ export function GroupedTurn({
 
   // 折叠态摘要（原版 activitySummary 636-654）：`思考 ×N + M 个工具 · 12.4s`
   // 思考与工具之间是「 + 」，耗时前面是「 · 」—— 原版就是这么接的。
-  const thinkingRounds =
-    prior.filter((r) => r.reasoning.trim() !== '').length +
-    (final !== null && final.reasoning.trim() !== '' ? 1 : 0)
+  // 折叠态摘要：`M 个工具 · 12.4s`。
+  // 思考轮数**不在这里**了 —— 它归思考栏（见下面 ThinkingBar 的 rounds），
+  // 否则折叠栏标题上写着「思考」而展开是空的。
   const summaryParts: string[] = []
-  if (thinkingRounds > 0) {
-    summaryParts.push(thinkingRounds > 1 ? `思考 ×${thinkingRounds}` : '思考')
-  }
   if (stats.toolCalls > 0) {
     summaryParts.push(`${stats.toolCalls} 个工具`)
   }
@@ -376,11 +374,14 @@ export function GroupedTurn({
     <section className="turn">
       {turn.user !== null ? <TaskCard message={turn.user} onEditToInput={onEditToInput} /> : null}
 
-      {/* 思考栏放在折叠栏**外面**：它必须常显（折叠栏里只留工具行与历史轮正文） */}
+      {/* 思考栏放在折叠栏**外面**：它必须常显（折叠栏里只留工具行与历史轮正文）。
+          内容是**本回合所有轮思考的汇总** —— 用户描述的原版形态就是「在思考栏里汇总前面所有的」。
+          rounds 用于标题上的「思考 ×N」，替代原先挂在活动折叠栏标题上的那一段。 */}
       {aggregatedReasoning !== '' || (streaming && thinkingExpected) ? (
         <ThinkingBar
           reasoning={aggregatedReasoning}
           streaming={streaming && !bodyStarted}
+          rounds={turn.rounds.filter((round) => round.reasoning.trim() !== '').length}
           workMode
         />
       ) : null}

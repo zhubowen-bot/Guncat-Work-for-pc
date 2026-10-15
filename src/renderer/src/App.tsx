@@ -141,10 +141,6 @@ export default function App() {
   })()
 
   const engine = agentById(engines, activeAgentId)
-  // 空态图标的尺寸要按**视觉面积**对齐，而不是按盒子对齐：
-  // 真实智能体是满幅 PNG 头像（ink ≈ size），工作/交互两个描边 SVG 的 viewBox 自带留白
-  // （ink ≈ size × 20/24）。同一个 size 下 SVG 会明显小一圈，所以给它补上那点差值。
-  const heroSize = isVirtualAgentId(engine?.id ?? '') ? 56 : 48
 
   useEffect(() => {
     void init()
@@ -362,7 +358,14 @@ export default function App() {
                   {/* 新会话空态图标 = **当前智能体自己的标识**（侧栏引擎区同一枚）：
                       交互模式是画框加星火、工作模式是机器人、聊天智能体是它的原图。
                       电脑版没有原版的启动飞入动画，这里就没有必要再借用应用头像。 */}
-                  <AgentGlyph agent={engine} size={heroSize} title={engine?.name ?? 'Guncat Work'} />
+                  {/* 空态是唯一需要「视觉大小归一」的地方（侧栏图标太小看不出来）：
+                      各智能体图标的墨迹占比不同，靠 inkNormalize 把可见图形拉齐。 */}
+                  <AgentGlyph
+                    agent={engine}
+                    size={48}
+                    inkNormalize
+                    title={engine?.name ?? 'Guncat Work'}
+                  />
                 </div>
                 <h1>{engine?.name ?? 'Guncat Work'}</h1>
                 <p>

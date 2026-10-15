@@ -947,16 +947,14 @@ select {
   color: var(--text-muted);
 }
 
-/* 空态标识：**不要圆形底、不要阴影、不要色块**，直接把智能体自己的图标放上去
-   （用户明确要求：去掉那个蓝色圆形背景，只是放图标）。
-   尺寸也不再固定成 96 的方盒 —— 描边 SVG（工作/交互模式）的 viewBox 自带留白，
-   放在同一个盒子里会显得比满幅的 PNG 头像小一圈，所以推荐尺寸在组件里按类型给。 */
+/* 空态标识：**不要圆形底、不要阴影、不要色块**，直接把智能体自己的图标放上去，
+   并且保持品牌蓝（描边图标跟随 currentColor）。 */
 .empty__hero {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 14px;
-  color: var(--text);
+  color: var(--accent);
 }
 
 /* 空态里的图标统一按「视觉面积相同」处理：PNG 头像满幅，描边 SVG 放大一点点抵消 viewBox 留白 */

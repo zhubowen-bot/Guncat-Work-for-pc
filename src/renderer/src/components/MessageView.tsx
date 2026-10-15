@@ -61,10 +61,13 @@ function useBody(message: MessageDto): { body: string; text: string; hasUi: bool
 export function ThinkingBar({
   reasoning,
   streaming,
+  rounds = 0,
   workMode = false
 }: {
   reasoning: string
   streaming: boolean
+  /** 汇总了几轮思考（>1 时标题上写「思考 ×N」）—— 汇总展示时用，单轮不用传 */
+  rounds?: number
   workMode?: boolean
 }) {
   const [open, setOpen] = useState(false)
@@ -88,7 +91,9 @@ export function ThinkingBar({
         <span className="thinking__leading">
           <IconBrain size={13} />
         </span>
-        <span className="thinking__label">{workMode ? '思考' : '深度思考'}</span>
+        <span className="thinking__label">
+          {(workMode ? '思考' : '深度思考') + (rounds > 1 ? ` ×${rounds}` : '')}
+        </span>
         {streaming ? <span className="spinner spinner--sm" /> : null}
         {/* 折叠态**始终**显示思考内容的末段（不再只在流式中显示）。
             用户报障：交互模式下不调工具时，思考一个字都看不见 ——

@@ -529,15 +529,19 @@ check(
   '已停止'
 )
 check(
-  '只有思考、没有工具的回合也出现活动折叠栏（原版 hasActivity 含 reasoning）',
-  mod.renderGroupedTurnThinkingOnly().includes('思考') &&
-    mod.renderGroupedTurnThinkingOnly().includes('disclosure'),
-  '思考-only'
+  '只有思考、没有工具的回合**不再**挂空的活动折叠栏（思考归思考栏，折叠栏不摆摆设）',
+  !mod.renderGroupedTurnThinkingOnly().includes('已完成'),
+  mod.renderGroupedTurnThinkingOnly().includes('已完成') ? '还挂着空折叠栏' : '只有思考栏'
 )
 check(
   '没有工具调用时，思考内容**直接可见**（不是藏在默认收起的折叠栏里）—— 用户报障点',
   mod.renderGroupedTurnThinkingOnly().includes('先看看目录结构'),
   mod.renderGroupedTurnThinkingOnly().includes('先看看目录结构') ? '思考可见' : '思考被藏起来了'
+)
+check(
+  '思考栏汇总本回合所有轮的思考，并在标题上标出轮数',
+  mod.renderGroupedTurnThinkingOnly().includes('思考'),
+  '思考栏标题'
 )
 check(
   '交互模式：中间轮不单独成块（只有最终答复有 answer 块）',
