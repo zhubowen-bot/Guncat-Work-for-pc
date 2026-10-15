@@ -23,7 +23,7 @@ import {
   LoopError
 } from '@core/service/AgentLoopService'
 import { WorkToolRunner } from '@core/service/WorkToolRunner'
-import { WorkFileService } from '@core/service/WorkFileService'
+import { ToolExecResult, WorkFileService } from '@core/service/WorkFileService'
 import { SubagentService } from '@core/service/SubagentService'
 import { Conversation } from '@core/model/Conversation'
 import { Message } from '@core/model/Message'
@@ -41,8 +41,18 @@ import type { BudgetAnchor } from '@core/common/ContextBudget'
 import type { BudgetHeadFactory } from '@core/common/ContextBudget'
 import { generateMessageId } from '@core/common/Utils'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
+import { GuncatUiLang } from '@core/common/GuncatUiLang'
 import { GuncatUiRuntime, GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
-import { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
+import { ToolExecutionGuard } from '@core/common/ToolExecutionGuard'
+import { parseArgsObject, parseSearchQuery, readArgString } from '@core/common/ToolArgs'
+import {
+  LOCAL_SEARCH_TOOL_NAME,
+  LocalSearchOutcome,
+  LocalWebSearch,
+  SearchEngineSettings,
+  isLocalSearchToolName
+} from '@core/service/LocalWebSearch'
+import { WEB_FETCH_TOOL_NAME, HarnessTools } from '@core/service/HarnessTools'
 import { ScheduleService } from '@core/service/ScheduleService'
 import { GoalService } from '@core/service/GoalService'
 import {
@@ -900,7 +910,20 @@ export class SessionManager {
     )
   }
 
-  /** 执行一轮聊天流式输出（sendChat / regenerateChat 共用） */
+  /**
+   * 执行聊天模式的流式输出（sendChat / regenerateChat 共用）。
+   *
+   * 这是**多轮**的（移植原版 ChatViewModel.runChatStream 3196-3332）：
+   * 模型可以在回答里调用本机工具 —— local_web_search / search_web（本机直连搜索引擎）
+   * 与 web_fetch（抓网页）都在本机执行，结果回灌后**继续下一轮**，
+   * 直到模型给出不带新工具调用的最终回答。
+   *
+   * 为什么必须多轮：单轮时工具调用就只是「模型说了一句它想搜索」，谁也执行不了它 ——
+   * 用户看到的是一条只有调用请求、没有任何内容的回答，而且模型永远拿不到结果。
+   *
+   * 「问一句答一句」的既有行为不受影响：本轮没有工具调用时循环立刻结束（只跑一轮），
+   * 附件、tokenSpeed/cacheHitRate、turn:finished 状态语义都与改动前一致。
+   */
   private async runChatTurn(
     conv: Conversation,
     config: ApiConfig,
@@ -924,6 +947,8 @@ export class SessionManager {
     handle.abort = new AbortSignal()
 
     const callbacks: StreamCallbacks = new StreamCallbacks()
+    // 正文跨轮累积（原版 assistantMsg.content += delta 的同一口径）：
+    // 每轮的增量接在上一轮之后，工具标注插在中间，用户看到的是一条完整回答
     let streamed: string = ''
     callbacks.onToken = (text: string): void => {
       streamed += text
@@ -936,21 +961,169 @@ export class SessionManager {
       this.patchMessage(conv.id, assistantMsg.id, { tokenSpeed: speed, cacheHitRate: hit })
     }
 
+    // 本轮请求要带的历史与「新用户文本」：
+    //   首轮 = 既有历史 + 本次提问（与改动前完全一致）；
+    //   续轮 = 整份 conv.messages（含带工具结果的 assistant 消息）+ 空文本
+    //         —— 对齐原版 currentHistory = conv.messages / currentUserText = ''。
+    // 端口的历史是 Message[] 而不是 LoopMessage：工具结果由 ChatService 按
+    // Message.toolCalls 生成 role:'tool' 消息回灌（见 ChatService.buildXxxBody），
+    // 所以这里不需要另建一份 LoopMessage 历史。
+    let currentHistory: Message[] = history
+    let currentPrompt: string = prompt
+    let round: number = 0
+
     let failure: string = ''
     try {
-      const result = await ChatService.streamChat(
-        config,
-        agent ?? null,
-        history,
-        prompt,
-        thinkingEnabled,
-        webSearchEnabled,
-        callbacks,
-        handle.abort
-      )
-      if (result.toolCalls.length > 0) {
-        assistantMsg.toolCalls = result.toolCalls
-        this.patchMessage(conv.id, assistantMsg.id, { content: streamed })
+      // 多轮循环：只有「本轮产生了新的工具调用」才会进入下一轮
+      while (true) {
+        round++
+        const result = await ChatService.streamChat(
+          config,
+          agent ?? null,
+          currentHistory,
+          currentPrompt,
+          thinkingEnabled,
+          webSearchEnabled,
+          callbacks,
+          handle.abort
+        )
+        // Anthropic 思考模式下，带 tool_use 的 assistant 消息回传下一轮时必须带思考块签名
+        // （不持久化，仅本次运行内存内有效 —— 见 Message.thinkingSignature 的说明）
+        assistantMsg.thinkingSignature = result.thinkingSignature
+
+        // 中断：与改动前一致，不再继续（收尾由下面的 finally 统一处理）
+        if (handle.abort.aborted) {
+          break
+        }
+
+        // 退出判据只看**本轮**新产生的调用：assistantMsg.toolCalls 是跨轮累计的
+        // （旧调用要保留下来供回灌与展示），若拿它判断，模型给出最终回答的那一轮
+        // 也永远满足「有工具调用」，循环就再也退不出去了。
+        const roundCalls: ToolCallRecord[] = result.toolCalls
+        if (roundCalls.length === 0) {
+          break
+        }
+        // 防失控保险：轮次达到上限时停止继续搜索（原版的提示语与位置都不变 ——
+        // 这一轮的调用**不再执行**，因为超过上限本身就意味着该收手了）
+        if (round >= Constants.CHAT_SEARCH_MAX_ROUNDS) {
+          streamed +=
+            '\n\n 已连续搜索 ' +
+            Constants.CHAT_SEARCH_MAX_ROUNDS.toString() +
+            ' 轮(防失控保险), 停止继续搜索。'
+          break
+        }
+
+        // 累计进本条 assistant 消息：下一轮请求要把**所有轮**的调用与结果一起回灌，
+        // 只留本轮调用会让上一轮的 tool 结果失去归属（协议校验失败）
+        for (const call of roundCalls) {
+          assistantMsg.toolCalls.push(call)
+        }
+        // 工具调用先行落到时间线上（执行前后各推一次，UI 显示「等待中… → 执行中…」）
+        for (const call of roundCalls) {
+          this.emit({
+            type: 'tool:started',
+            conversationId: conv.id,
+            messageId: assistantMsg.id,
+            call: SessionManager.toToolDto(call)
+          })
+        }
+
+        // 串行执行本轮的本地调用（与工作模式一致：同一轮的调用按序执行，结果回填到同一批记录）
+        for (const call of roundCalls) {
+          if (handle.abort.aborted) {
+            break
+          }
+          // 模型参数已经生成完，进入执行态；本轮已执行过的（result 非空）直接跳过
+          call.preparing = false
+          if (call.result !== '') {
+            continue
+          }
+          call.started = true
+          this.emit({
+            type: 'tool:started',
+            conversationId: conv.id,
+            messageId: assistantMsg.id,
+            call: SessionManager.toToolDto(call)
+          })
+          // 真实计时：工具行右端要显示耗时（原版与工作模式同口径）
+          const execStart: number = Date.now()
+          // 新旧工具名都认（isLocalSearchToolName 覆盖 search_web 这个旧名）：
+          // 历史消息里模型自己写过的旧名调用仍要能执行，否则会被判成未知工具
+          if (isLocalSearchToolName(call.name)) {
+            const query: string = parseSearchQuery(call.argsJson)
+            const outcome: LocalSearchOutcome = await ToolExecutionGuard.run(
+              LocalWebSearch.searchWeb(query, handle.abort),
+              Constants.WORK_TOOL_TIMEOUT_MS,
+              handle.abort,
+              (): LocalSearchOutcome =>
+                SessionManager.searchOutcomeWithError('本机搜索执行超时', true, false),
+              (): LocalSearchOutcome =>
+                SessionManager.searchOutcomeWithError('本机搜索已取消', false, true)
+            )
+            call.durationMs = Date.now() - execStart
+            call.timeout = outcome.timeout
+            call.cancelled = outcome.cancelled
+            if (outcome.ok) {
+              call.isError = false
+              call.result = outcome.contentForAI
+              streamed +=
+                '\n\n 进行了一次本机联网搜索(' + outcome.engineLabel + ')：' + query + '\n'
+            } else {
+              call.isError = true
+              call.result = '搜索失败: ' + outcome.errorMessage
+              streamed += '\n\n 本机联网搜索失败：' + outcome.errorMessage + '\n'
+            }
+          } else if (call.name === WEB_FETCH_TOOL_NAME) {
+            const args: Record<string, Object> = parseArgsObject(call.argsJson)
+            const url: string = readArgString(args, 'url')
+            const fetchResult: ToolExecResult = await ToolExecutionGuard.run(
+              HarnessTools.toolWebFetch(args),
+              Constants.WORK_TOOL_TIMEOUT_MS,
+              handle.abort,
+              (): ToolExecResult => SessionManager.toolResultError('web_fetch 执行超时', true, false),
+              (): ToolExecResult => SessionManager.toolResultError('web_fetch 执行已取消', false, true)
+            )
+            call.durationMs = Date.now() - execStart
+            call.timeout = fetchResult.timeout
+            call.cancelled = fetchResult.cancelled
+            call.isError = !fetchResult.ok
+            call.result = fetchResult.output
+            // 成功与失败都要在正文里可见：用户得知道模型到底去读了哪个网页
+            streamed += fetchResult.ok
+              ? '\n\n 读取了一次网页：' + (url === '' ? '(未提供 url)' : url) + '\n'
+              : '\n\n 读取网页失败：' + (url === '' ? '(未提供 url)' : url) + '\n'
+          } else {
+            // 未知工具回填一条**错误结果**送回模型让它自己纠正（原版行为）。
+            // 静默丢弃会让模型以为自己没调用过，下一轮还会原样再调一次。
+            call.durationMs = 0
+            call.isError = true
+            call.result =
+              '未知工具: ' +
+              call.name +
+              '(聊天模式仅支持 ' +
+              LOCAL_SEARCH_TOOL_NAME +
+              ' / ' +
+              WEB_FETCH_TOOL_NAME +
+              ')'
+          }
+          this.emit({
+            type: 'tool:finished',
+            conversationId: conv.id,
+            messageId: assistantMsg.id,
+            call: SessionManager.toToolDto(call)
+          })
+        }
+
+        // 正文里插入了工具标注，先把当前正文同步给界面（下一轮的 token 会接着往后追加）
+        this.patchMessage(conv.id, assistantMsg.id, {
+          content: streamed,
+          displayContent: streamed
+        })
+        await this.persist()
+
+        // 下一轮：历史包含带工具结果的 assistant 消息（conv.messages 末条），不追加用户消息
+        currentHistory = conv.messages
+        currentPrompt = ''
       }
     } catch (e) {
       failure = (e as Error)?.message ?? String(e)
@@ -978,6 +1151,60 @@ export class SessionManager {
         }
       }
     }
+  }
+
+  /**
+   * 本机联网搜索的「超时/取消」兜底结果（与 LocalSearchOutcome 的成功路径同一形状）。
+   * 护栏不抛异常、只回落一个 ok=false 的结果，调用方按统一的失败分支处理即可。
+   */
+  private static searchOutcomeWithError(
+    message: string,
+    timeout: boolean = false,
+    cancelled: boolean = false
+  ): LocalSearchOutcome {
+    const outcome: LocalSearchOutcome = new LocalSearchOutcome()
+    outcome.ok = false
+    outcome.errorMessage = message
+    outcome.timeout = timeout
+    outcome.cancelled = cancelled
+    return outcome
+  }
+
+  /** 工具执行的超时/取消兜底结果（web_fetch 等：ok=false，output 为可读错误） */
+  private static toolResultError(
+    message: string,
+    timeout: boolean = false,
+    cancelled: boolean = false
+  ): ToolExecResult {
+    const result: ToolExecResult = new ToolExecResult()
+    result.ok = false
+    result.output = 'ERROR: ' + message
+    result.timeout = timeout
+    result.cancelled = cancelled
+    return result
+  }
+
+  /**
+   * 交互模式：最后一条 assistant 消息里的界面是否需要重做一次
+   * （移植原版 ChatViewModel.needsUiContinuation 1501-1513）。
+   *
+   * 只看最后一条 assistant 消息，是因为「这一轮的交付物」就是它；
+   * 判据用 GuncatUiParts.needsRepair —— 只有**含有界面意图**（围栏或看起来像程序）
+   * 却解析不出任何根节点时才为真。
+   */
+  private static needsUiContinuation(conv: Conversation, mode: string): boolean {
+    // 只有交互模式的交付物是界面程序；工作/聊天模式没有「界面没成形」这回事
+    if (mode !== Constants.MODE_INTERACTIVE) {
+      return false
+    }
+    for (let i: number = conv.messages.length - 1; i >= 0; i--) {
+      const msg: Message = conv.messages[i]
+      if (msg.role !== 'assistant') {
+        continue
+      }
+      return GuncatUiParts.needsRepair(msg.content)
+    }
+    return false
   }
 
   // ===== 工作模式 / 交互模式：Agent Loop =====
@@ -1056,192 +1283,263 @@ export class SessionManager {
     let stepsUsed: number = 0
 
     try {
-      for (let step: number = 0; step < maxSteps; step++) {
-        stepsUsed = step + 1
-        if (handle.abort.aborted) {
-          break
-        }
-
-        // 插话在**轮与轮之间**注入（对齐原版 workSteerQueue 的时机）：
-        // 放这里而不是打断当前请求，模型能带着上一轮的工具结果一起看到新要求。
-        for (const steerText of this.drainSteer(conv.id)) {
-          messages.push(LoopMessage.user(steerText))
-        }
-
-        // 每一轮在 UI 上是一条 assistant 消息（思考 → 工具 → 正文）
-        assistantMsg = Message.ofAssistant(generateMessageId(), '')
-        conv.messages.push(assistantMsg)
-        this.emit({
-          type: 'message:added',
-          conversationId: conv.id,
-          message: SessionManager.toMessageDto(assistantMsg)
-        })
-        this.emit({ type: 'turn:started', conversationId: conv.id, messageId: assistantMsg.id })
-
-        // ===== 上下文预算管理（原版 1981 / 2613：每一轮请求之前）=====
-        // 三级顺序不可换：先做零成本的工具结果修剪，修剪后已不超预算就不再花模型调用；
-        // 仍超预算才做前缀复用式摘要压缩，最后才是从最旧处整条丢弃。
-        const compactNote: string = await this.compactWorkHistoryIfNeeded(
-          messages,
-          false,
-          mode,
-          usageAnchor,
-          compactionEnv
-        )
-
-        const targetMsg: Message = assistantMsg
-        // 压缩标注放在正文开头，模型的流式增量接在它后面。
-        // 必须从 streamed 起头：下面每个 token 都会用 patchMessage 整体覆盖 content，
-        // 标注若只写进 msg.content 会被第一个 token 冲掉，用户就不知道上下文被动过。
-        streamed = compactNote
-        const callbacks: LoopTurnCallbacks = new LoopTurnCallbacks()
-        callbacks.onToken = (text: string): void => {
-          streamed += text
-          this.patchMessage(conv.id, targetMsg.id, { content: streamed, displayContent: streamed })
-        }
-        callbacks.onReasoning = (text: string): void => {
-          this.patchMessage(conv.id, targetMsg.id, { reasoning: text })
-        }
-        callbacks.onToolCalls = (calls: ToolCallRecord[]): void => {
-          targetMsg.toolCalls = calls
-        }
-        callbacks.onUsage = (speed: number, hit: number): void => {
-          this.patchMessage(conv.id, targetMsg.id, { tokenSpeed: speed, cacheHitRate: hit })
-        }
-
-        // 记录本次请求的字符量，与 usage 里的真实 prompt tokens 配对，
-        // 推导「本任务实测的字符→token 比例」（原版 requestChars）
-        const requestChars: number = ContextBudget.messagesChars(messages)
-        const turn: LoopTurnResult = await this.runWorkTurnWithOverflowRetry(
-          config,
-          messages,
-          request,
-          reasoningEffort,
-          callbacks,
-          handle.abort,
-          mode,
-          usageAnchor,
-          compactionEnv,
-          (forcedNote: string): void => {
-            // 服务端报了上下文超限、强制压缩成功：标注写进正文，并清掉上一次尝试
-            // 已流出的部分工具行（那些参数只生成了一半，重试后不该留在时间线上）
-            streamed = forcedNote
-            targetMsg.toolCalls = []
-            this.patchMessage(conv.id, targetMsg.id, {
-              content: streamed,
-              displayContent: streamed
-            })
-          }
-        )
-        if (turn.promptTokens > 0) {
-          usageAnchor.tokens = turn.promptTokens
-          usageAnchor.chars = requestChars
-        }
-
-        targetMsg.reasoning = turn.reasoning
-        targetMsg.tokenSpeed = turn.tokenSpeed
-        targetMsg.cacheHitRate = turn.cacheHitRate
-        finishReason = turn.finishReason ?? ''
-        targetMsg.toolCalls = turn.toolCalls
-        this.recordRunRound(conv.id, turn.tokenSpeed, turn.cacheHitRate)
-
-        // 工具调用先行落到时间线上（执行前后各推一次，UI 可显示"执行中"）
-        for (const call of turn.toolCalls) {
-          this.emit({
-            type: 'tool:started',
-            conversationId: conv.id,
-            messageId: targetMsg.id,
-            call: SessionManager.toToolDto(call)
-          })
-        }
-
-        const loopMsg: LoopMessage = LoopMessage.fromTurn(turn)
-        messages.push(loopMsg)
-
-        // 模型输出顶到 max_tokens：收尾并提示「继续」（原版 ChatViewModel 2085-2094）。
-        // 排在工具执行**之前** —— 参数可能只生成了一半，执行它只会得到更糟的结果。
-        if (LoopDecisions.shouldBreakOnMaxTokens(turn.finishReason)) {
-          this.patchMessage(conv.id, targetMsg.id, { content: streamed })
-          await this.persist()
-          this.emit({
-            type: 'turn:finished',
-            conversationId: conv.id,
-            messageId: targetMsg.id,
-            status: handle.abort.aborted ? 'aborted' : 'ok'
-          })
-          break
-        }
-
-        if (turn.toolCalls.length === 0) {
-          this.patchMessage(conv.id, targetMsg.id, { content: streamed })
-          await this.persist()
-          // 状态必须看是否被中止：这里原先写死 'ok'，于是**用户手动停止的那一轮
-          // 在界面上报的是「正常完成」**（聊天模式同样的位置就是判 aborted 的）。
-          this.emit({
-            type: 'turn:finished',
-            conversationId: conv.id,
-            messageId: targetMsg.id,
-            status: handle.abort.aborted ? 'aborted' : 'ok'
-          })
-          break
-        }
-
-        // 串行执行工具（与鸿蒙侧默认行为一致：同一轮的调用按序执行，结果回填到同一批记录）
-        for (const call of turn.toolCalls) {
+      // 交互模式的「界面补救」在跑完一遍工作循环之后可能要**再跑一轮**，
+      // 所以工作循环外面再套一层：每次回到这里都会重新判定「这一轮到底有没有
+      // 产出可渲染的界面」。步数预算由 stepsUsed 共享，补救不会无限续命。
+      let uiContinueRounds: number = 0
+      while (true) {
+        for (let step: number = stepsUsed; step < maxSteps; step++) {
+          stepsUsed = step + 1
           if (handle.abort.aborted) {
             break
           }
-          // 真正开始执行前打上 started 标记并推一次：工具行右端据此从「等待中…」
-          // 变成「执行中…」（原版 stepStatusLabel 的判据，这里分批推同一批记录）
-          call.preparing = false
-          call.started = true
-          this.emit({
-            type: 'tool:started',
-            conversationId: conv.id,
-            messageId: targetMsg.id,
-            call: SessionManager.toToolDto(call)
-          })
-          // 真实计时：工具行右端要显示耗时（原版 WorkStepFormat.formatDuration 的口径），
-          // 之前这里写死 0，界面上的耗时永远是「0ms」
-          const toolStartedAt: number = Date.now()
-          const outcome = await WorkToolRunner.execute(
-            ctx as never,
-            conv.id,
-            call.name,
-            call.argsJson,
-            handle.abort
-          )
-          call.result = outcome.ok ? outcome.output : outcome.output
-          call.isError = !outcome.ok
-          call.durationMs = Date.now() - toolStartedAt
-          call.timeout = outcome.timeout
-          call.cancelled = outcome.cancelled
-          call.schemaError = outcome.schemaError
-          if (outcome.meta !== '') {
-            call.meta = outcome.meta
+
+          // 插话在**轮与轮之间**注入（对齐原版 workSteerQueue 的时机）：
+          // 放这里而不是打断当前请求，模型能带着上一轮的工具结果一起看到新要求。
+          for (const steerText of this.drainSteer(conv.id)) {
+            messages.push(LoopMessage.user(steerText))
           }
+
+          // 每一轮在 UI 上是一条 assistant 消息（思考 → 工具 → 正文）
+          assistantMsg = Message.ofAssistant(generateMessageId(), '')
+          conv.messages.push(assistantMsg)
           this.emit({
-            type: 'tool:finished',
+            type: 'message:added',
+            conversationId: conv.id,
+            message: SessionManager.toMessageDto(assistantMsg)
+          })
+          this.emit({ type: 'turn:started', conversationId: conv.id, messageId: assistantMsg.id })
+
+          // ===== 上下文预算管理（原版 1981 / 2613：每一轮请求之前）=====
+          // 三级顺序不可换：先做零成本的工具结果修剪，修剪后已不超预算就不再花模型调用；
+          // 仍超预算才做前缀复用式摘要压缩，最后才是从最旧处整条丢弃。
+          const compactNote: string = await this.compactWorkHistoryIfNeeded(
+            messages,
+            false,
+            mode,
+            usageAnchor,
+            compactionEnv
+          )
+
+          const targetMsg: Message = assistantMsg
+          // 压缩标注放在正文开头，模型的流式增量接在它后面。
+          // 必须从 streamed 起头：下面每个 token 都会用 patchMessage 整体覆盖 content，
+          // 标注若只写进 msg.content 会被第一个 token 冲掉，用户就不知道上下文被动过。
+          streamed = compactNote
+          const callbacks: LoopTurnCallbacks = new LoopTurnCallbacks()
+          callbacks.onToken = (text: string): void => {
+            streamed += text
+            this.patchMessage(conv.id, targetMsg.id, { content: streamed, displayContent: streamed })
+          }
+          callbacks.onReasoning = (text: string): void => {
+            this.patchMessage(conv.id, targetMsg.id, { reasoning: text })
+          }
+          callbacks.onToolCalls = (calls: ToolCallRecord[]): void => {
+            targetMsg.toolCalls = calls
+          }
+          callbacks.onUsage = (speed: number, hit: number): void => {
+            this.patchMessage(conv.id, targetMsg.id, { tokenSpeed: speed, cacheHitRate: hit })
+          }
+
+          // 记录本次请求的字符量，与 usage 里的真实 prompt tokens 配对，
+          // 推导「本任务实测的字符→token 比例」（原版 requestChars）
+          const requestChars: number = ContextBudget.messagesChars(messages)
+          const turn: LoopTurnResult = await this.runWorkTurnWithOverflowRetry(
+            config,
+            messages,
+            request,
+            reasoningEffort,
+            callbacks,
+            handle.abort,
+            mode,
+            usageAnchor,
+            compactionEnv,
+            (forcedNote: string): void => {
+              // 服务端报了上下文超限、强制压缩成功：标注写进正文，并清掉上一次尝试
+              // 已流出的部分工具行（那些参数只生成了一半，重试后不该留在时间线上）
+              streamed = forcedNote
+              targetMsg.toolCalls = []
+              this.patchMessage(conv.id, targetMsg.id, {
+                content: streamed,
+                displayContent: streamed
+              })
+            }
+          )
+          if (turn.promptTokens > 0) {
+            usageAnchor.tokens = turn.promptTokens
+            usageAnchor.chars = requestChars
+          }
+
+          targetMsg.reasoning = turn.reasoning
+          targetMsg.tokenSpeed = turn.tokenSpeed
+          targetMsg.cacheHitRate = turn.cacheHitRate
+          finishReason = turn.finishReason ?? ''
+          targetMsg.toolCalls = turn.toolCalls
+          this.recordRunRound(conv.id, turn.tokenSpeed, turn.cacheHitRate)
+
+          // 工具调用先行落到时间线上（执行前后各推一次，UI 可显示"执行中"）
+          for (const call of turn.toolCalls) {
+            this.emit({
+              type: 'tool:started',
+              conversationId: conv.id,
+              messageId: targetMsg.id,
+              call: SessionManager.toToolDto(call)
+            })
+          }
+
+          const loopMsg: LoopMessage = LoopMessage.fromTurn(turn)
+          messages.push(loopMsg)
+
+          // 模型输出顶到 max_tokens：收尾并提示「继续」（原版 ChatViewModel 2085-2094）。
+          // 排在工具执行**之前** —— 参数可能只生成了一半，执行它只会得到更糟的结果。
+          if (LoopDecisions.shouldBreakOnMaxTokens(turn.finishReason)) {
+            this.patchMessage(conv.id, targetMsg.id, { content: streamed })
+            await this.persist()
+            this.emit({
+              type: 'turn:finished',
+              conversationId: conv.id,
+              messageId: targetMsg.id,
+              status: handle.abort.aborted ? 'aborted' : 'ok'
+            })
+            break
+          }
+
+          if (turn.toolCalls.length === 0) {
+            this.patchMessage(conv.id, targetMsg.id, { content: streamed })
+            await this.persist()
+            // 状态必须看是否被中止：这里原先写死 'ok'，于是**用户手动停止的那一轮
+            // 在界面上报的是「正常完成」**（聊天模式同样的位置就是判 aborted 的）。
+            this.emit({
+              type: 'turn:finished',
+              conversationId: conv.id,
+              messageId: targetMsg.id,
+              status: handle.abort.aborted ? 'aborted' : 'ok'
+            })
+            break
+          }
+
+          // 串行执行工具（与鸿蒙侧默认行为一致：同一轮的调用按序执行，结果回填到同一批记录）
+          for (const call of turn.toolCalls) {
+            if (handle.abort.aborted) {
+              break
+            }
+            // 真正开始执行前打上 started 标记并推一次：工具行右端据此从「等待中…」
+            // 变成「执行中…」（原版 stepStatusLabel 的判据，这里分批推同一批记录）
+            call.preparing = false
+            call.started = true
+            this.emit({
+              type: 'tool:started',
+              conversationId: conv.id,
+              messageId: targetMsg.id,
+              call: SessionManager.toToolDto(call)
+            })
+            // 真实计时：工具行右端要显示耗时（原版 WorkStepFormat.formatDuration 的口径），
+            // 之前这里写死 0，界面上的耗时永远是「0ms」
+            const toolStartedAt: number = Date.now()
+            const outcome = await WorkToolRunner.execute(
+              ctx as never,
+              conv.id,
+              call.name,
+              call.argsJson,
+              handle.abort
+            )
+            call.result = outcome.ok ? outcome.output : outcome.output
+            call.isError = !outcome.ok
+            call.durationMs = Date.now() - toolStartedAt
+            call.timeout = outcome.timeout
+            call.cancelled = outcome.cancelled
+            call.schemaError = outcome.schemaError
+            if (outcome.meta !== '') {
+              call.meta = outcome.meta
+            }
+            this.emit({
+              type: 'tool:finished',
+              conversationId: conv.id,
+              messageId: targetMsg.id,
+              call: SessionManager.toToolDto(call)
+            })
+            // 工作区可能已被工具改写
+            this.emit({ type: 'workspace:changed', conversationId: conv.id })
+          }
+
+          this.patchMessage(conv.id, targetMsg.id, { content: streamed })
+          await this.persist()
+          this.emit({
+            type: 'turn:finished',
             conversationId: conv.id,
             messageId: targetMsg.id,
-            call: SessionManager.toToolDto(call)
+            status: handle.abort.aborted ? 'aborted' : 'ok'
           })
-          // 工作区可能已被工具改写
-          this.emit({ type: 'workspace:changed', conversationId: conv.id })
+
+          if (turn.finishReason === 'stop' && turn.toolCalls.length === 0) {
+            break
+          }
         }
 
-        this.patchMessage(conv.id, targetMsg.id, { content: streamed })
-        await this.persist()
-        this.emit({
-          type: 'turn:finished',
-          conversationId: conv.id,
-          messageId: targetMsg.id,
-          status: handle.abort.aborted ? 'aborted' : 'ok'
-        })
-
-        if (turn.finishReason === 'stop' && turn.toolCalls.length === 0) {
+        // ===== 交互模式：界面没成形时的自动重做 / 续写（原版 ChatViewModel 2436-2500）=====
+        //
+        // 为什么只在「完全没有可渲染界面」时才补救（原版注释的理由，逐条保留）：
+        // guncat-ui lang 是**按行语句**，被截断时已写完的语句照样能渲染 —— 半截程序
+        // 也有界面可看，不值得再花一次请求重做；只有「模型压根没写出可用程序」
+        // （典型是通篇文字、没有 root = Card）才值得再来一轮。
+        if (
+          !SessionManager.needsUiContinuation(conv, mode) ||
+          handle.abort.aborted ||
+          messages.length === 0 ||
+          uiContinueRounds >= Constants.UI_CONTINUE_MAX_ROUNDS
+        ) {
           break
         }
+        uiContinueRounds++
+        // 首选：单独要一份界面程序（不带工具、低推理档），从根本上绕开
+        // 「主回答里写长程序被截断 / 模型忘了写 root」的问题
+        let programText: string = ''
+        try {
+          programText = await AgentLoopService.generateUiProgram(config, messages, handle.abort)
+        } catch {
+          programText = ''
+        }
+        if (handle.abort.aborted) {
+          break
+        }
+        const uiMsgId: string = generateMessageId()
+        if (programText !== '') {
+          const blockText: string = '```' + GuncatUiLang.FENCE_LANG + '\n' + programText + '\n```'
+          const uiMsg: Message = Message.ofAssistant(uiMsgId, blockText)
+          // 界面程序本体不进正文展示位：用户看到的是「界面已重新生成」这一句说明，
+          // 真正的界面由 guncat-ui 渲染器按围栏内容画出来
+          uiMsg.displayContent = '（界面已重新生成）'
+          conv.messages.push(uiMsg)
+          this.emit({
+            type: 'message:added',
+            conversationId: conv.id,
+            message: SessionManager.toMessageDto(uiMsg)
+          })
+          // 让后续请求也能看到这份界面（保持历史完整）
+          messages.push(LoopMessage.assistant(blockText, []))
+          await this.persist()
+          break
+        }
+        // 兜底：单独生成也失败，退回「文本续写」路径 —— 追加一条用户消息，
+        // 让模型接着把界面写完，然后**再跑一轮工作循环**（内层 for 重新进入即可）。
+        // 每一轮都会重新判定一次「界面成形了没有」，最多 UI_CONTINUE_MAX_ROUNDS 次。
+        const continueText: string = Constants.UI_CONTINUE_MESSAGE
+        const continueMsg: Message = Message.ofUser(
+          uiMsgId,
+          continueText,
+          '（界面输出被截断，已自动续写）',
+          []
+        )
+        conv.messages.push(continueMsg)
+        this.emit({
+          type: 'message:added',
+          conversationId: conv.id,
+          message: SessionManager.toMessageDto(continueMsg)
+        })
+        messages.push(LoopMessage.user(continueText))
+        await this.persist()
+        // 回到外层 while：内层 for 从当前步数接着跑（步数预算共享，不会无限续命）
+        continue
       }
     } catch (e) {
       failure = (e as Error)?.message ?? String(e)

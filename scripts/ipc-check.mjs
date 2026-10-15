@@ -26,6 +26,7 @@ export { __invoke, __channels, __events, __calls, __setOpenDialog, __setMessageB
 export { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 export { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
 export { ContextBudget } from '@core/common/ContextBudget'
+export { Constants } from '@core/common/Constants'
 export { sanitizeTableHtml } from '@main/sanitizeHtml'
 `
 )
@@ -1948,6 +1949,556 @@ check(
 )
 
 console.log(`\n语音输入验证：通过 ${passed - passedBeforeAsr} 项`)
+
+// ===== 20. 聊天模式本机联网搜索的多轮循环 + 交互模式界面补助 =====
+//
+// 两块此前都是「能力已移植、调用点为零」的缺口：
+//   · 聊天模式的 runChatTurn 是单轮的 —— 模型调了 local_web_search，没有谁去执行，
+//     用户只看到一句「我要搜索」的空回答；
+//   · 交互模式跑完之后从不检查「到底有没有产出可渲染的界面」，界面被截断/没成形
+//     就永远停在一条没有界面的回答上（Constants.UI_CONTINUE_MESSAGE /
+//     UI_CONTINUE_MAX_ROUNDS / generateUiProgram / GuncatUiParts.needsRepair 零调用点）。
+const passedBeforeChatUi = passed
+console.log('\n20. 聊天模式本机联网搜索（多轮）与交互模式界面补助')
+
+// --- 假「本地搜索引擎」：把 LocalWebSearch 的 firecrawl 引擎指到它上面 ---
+// 这条链路必须走**真实实现**（不能用替身）：要证明的正是「工具调用真的在本机执行了」。
+const searchHits = []
+const searchServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    searchHits.push({ url: req.url, body: raw })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        data: {
+          web: [
+            {
+              title: '季度复盘方法论',
+              url: 'https://example.com/review',
+              description: '复盘四步：回顾目标、评估结果、分析原因、总结规律。'
+            }
+          ]
+        }
+      })
+    )
+  })
+})
+await new Promise((resolve) => searchServer.listen(0, '127.0.0.1', () => resolve()))
+const searchPort = searchServer.address().port
+await inv(
+  'settings:saveString',
+  'guncat_local_search_config',
+  JSON.stringify({
+    engine: 'firecrawl',
+    maxResults: 3,
+    firecrawlApiKey: 'fc-local-test',
+    firecrawlBaseUrl: 'http://127.0.0.1:' + String(searchPort)
+  })
+)
+// settings:load 会把这套配置 bind 给工具层（LocalWebSearch.bind）；不 bind 就还是旧引擎
+await inv('settings:load')
+check(
+  '本机搜索后端已指向本地假服务（否则这条链路会真的去联网）',
+  mod.LocalWebSearch.currentSettings().engine === 'firecrawl' &&
+    mod.LocalWebSearch.currentSettings().firecrawlBaseUrl.includes('127.0.0.1'),
+  mod.LocalWebSearch.currentSettings().engine +
+    ' @ ' +
+    mod.LocalWebSearch.currentSettings().firecrawlBaseUrl
+)
+
+// --- 假模型：第一轮要求调 local_web_search，第二轮给出最终回答 ---
+const multiBodies = []
+const multiServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    multiBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    if (multiBodies.length === 1) {
+      res.write(
+        'data: ' +
+          JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_search_1',
+                      type: 'function',
+                      function: { name: 'local_web_search', arguments: '{"query":"季度复盘方法"}' }
+                    }
+                  ]
+                }
+              }
+            ]
+          }) +
+          '\n\n'
+      )
+    } else {
+      res.write(
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: '复盘分四步。' } }] }) + '\n\n'
+      )
+    }
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => multiServer.listen(0, '127.0.0.1', () => resolve()))
+const multiPort = multiServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(multiPort),
+  apiKey: 'sk-chat-loop',
+  model: 'chat-loop-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convChatLoop = await inv('conversations:create', agents[0].id, 'chat')
+events.length = 0
+await inv('chat:send', {
+  conversationId: convChatLoop.id,
+  text: '季度复盘怎么做',
+  mode: 'chat',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+
+// ① 确实发了第二轮请求（工具结果回灌后继续，而不是一轮就结束）
+check(
+  '聊天模式在本轮有工具调用时继续下一轮（此前单轮直接结束）',
+  multiBodies.length >= 2,
+  `${multiBodies.length} 轮请求`
+)
+const multiSecond = multiBodies[1] !== undefined ? JSON.parse(multiBodies[1]) : {}
+const multiMessages = multiSecond.messages ?? []
+// ② 第二轮请求体里带着工具结果（role:tool + 上一轮的 assistant tool_calls 都要在）
+check(
+  '第二轮请求体里带着本机搜索的工具结果（role:tool 与 tool_calls 成对回灌）',
+  multiMessages.some((m) => m.role === 'tool' && String(m.content).includes('example.com/review')) &&
+    multiMessages.some(
+      (m) =>
+        m.role === 'assistant' &&
+        Array.isArray(m.tool_calls) &&
+        m.tool_calls.some((c) => c.function !== undefined && c.function.name === 'local_web_search')
+    ),
+  multiMessages.map((m) => m.role).join(',')
+)
+// 本机搜索真的执行了（请求打到了本地假搜索引擎上）
+check(
+  '本机搜索走的是真实实现（本地假搜索引擎被真的请求到了）',
+  searchHits.length >= 1 &&
+    String(searchHits[0].url).includes('/v2/search') &&
+    String(searchHits[0].body).includes('季度复盘方法'),
+  searchHits.length > 0 ? searchHits[0].url : '(没有请求)'
+)
+// ③ 用户可见正文里有搜索标注（带引擎标签）与最终回答
+const chatLoopDto = await inv('conversation:get', convChatLoop.id)
+const chatLoopAssistant = (chatLoopDto?.messages ?? []).filter((m) => m.role === 'assistant').pop()
+check(
+  '正文里出现「进行了一次本机联网搜索(引擎)：query」',
+  String(chatLoopAssistant?.content).includes('进行了一次本机联网搜索') &&
+    String(chatLoopAssistant?.content).includes('Firecrawl') &&
+    String(chatLoopAssistant?.content).includes('季度复盘方法'),
+  String(chatLoopAssistant?.content).slice(0, 60)
+)
+check(
+  '跨轮累积：最终回答与搜索标注在同一条 assistant 消息里',
+  String(chatLoopAssistant?.content).includes('复盘分四步')
+)
+// ④ 工具行有耗时（durationMs 默认 -1 表示「还在跑」，界面上会一直转圈）
+const searchToolDto = (chatLoopAssistant?.toolCalls ?? []).find((c) => c.id === 'call_search_1')
+check(
+  '工具行记下了真实耗时（不再是 -1 / 永远转圈）',
+  searchToolDto !== undefined && searchToolDto.durationMs >= 0 && searchToolDto.durationMs < 60000,
+  searchToolDto !== undefined ? `${searchToolDto.durationMs}ms` : '(没有工具行)'
+)
+check(
+  '工具行以 started / finished 两次事件推给渲染层（执行中可见）',
+  events.some((e) => e.type === 'tool:started' && e.call.id === 'call_search_1') &&
+    events.some((e) => e.type === 'tool:finished' && e.call.id === 'call_search_1')
+)
+multiServer.closeAllConnections?.()
+multiServer.close()
+
+// --- 未知工具名：回填错误结果送回模型，而不是静默丢弃 ---
+const unknownBodies = []
+const unknownServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    unknownBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    if (unknownBodies.length === 1) {
+      res.write(
+        'data: ' +
+          JSON.stringify({
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_bad_1',
+                      type: 'function',
+                      function: { name: 'make_coffee', arguments: '{}' }
+                    }
+                  ]
+                }
+              }
+            ]
+          }) +
+          '\n\n'
+      )
+    } else {
+      res.write(
+        'data: ' + JSON.stringify({ choices: [{ delta: { content: '换个工具再来。' } }] }) + '\n\n'
+      )
+    }
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => unknownServer.listen(0, '127.0.0.1', () => resolve()))
+const unknownPort = unknownServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(unknownPort),
+  apiKey: 'sk-chat-unknown',
+  model: 'chat-unknown-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convUnknown = await inv('conversations:create', agents[0].id, 'chat')
+await inv('chat:send', {
+  conversationId: convUnknown.id,
+  text: '随便调个工具',
+  mode: 'chat',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+check(
+  '未知工具名被回填成错误结果（静默丢弃会让模型以为自己没调用过）',
+  unknownBodies.length >= 2 && String(unknownBodies[1]).includes('未知工具: make_coffee'),
+  unknownBodies.length >= 2 ? '错误提示已进第二轮请求体' : `${unknownBodies.length} 轮请求`
+)
+unknownServer.closeAllConnections?.()
+unknownServer.close()
+
+// --- 防失控保险：轮次到 CHAT_SEARCH_MAX_ROUNDS 时停止继续搜索 ---
+// 假模型**一直**回工具调用，直到端口自己踩到上限。搜索后端是本地假服务，每轮很快。
+const maxRoundBodies = []
+const maxRoundServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    maxRoundBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(
+      'data: ' +
+        JSON.stringify({
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call_loop_' + String(maxRoundBodies.length),
+                    type: 'function',
+                    function: { name: 'local_web_search', arguments: '{"query":"再搜一次"}' }
+                  }
+                ]
+              }
+            }
+          ]
+        }) +
+        '\n\n'
+    )
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => maxRoundServer.listen(0, '127.0.0.1', () => resolve()))
+const maxRoundPort = maxRoundServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(maxRoundPort),
+  apiKey: 'sk-chat-max',
+  model: 'chat-max-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convMaxRound = await inv('conversations:create', agents[0].id, 'chat')
+await inv('chat:send', {
+  conversationId: convMaxRound.id,
+  text: '一直搜',
+  mode: 'chat',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const maxRoundDto = await inv('conversation:get', convMaxRound.id)
+const maxRoundAssistant = (maxRoundDto?.messages ?? []).filter((m) => m.role === 'assistant').pop()
+check(
+  '达到搜索轮数上限时正文追加防失控保险提示并停止',
+  String(maxRoundAssistant?.content).includes('已连续搜索') &&
+    String(maxRoundAssistant?.content).includes('轮(防失控保险), 停止继续搜索。'),
+  String(maxRoundAssistant?.content).slice(-40)
+)
+check(
+  '轮数是逐一执行的：正好 CHAT_SEARCH_MAX_ROUNDS 轮请求后收手（不多不少）',
+  maxRoundBodies.length === mod.Constants.CHAT_SEARCH_MAX_ROUNDS,
+  `${maxRoundBodies.length} 轮 / 上限 ${mod.Constants.CHAT_SEARCH_MAX_ROUNDS}`
+)
+maxRoundServer.closeAllConnections?.()
+maxRoundServer.close()
+
+// --- 交互模式：没有产出可渲染界面时的自动重做 ---
+const UI_NO_PROGRAM = '```guncat-ui\n$unused = 1\n```'
+const UI_PROGRAM = 'root = Card([\n  CardHeader("周报")\n])'
+// 界面补救请求的判据：它的系统提示词是 GuncatUiPrompt.REPAIR_SYSTEM（只有它用这句话）
+const isRepairBody = (raw) => raw.includes('你是界面程序生成器')
+
+// 场景 A：主回答没有可用界面 → 单独要一份界面程序，成功 → 追加一条带围栏的 assistant 消息
+const fixBodies = []
+const fixServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    fixBodies.push(raw)
+    const content = isRepairBody(raw) ? UI_PROGRAM : UI_NO_PROGRAM
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: content } }] }) + '\n\n')
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => fixServer.listen(0, '127.0.0.1', () => resolve()))
+const fixPort = fixServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(fixPort),
+  apiKey: 'sk-ui-fix',
+  model: 'ui-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convUiFix = await inv('conversations:create', agents[0].id, 'interactive')
+await inv('work:run', {
+  conversationId: convUiFix.id,
+  text: '出一份周报界面',
+  mode: 'interactive',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+check(
+  '交互模式界面不成形时触发了 generateUiProgram 的单独请求',
+  fixBodies.filter(isRepairBody).length === 1,
+  `${fixBodies.filter(isRepairBody).length} 次补救请求 / 共 ${fixBodies.length} 次`
+)
+const uiFixDto = await inv('conversation:get', convUiFix.id)
+const uiFixAssistant = (uiFixDto?.messages ?? []).filter((m) => m.role === 'assistant').pop()
+check(
+  '补回来的界面是一条带 guncat-ui 围栏的 assistant 消息',
+  String(uiFixAssistant?.content).includes('```guncat-ui') &&
+    String(uiFixAssistant?.content).includes('root = Card('),
+  String(uiFixAssistant?.content).slice(0, 50)
+)
+check(
+  '这条消息的展示文案是「（界面已重新生成）」（源码不进正文展示位）',
+  uiFixAssistant?.displayContent === '（界面已重新生成）',
+  String(uiFixAssistant?.displayContent)
+)
+fixServer.closeAllConnections?.()
+fixServer.close()
+
+// 场景 B：单独生成也失败 → 追加 UI_CONTINUE_MESSAGE 的 user 消息，并**再跑一轮**
+let fallbackRounds = 0
+const fallbackBodies = []
+const fallbackServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    fallbackBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    if (isRepairBody(raw)) {
+      // 补救请求回空（generateUiProgram 会按「空响应」重试一次后抛错）
+      res.write('data: [DONE]\n\n')
+      res.end()
+      return
+    }
+    fallbackRounds++
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: UI_NO_PROGRAM } }] }) + '\n\n')
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => fallbackServer.listen(0, '127.0.0.1', () => resolve()))
+const fallbackPort = fallbackServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(fallbackPort),
+  apiKey: 'sk-ui-fallback',
+  model: 'ui-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convUiFallback = await inv('conversations:create', agents[0].id, 'interactive')
+await inv('work:run', {
+  conversationId: convUiFallback.id,
+  text: '出一份周报界面',
+  mode: 'interactive',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const uiFallbackDto = await inv('conversation:get', convUiFallback.id)
+const continueMsg = (uiFallbackDto?.messages ?? []).find(
+  (m) => m.role === 'user' && m.content === mod.Constants.UI_CONTINUE_MESSAGE
+)
+check(
+  '单独生成失败时追加 UI_CONTINUE_MESSAGE 的 user 消息',
+  continueMsg !== undefined,
+  continueMsg !== undefined ? String(continueMsg.content).slice(0, 30) : '(没有续写消息)'
+)
+check(
+  '这条续写消息的展示文案是「（界面输出被截断，已自动续写）」',
+  continueMsg?.displayContent === '（界面输出被截断，已自动续写）',
+  String(continueMsg?.displayContent)
+)
+check(
+  '兜底路径真的**又跑了工作循环**（不是只追加一条消息就收场）',
+  fallbackRounds >= 2,
+  `${fallbackRounds} 轮工作循环`
+)
+check(
+  '补救次数被 UI_CONTINUE_MAX_ROUNDS 卡住（不会无限续命）',
+  fallbackBodies.filter(isRepairBody).length <=
+    mod.Constants.UI_CONTINUE_MAX_ROUNDS * (mod.Constants.WORK_LLM_RETRY_MAX + 1),
+  `${fallbackBodies.filter(isRepairBody).length} 次补救请求`
+)
+fallbackServer.closeAllConnections?.()
+fallbackServer.close()
+
+// 场景 C：正常产出界面 → 不该多打一次请求
+const okBodies = []
+const okServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    okBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: UI_PROGRAM } }] }) + '\n\n')
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => okServer.listen(0, '127.0.0.1', () => resolve()))
+const okPort = okServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(okPort),
+  apiKey: 'sk-ui-ok',
+  model: 'ui-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convUiOk = await inv('conversations:create', agents[0].id, 'interactive')
+await inv('work:run', {
+  conversationId: convUiOk.id,
+  text: '出一份周报界面',
+  mode: 'interactive',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+check(
+  '界面正常产出时不会多打一次补救请求',
+  okBodies.length === 1 && okBodies.filter(isRepairBody).length === 0,
+  `${okBodies.length} 次请求`
+)
+okServer.closeAllConnections?.()
+okServer.close()
+
+// 场景 D：工作模式不该被界面补救波及（只有交互模式才有这个问题）
+const workBodies = []
+const workUiServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    workBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: UI_NO_PROGRAM } }] }) + '\n\n')
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => workUiServer.listen(0, '127.0.0.1', () => resolve()))
+const workUiPort = workUiServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(workUiPort),
+  apiKey: 'sk-ui-work',
+  model: 'ui-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convUiWork = await inv('conversations:create', agents[0].id, 'work')
+await inv('work:run', {
+  conversationId: convUiWork.id,
+  text: '写一份说明（工作模式）',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+check(
+  '工作模式不触发界面补救（它没有「界面没成形」这回事）',
+  workBodies.length === 1 && workBodies.filter(isRepairBody).length === 0,
+  `${workBodies.length} 次请求`
+)
+workUiServer.closeAllConnections?.()
+workUiServer.close()
+
+searchServer.closeAllConnections?.()
+searchServer.close()
+
+console.log(`\n聊天多轮与界面补助验证：通过 ${passed - passedBeforeChatUi} 项`)
 
 console.log(`\nIPC 验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
