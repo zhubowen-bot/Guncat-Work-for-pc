@@ -1,4 +1,4 @@
-// 交互模式渲染器的无头验证：用 react-dom/server 把界面程序渲染成 HTML 字符串，
+﻿// 交互模式渲染器的无头验证：用 react-dom/server 把界面程序渲染成 HTML 字符串，
 // 断言关键组件确实出现在产物里。
 //
 // 为什么值得做：Electron GUI 在本机跑不起来，但「元素树 → React 组件树」这一段
@@ -565,6 +565,19 @@ check(
     groupedShell.includes('思考') &&
     !groupedShell.includes('>已完成<'),
   groupedShell.includes('>已完成<') ? '仍是「已完成」' : '已改为思考栏'
+)
+check(
+  '思考栏的展开箭头在**行尾**（不在最左边跟状态图标挤在一起）',
+  (() => {
+    // 注意：</button> 要**从 head 之后**开始找 —— 这个回合前面的任务卡自带按钮，
+    // 直接 indexOf 会取到它，切片变空、断言假红（我自己踩过一次）。
+    const start = groupedShell.indexOf('disclosure__head')
+    const head = groupedShell.slice(start, groupedShell.indexOf('</button>', start))
+    const title = head.indexOf('disclosure__title')
+    const caret = head.indexOf('disclosure__caret')
+    return title >= 0 && caret > title
+  })(),
+  '箭头在标题之后'
 )
 check(
   '交互模式的活动栏**按时间顺序**铺开（思考与工具不各自归堆）—— 用户明确要求',

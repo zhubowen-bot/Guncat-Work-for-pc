@@ -1623,6 +1623,12 @@ select {
   transform: rotate(180deg);
 }
 
+/* 行尾的展开箭头：`margin-left: auto` 把它顶到最右边（用户要求箭头放右边，
+   否则它紧挨着左侧的状态图标，两个图形挤在一起像打架）。 */
+.disclosure__caret--end {
+  margin-left: auto;
+}
+
 .disclosure__leading {
   display: inline-flex;
   align-items: center;

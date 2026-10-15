@@ -116,15 +116,18 @@ export function Disclosure({
           }
         }}
       >
-        <span className="disclosure__caret">
-          <IconChevronDown size={14} />
-        </span>
         {leading !== undefined ? <span className="disclosure__leading">{leading}</span> : null}
         <span className="disclosure__title">{title}</span>
         {subtitle !== undefined && subtitle !== '' ? (
           <span className="disclosure__subtitle">{subtitle}</span>
         ) : null}
         {trailing !== undefined ? <span className="disclosure__trailing">{trailing}</span> : null}
+        {/* 展开箭头放在**最右边**（`margin-left:auto` 把它顶到行尾）：
+            以前它在最左边，紧挨着状态图标（对勾/转圈），两个图形挤在一起，
+            用户直接说「和那个勾打架了」。 */}
+        <span className="disclosure__caret disclosure__caret--end">
+          <IconChevronDown size={14} />
+        </span>
       </button>
       {open ? <div className="disclosure__body">{children}</div> : null}
     </div>
