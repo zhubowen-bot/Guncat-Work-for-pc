@@ -27,6 +27,8 @@ export { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 export { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
 export { ContextBudget } from '@core/common/ContextBudget'
 export { Constants } from '@core/common/Constants'
+// 运行时快照断言要直接引用生产侧的识别前缀，避免测试里再抄一份字面量导致两边悄悄漂移
+export { AgentLoopService } from '@core/service/AgentLoopService'
 export { sanitizeTableHtml } from '@main/sanitizeHtml'
 `
 )
@@ -1898,8 +1900,11 @@ check(
 )
 check(
   '端到端：用户同时看得见「已自动修剪」与「已自动压缩: N 条」两条标注',
+  // N 从 2 变成 3 是运行时快照带来的：压缩边界是「消息条数 - 保留的尾部条数」，
+  // 快照本身就是一条 user 消息（且每轮请求前都已经在 history 里），边界因此整体后移一条。
+  // 原版同样如此（ChatViewModel 的 messages 在压缩时也已经带着此前的快照）。
   sceneB.content.includes('（已自动修剪早期过长的工具结果以释放上下文）') &&
-    sceneB.content.includes('（已自动压缩早期历史: 2 条已汇总为状态摘要）'),
+    sceneB.content.includes('（已自动压缩早期历史: 3 条已汇总为状态摘要）'),
   sceneB.content.slice(0, 80)
 )
 check(
@@ -2585,6 +2590,263 @@ searchServer.closeAllConnections?.()
 searchServer.close()
 
 console.log(`\n聊天多轮与界面补助验证：通过 ${passed - passedBeforeChatUi} 项`)
+
+// --- 运行时快照（RUNTIME SNAPSHOT）---
+//
+// 内核里 buildRuntimeSnapshot / findLastSnapshot / shouldAppendSnapshot 早就写好了，
+// 却**全库零调用点**。用户能直接感到的后果：模型不知道今天是几号（问「今天」「本周」只能瞎猜）、
+// 不知道当前工作区有哪些文件、不知道当前 todo / 自主目标 / 定时提醒（跨轮都会丢）。
+//
+// 这里用本地假模型服务把真正发出去的请求体抓下来，验证三件事：
+//   1. 每轮请求末尾确实带着最新状态快照（日期 + 文件树 + 清单/目标/提醒段落）；
+//   2. 状态没变时**不追加第二份**（逐字节相同）—— 这是请求前缀稳定、跨轮 KV 缓存命中的守门条件；
+//   3. 状态真的变了（新 todo / 新文件）时才追加新快照，旧快照仍留在历史里、新快照在末尾。
+const passedBeforeSnapshot = passed
+// 直接用生产侧的常量：测试抄一份字面量的话，将来改了前缀这里会静默失效
+const SNAPSHOT_PREFIX = mod.AgentLoopService.RUNTIME_SNAPSHOT_PREFIX
+const SNAPSHOT_SEED_FILE = 'seed-alpha.txt'
+const SNAPSHOT_NEW_FILE = 'runtime-snapshot-new.txt'
+const SNAPSHOT_TODO_TEXT = '运行时快照断言项'
+const SNAPSHOT_GOAL_TEXT = '把端口缺的运行时快照补齐'
+const SNAPSHOT_SCHEDULE_TEXT = '记得回来看快照'
+// buildRuntimeSnapshot 的日期格式：2026年08月30日 星期六 —— 按当天现算，不写死某一天
+const snapshotToday = (() => {
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六']
+  return (
+    String(now.getFullYear()) +
+    '年' + pad(now.getMonth() + 1) +
+    '月' + pad(now.getDate()) +
+    '日 星期' + weekdays[now.getDay()]
+  )
+})()
+
+const snapshotBodies = []
+// 标题生成与上下文压缩是同一条服务上的旁路请求，不参与轮次编排（与上面的预算场景同一写法）
+const snapshotLoopBodies = () =>
+  snapshotBodies.filter((b) => !b.includes('会话标题生成器') && !b.includes('【上下文压缩指令】'))
+const jsonMessages = (raw) => {
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed?.messages) ? parsed.messages : []
+  } catch {
+    return []
+  }
+}
+const lastMessage = (raw) => {
+  const msgs = jsonMessages(raw)
+  return msgs.length === 0 ? null : msgs[msgs.length - 1]
+}
+// 历史里按顺序排好的快照正文（用于验证「没变不追加 / 变了追加 / 旧的还在」）
+const snapshotContents = (raw) =>
+  jsonMessages(raw)
+    .map((m) => (typeof m.content === 'string' ? m.content : ''))
+    .filter((c) => c.startsWith(SNAPSHOT_PREFIX))
+
+const snapshotServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    snapshotBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n')
+    const done = () => {
+      res.write('data: [DONE]\n\n')
+      res.end()
+    }
+    if (raw.includes('会话标题生成器')) {
+      send({ choices: [{ delta: { content: '运行时快照' } }] })
+      done()
+      return
+    }
+    const round = snapshotLoopBodies().length
+    const call = (name, args) =>
+      send({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_snap_' + String(round),
+                  type: 'function',
+                  function: { name, arguments: JSON.stringify(args) }
+                }
+              ]
+            }
+          }
+        ]
+      })
+    if (round === 1) {
+      // 只读工具：工作区不变，用来验证「第二轮不会再追加一份快照」
+      call('get_workspace_tree', {})
+    } else if (round === 2) {
+      // 写任务清单：状态变了，下一步必须补一份新快照（含 <task_todo>）
+      call('todo_write', {
+        todos: JSON.stringify([{ content: SNAPSHOT_TODO_TEXT, status: 'in_progress' }])
+      })
+    } else if (round === 3) {
+      // 写新文件：状态又变了，快照里要出现这个新文件名
+      call('write_file', { path: SNAPSHOT_NEW_FILE, content: '运行时快照验证\n' })
+    } else {
+      send({ choices: [{ delta: { content: '快照验证完成' } }] })
+    }
+    done()
+  })
+})
+await new Promise((resolve) => snapshotServer.listen(0, '127.0.0.1', () => resolve()))
+const snapshotPort = snapshotServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(snapshotPort),
+  apiKey: 'sk-snapshot-test',
+  model: 'snapshot-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convSnap = await inv('conversations:create', agents[0].id, 'work')
+const snapRoot = session.workspaceRoot(convSnap.id)
+fs.mkdirSync(snapRoot, { recursive: true })
+fs.writeFileSync(path.join(snapRoot, SNAPSHOT_SEED_FILE), '种子文件\n', 'utf8')
+await inv('work:run', {
+  conversationId: convSnap.id,
+  text: '看看工作区',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const snapBodies = snapshotLoopBodies()
+check(
+  '工作循环每轮请求都跑了 4 轮（后面的快照断言才有对照）',
+  snapBodies.length === 4,
+  `${snapBodies.length} 轮循环请求`
+)
+
+const firstBody = snapBodies[0] ?? ''
+const firstLast = lastMessage(firstBody)
+const firstSnap = firstLast === null ? '' : String(firstLast.content ?? '')
+check(
+  '运行时快照进了第一轮请求的末尾（此前 buildRuntimeSnapshot 零调用点）',
+  firstLast !== null &&
+    firstLast.role === 'user' &&
+    firstSnap.startsWith(SNAPSHOT_PREFIX) &&
+    snapshotContents(firstBody).length === 1,
+  firstSnap.slice(0, 24) || '(没有快照消息)'
+)
+check(
+  '快照带上了今天的日期（模型此前只能瞎猜「今天」）',
+  firstSnap.includes(snapshotToday),
+  firstSnap.includes(snapshotToday) ? snapshotToday : firstSnap.slice(0, 60)
+)
+check(
+  '快照带上了工作区文件树（工作区里有文件时出现文件名）',
+  firstSnap.includes('<workspace_files>') && firstSnap.includes(SNAPSHOT_SEED_FILE)
+)
+
+// 判重：工作区没变 → 新快照与历史末尾快照逐字节相同 → 不追加第二份。
+// 这是「请求前缀稳定 / KV 缓存命中」的守门断言：前缀每轮都变，缓存命中率立刻归零。
+const secondBody = snapBodies[1] ?? ''
+const secondSnaps = snapshotContents(secondBody)
+check(
+  '第二轮请求体里没有第二条快照（状态没变 → 逐字节相同 → 不追加，前缀保持稳定）',
+  secondSnaps.length === 1 && secondSnaps[0] === firstSnap,
+  `${secondSnaps.length} 条快照`
+)
+
+// 状态真的变了（todo_write 写进了清单）→ 追加新快照，且旧快照仍留在历史里
+const thirdBody = snapBodies[2] ?? ''
+const thirdSnaps = snapshotContents(thirdBody)
+const thirdLast = lastMessage(thirdBody)
+check(
+  '写了 todo 之后补上新快照（历史里变成两份：旧的仍在、新的在末尾）',
+  thirdSnaps.length === 2 &&
+    thirdSnaps[0] === firstSnap &&
+    thirdLast !== null &&
+    String(thirdLast.content ?? '') === thirdSnaps[1],
+  `${thirdSnaps.length} 条快照`
+)
+check(
+  '快照带上了任务清单段落（<task_todo> + 清单正文）',
+  thirdSnaps.length === 2 &&
+    thirdSnaps[1].includes('<task_todo>') &&
+    thirdSnaps[1].includes(SNAPSHOT_TODO_TEXT)
+)
+
+// 再改一次状态（写了新文件）→ 第三份快照出现，含新文件名；旧快照全部保留，新的在末尾
+const fourthBody = snapBodies[3] ?? ''
+const fourthSnaps = snapshotContents(fourthBody)
+const fourthLast = lastMessage(fourthBody)
+check(
+  '往工作区写新文件后再跑一轮：出现新快照（含新文件名），旧快照仍在历史里，新快照在末尾',
+  fourthSnaps.length === 3 &&
+    fourthSnaps[0] === firstSnap &&
+    fourthSnaps[1] === thirdSnaps[1] &&
+    fourthSnaps[2].includes(SNAPSHOT_NEW_FILE) &&
+    fourthLast !== null &&
+    String(fourthLast.content ?? '') === fourthSnaps[2] &&
+    fourthLast.role === 'user',
+  `${fourthSnaps.length} 条快照`
+)
+
+// 自主目标与定时提醒：写入工作区的 .goal.json / .schedule.json 后，快照里要出现对应段落
+const convSnapMeta = await inv('conversations:create', agents[0].id, 'work')
+const snapMetaRoot = session.workspaceRoot(convSnapMeta.id)
+fs.mkdirSync(snapMetaRoot, { recursive: true })
+fs.writeFileSync(
+  path.join(snapMetaRoot, '.goal.json'),
+  JSON.stringify({
+    objective: SNAPSHOT_GOAL_TEXT,
+    status: 'active',
+    rounds: 3,
+    maxRounds: 40,
+    note: '',
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  }),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(snapMetaRoot, '.schedule.json'),
+  JSON.stringify([
+    {
+      id: 'sch_snap_1',
+      message: SNAPSHOT_SCHEDULE_TEXT,
+      dueAt: Date.now() + 3600000,
+      everySeconds: 0,
+      createdAt: Date.now()
+    }
+  ]),
+  'utf8'
+)
+snapshotBodies.length = 0
+await inv('work:run', {
+  conversationId: convSnapMeta.id,
+  text: '看目标与提醒',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const metaFirst = snapshotLoopBodies()[0] ?? ''
+const metaLast = lastMessage(metaFirst)
+const metaText = metaLast === null ? '' : String(metaLast.content ?? '')
+check(
+  '快照带上了自主目标段落（<session_goal>）',
+  metaText.includes('<session_goal>') && metaText.includes(SNAPSHOT_GOAL_TEXT)
+)
+check(
+  '快照带上了定时提醒段落（<session_schedules>）',
+  metaText.includes('<session_schedules>') && metaText.includes(SNAPSHOT_SCHEDULE_TEXT)
+)
+snapshotServer.closeAllConnections?.()
+snapshotServer.close()
+
+console.log(`\n运行时快照验证：通过 ${passed - passedBeforeSnapshot} 项`)
 
 console.log(`\nIPC 验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {

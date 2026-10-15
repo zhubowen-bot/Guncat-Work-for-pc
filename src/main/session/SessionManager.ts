@@ -1341,6 +1341,12 @@ export class SessionManager {
             compactionEnv
           )
 
+          // ===== 运行时快照（原版 1985-1987 / 2617-2619：每一轮请求之前）=====
+          // 放在压缩之后：压缩会改写历史（摘要重建 / 整条裁剪），尾部快照可能已被汇总进
+          // 摘要或直接丢掉，这里补一次才保证本轮请求末尾一定带着最新状态。
+          // 压缩没改动历史时快照逐字节相同，判重会拦下，前缀缓存不受影响。
+          await this.appendRuntimeSnapshotIfNeeded(messages, conv.id)
+
           const targetMsg: Message = assistantMsg
           // 压缩标注放在正文开头，模型的流式增量接在它后面。
           // 必须从 streamed 起头：下面每个 token 都会用 patchMessage 整体覆盖 content，
@@ -1709,6 +1715,41 @@ export class SessionManager {
   }
 
   /**
+   * 追加运行时快照（移植原版 ChatViewModel.appendRuntimeSnapshotIfNeeded, 2984-3000）。
+   *
+   * 快照=「今天日期 + 工作区文件树 + 任务清单 + 自主目标 + 定时提醒」，作为 **user 消息**
+   * 追加到历史末尾（不进系统提示词）。它是模型跨轮、跨会话知道「现在是什么状态」的唯一来源：
+   * 系统提示词是静态的（改它会让整段前缀的 KV 缓存失效），而这些状态每轮都可能变。
+   *
+   * 为什么必须判重、不能每轮无脑 push：
+   * `buildRuntimeSnapshot` 里刻意不含时间戳（只有日期），所以工作区/清单/目标/提醒没变时
+   * 生成的字符串**逐字节相同**。历史是严格追加式增长的（压缩是唯一改写历史的操作），
+   * 相邻两轮请求因此共享逐字节相同的前缀 —— 模型侧 KV 缓存可跨轮命中，每轮只有真正新增的
+   * 尾部需要重新计算。一旦每轮都 push 一份，请求前缀每轮都变，缓存命中率立刻归零，
+   * 长任务的成本与首字延迟都会明显变差。所以用 LoopDecisions.shouldAppendSnapshot 与历史中
+   * 最后一条快照比对，只有真的变了才追加。
+   *
+   * 顺带一提：状态真的变化（新文件 / 新 todo / 跨天）时字符串自然不同，判重会放行一次新快照，
+   * 而快照正文自己声明「取代此前所有快照」，模型知道以最后一条为准，旧快照留在历史里不会误导。
+   */
+  private async appendRuntimeSnapshotIfNeeded(messages: LoopMessage[], convId: string): Promise<void> {
+    const ctx: Context = this.ctx()
+    // 工作区文件树随文件操作/上传自动刷新，是快照里最容易变的部分
+    const tree: string = await WorkFileService.listWorkspaceTree(ctx, convId)
+    const todoText: string = WorkFileService.readTodo(ctx, convId)
+    const root: string = WorkFileService.workspaceRoot(ctx, convId)
+    const goal = GoalService.read(root)
+    const goalText: string = goal !== null ? GoalService.render(goal) : ''
+    // renderList 在空清单时返回「(无提醒)」而不是空串 —— 与原版一致，
+    // 于是 <session_schedules> 段落总是存在（没有提醒时显式告诉模型"没有"）
+    const scheduleText: string = ScheduleService.renderList(ScheduleService.list(root))
+    const snapshot: string = AgentLoopService.buildRuntimeSnapshot(tree, todoText, goalText, scheduleText)
+    if (LoopDecisions.shouldAppendSnapshot(AgentLoopService.findLastSnapshot(messages), snapshot)) {
+      messages.push(LoopMessage.user(snapshot))
+    }
+  }
+
+  /**
    * 单轮模型请求（带「上下文溢出后强制压缩并重试一次」）。
    *
    * 移植自原版 runStepWithOverflowRetry（2941-2973）：服务端明确报上下文超限（400/413/超长）
@@ -1752,6 +1793,9 @@ export class SessionManager {
         throw err
       }
       onForcedNote(forcedNote)
+      // 强制压缩改写了历史：末尾快照可能已随旧历史被摘要/裁剪掉，重试前必须补回来，
+      // 否则重试的这一请求会「不知道今天是几号、工作区有什么」（原版 2964-2965）。
+      await this.appendRuntimeSnapshotIfNeeded(messages, request.conversationId)
       return await AgentLoopService.runTurnWithRetry(
         config,
         messages,
