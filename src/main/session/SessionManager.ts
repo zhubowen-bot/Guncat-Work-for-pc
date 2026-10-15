@@ -960,6 +960,17 @@ export class SessionManager {
     callbacks.onUsage = (speed: number, hit: number): void => {
       this.patchMessage(conv.id, assistantMsg.id, { tokenSpeed: speed, cacheHitRate: hit })
     }
+    // 请求失败必须落到消息与状态里（原版 handleStreamError 3394-3408）。
+    // 不接这个回调的后果很具体：`ChatService.streamChat` 是**吞掉异常**再回调的，
+    // 所以聊天模式一旦网络/鉴权失败，用户看到的是一条**空白回答**、
+    // `turn:finished` 还报 'ok'，连失败原因都没有 —— 看上去像「模型不想说话」。
+    callbacks.onError = (text: string): void => {
+      failure = text === '' ? '请求失败' : text
+      this.patchMessage(conv.id, assistantMsg.id, {
+        content: streamed === '' ? `⚠️ ${failure}` : `${streamed}\n\n⚠️ ${failure}`,
+        displayContent: streamed === '' ? `⚠️ ${failure}` : `${streamed}\n\n⚠️ ${failure}`
+      })
+    }
 
     // 本轮请求要带的历史与「新用户文本」：
     //   首轮 = 既有历史 + 本次提问（与改动前完全一致）；
@@ -1129,8 +1140,17 @@ export class SessionManager {
       failure = (e as Error)?.message ?? String(e)
     } finally {
       handle.busy = false
-      assistantMsg.content = streamed
-      assistantMsg.displayContent = streamed
+      // 收尾时把失败原因落到正文里（`onError` 已经即时刷过一次，但那一次可能被
+      // 后续的流式增量覆盖掉，这里以最终态再钉一遍）。正文为空就直接写这句，
+      // 否则空一行再接 —— 与原版 handleStreamError 的两分支一致。
+      if (failure !== '') {
+        const text: string = streamed === '' ? `⚠️ ${failure}` : `${streamed}\n\n⚠️ ${failure}`
+        assistantMsg.content = text
+        assistantMsg.displayContent = text
+      } else {
+        assistantMsg.content = streamed
+        assistantMsg.displayContent = streamed
+      }
       await this.persist()
       if (handle.abort.aborted) {
         this.emit({ type: 'turn:finished', conversationId: conv.id, messageId: assistantMsg.id, status: 'aborted' })

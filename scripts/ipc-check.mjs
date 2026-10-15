@@ -781,6 +781,82 @@ check(
 await new Promise((resolve) => badServer.close(resolve))
 await inv('settings:saveMultimodalConfig', mmBefore)
 
+// --- 聊天请求失败必须留下失败痕迹（原版 handleStreamError 3394-3408） ---
+//
+// 事故形状：`ChatService.streamChat` 是**吞掉异常**再回调 `onError` 的，
+// 而端口此前根本没接这个回调 —— 于是聊天模式一旦网络/鉴权失败，
+// 用户看到的是一条**空白回答**，`turn:finished` 还报 'ok'，连原因都没有。
+{
+  const failBodies = []
+  const failServer = http.createServer((req, res) => {
+    req.on('data', (chunk) => {
+      failBodies.push(chunk.toString('utf8'))
+    })
+    req.on('end', () => {
+      res.writeHead(429, { 'Content-Type': 'application/json' })
+      res.end('{"error":{"message":"rate limit exceeded"}}')
+    })
+  })
+  await new Promise((resolve) => failServer.listen(0, '127.0.0.1', resolve))
+  const failPort = failServer.address().port
+  await inv('settings:saveApiConfig', {
+    provider: 'openai-completions',
+    baseUrl: 'http://127.0.0.1:' + String(failPort),
+    apiKey: 'sk-fail-test',
+    model: 'fail-model',
+    temperature: 0,
+    topP: 0,
+    maxTokens: 0,
+    extraParams: '',
+    autoSuffix: true
+  })
+  const convFail = await inv('conversations:create', agents[0].id, 'chat')
+  events.length = 0
+  // chat:send 是「立刻返回、后台继续跑」的，必须等这一轮真的结束再读会话
+  const failRun = inv('chat:send', {
+    conversationId: convFail.id,
+    text: '这次一定失败',
+    mode: 'chat',
+    thinkingEnabled: false,
+    webSearchEnabled: false
+  })
+  await failRun
+  for (let i = 0; i < 200; i++) {
+    if (events.some((e) => e.type === 'turn:finished')) {
+      break
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  const failDto = await inv('conversation:get', convFail.id)
+  const failMessage = (failDto?.messages ?? []).filter((m) => m.role === 'assistant').pop()
+  check(
+    '聊天请求失败时正文里留下失败原因（不是一条空白回答）',
+    // 429 会被内核翻译成给用户看的中文文案，所以断言「非空 + 有警示前缀 + 确实是失败文案」，
+    // 而不是断言服务端原文（原文是给开发者看的）
+    String(failMessage?.content ?? '').startsWith('⚠️') &&
+      String(failMessage?.content ?? '').length > 4,
+    String(failMessage?.content ?? '').slice(0, 80)
+  )
+  check(
+    '失败那一轮的事件状态是 error（此前写死 ok）',
+    events.some((e) => e.type === 'turn:finished' && e.status === 'error'),
+    JSON.stringify(events.filter((e) => e.type === 'turn:finished').map((e) => e.status))
+  )
+  // 注意：发送时主进程会先推一条**派生**标题（首条用户消息推导，这里就是「这次一定失败」），
+  // 所以要等一会儿再看「有没有**新的**标题事件」——失败轮不该起标题（空答复起不出标题）。
+  const titleEventsAfterFail = events.filter((e) => e.type === 'conversation:title').length
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  check(
+    '失败的那一轮不再触发生成会话标题（空答复起不出标题）',
+    events.filter((e) => e.type === 'conversation:title').length === titleEventsAfterFail,
+    `标题事件 ${events.filter((e) => e.type === 'conversation:title').length} 条`
+  )
+  failServer.closeAllConnections?.()
+  failServer.close()
+}
+
+
+
 // --- 定时提醒推进：此前 ScheduleService.tick 零调用点 ---
 //
 // 事故形状：模型调 schedule_create 会成功返回、并对用户说「5 分钟后提醒你」，
@@ -1063,6 +1139,16 @@ const stopRun = inv('work:run', {
   webSearchEnabled: false
 })
 for (let i = 0; i < 250 && noteBodies.length === 0; i++) {
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+// 等第一段正文真的落盘再中止 —— 否则中止可能发生在模型还没吐字时，
+// 那样「标注单独成段」这条断言会因为正文为空而随机失败（不是代码问题，是测试时序问题）。
+for (let i = 0; i < 200; i++) {
+  const mid = await inv('conversation:get', convStop.id)
+  const midText = ((mid?.messages ?? []).filter((m) => m.role === 'assistant').pop()?.content ?? '')
+  if (String(midText) !== '') {
+    break
+  }
   await new Promise((resolve) => setTimeout(resolve, 20))
 }
 await inv('work:abort', convStop.id)
