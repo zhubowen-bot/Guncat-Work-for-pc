@@ -15,6 +15,7 @@ import type {
   MultimodalConfigDto,
   RendererStage,
   WorkspaceEntryDto,
+  WorkAnswerRequest,
   WorkRunRequest
 } from '../ipc/contract'
 
@@ -84,7 +85,14 @@ const api = {
   work: {
     run: (request: WorkRunRequest): Promise<void> => ipcRenderer.invoke(INVOKE.workRun, request),
     abort: (conversationId: string): Promise<void> =>
-      ipcRenderer.invoke(INVOKE.workAbort, conversationId)
+      ipcRenderer.invoke(INVOKE.workAbort, conversationId),
+    /**
+     * 回答一次挂起的 ask_user_question。
+     * 返回 false 表示这条提问已经不在挂起列表里了（超时/已中止/已作答过），
+     * 界面据此收掉卡片，不要让用户对着失效的按钮反复点。
+     */
+    answer: (request: WorkAnswerRequest): Promise<boolean> =>
+      ipcRenderer.invoke(INVOKE.workAnswer, request)
   },
 
   workspace: {

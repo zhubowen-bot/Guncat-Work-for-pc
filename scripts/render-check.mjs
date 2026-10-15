@@ -535,6 +535,11 @@ check(
   '思考-only'
 )
 check(
+  '没有工具调用时，思考内容**直接可见**（不是藏在默认收起的折叠栏里）—— 用户报障点',
+  mod.renderGroupedTurnThinkingOnly().includes('先看看目录结构'),
+  mod.renderGroupedTurnThinkingOnly().includes('先看看目录结构') ? '思考可见' : '思考被藏起来了'
+)
+check(
   '交互模式：中间轮不单独成块（只有最终答复有 answer 块）',
   (groupedShell.match(/class="answer"/g) ?? []).length === 1
 )
@@ -1138,6 +1143,74 @@ check(
     apiNorm.model === 'deepseek-chat' &&
     apiNorm.extraParams === '{"a": 1}' &&
     apiNorm.temperature === 0.7
+)
+
+// --- 提问卡片（ask_user_question）：工具会真的挂起，这张卡是「工具能不能用」的一半 ---
+//
+// 事故形状：这个工具曾被整个删掉 —— 因为原版的 AskUserCard.ets 没移植，工具挂起后
+// 没有任何作答入口，只能等 5 分钟超时。恢复工具就必须把卡片一起恢复，
+// 所以这里把单选/多选两种形态的产物与行为都钉住。
+console.log('\n31. 提问卡片（ask_user_question）')
+const askSingle = mod.renderAskCard(false)
+const askMulti = mod.renderAskCard(true)
+const askSingleText = decode(askSingle)
+const askMultiText = decode(askMulti)
+
+check('卡片标题是原版的「需要你的决定」', askSingleText.includes('需要你的决定'))
+check('问题原文一字不差地显示出来', askSingleText.includes('这份季度复盘要交成什么？'))
+check(
+  '选项 chips 全部渲染出来',
+  askSingleText.includes('内部汇报稿') &&
+    askSingleText.includes('对外发布稿') &&
+    askSingleText.includes('先给我看看大纲')
+)
+check('有「跳过，由智能体自行决定」这条出路', askSingleText.includes('跳过，由智能体自行决定'))
+check('有提交按钮', askSingle.includes('askcard__submit') && askSingleText.includes('提交'))
+check('有可选的文字补充输入', askSingle.includes('askcard__note'))
+check(
+  '单选形态：标记是圆点、右侧写「单选」',
+  askSingle.includes('data-shape="dot"') && askSingleText.includes('单选')
+)
+check(
+  '多选形态：标记是方框、右侧写「可多选」',
+  askMulti.includes('data-shape="box"') && askMultiText.includes('可多选')
+)
+check(
+  '两种形态的产物确实不同（不会把多选画成单选）',
+  askSingle !== askMulti && !askSingle.includes('data-shape="box"')
+)
+check(
+  '未勾选时两种形态的按钮都只是「提交」（数量只在多选且选中后出现）',
+  mod.askSubmitLabel(false, 0) === '提交' &&
+    mod.askSubmitLabel(false, 2) === '提交' &&
+    mod.askSubmitLabel(true, 0) === '提交' &&
+    mod.askSubmitLabel(true, 2) === '提交(2 项)',
+  mod.askSubmitLabel(true, 2)
+)
+check(
+  '单选：再点另一个是**替换**（不能同时选中两项）',
+  JSON.stringify(mod.askToggleSelection(['内部汇报稿'], '对外发布稿', false)) ===
+    JSON.stringify(['对外发布稿'])
+)
+check(
+  '多选：再点另一个是**累加**',
+  JSON.stringify(mod.askToggleSelection(['内部汇报稿'], '对外发布稿', true)) ===
+    JSON.stringify(['内部汇报稿', '对外发布稿'])
+)
+check(
+  '两种形态都支持取消勾选',
+  JSON.stringify(mod.askToggleSelection(['内部汇报稿'], '内部汇报稿', false)) === '[]' &&
+    JSON.stringify(mod.askToggleSelection(['内部汇报稿'], '内部汇报稿', true)) === '[]'
+)
+check(
+  '卡片挂在时间线末尾（工作模式的 loop-timeline 那条路径也在渲染它）',
+  mod.renderAskSlot().includes('loop-timeline')
+)
+check(
+  '卡片产物里没有 emoji / 装饰符号',
+  !/[\u2190-\u21ff\u2300-\u23ff\u2460-\u24ff\u25a0-\u25ff\u2600-\u27bf\u2b00-\u2bff\ufe0f\u{1f000}-\u{1faff}]/u.test(
+    askSingle + askMulti
+  )
 )
 
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)

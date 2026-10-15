@@ -15,9 +15,11 @@ import type {
   MultimodalConfigDto,
   PickedAttachmentDto,
   RendererStage,
+  WorkAnswerRequest,
   WorkRunRequest
 } from '../ipc/contract'
 import { SessionManager } from './session/SessionManager'
+import { AskUserBridge, AskAnswer } from '@core/service/AskUserBridge'
 import { transcribeAudio } from './asr'
 import { getMainWindow, markRendererAlive } from './window'
 import { bootLog, bootMark } from './bootlog'
@@ -124,6 +126,26 @@ export function registerIpcHandlers(session: SessionManager): void {
   })
   ipcMain.handle(INVOKE.workAbort, async (_e, conversationId: string) => {
     session.abort(conversationId)
+  })
+  /**
+   * 回答一次挂起的 ask_user_question（原版 ChatViewModel.answerAsk / cancelAsk）。
+   *
+   * 这条通道此前只在契约里声明着、没有任何处理器 —— 因为那个工具被整个删掉了。
+   * 返回布尔值表示「这次作答有没有落到一条真实挂起的提问上」：为 false 时界面应当
+   * 直接收掉卡片（多半是它已经被超时/中止落定了），而不是让用户反复点。
+   */
+  ipcMain.handle(INVOKE.workAnswer, async (_e, request: WorkAnswerRequest): Promise<boolean> => {
+    const requestId: string = request?.requestId ?? ''
+    if (requestId === '') {
+      return false
+    }
+    if (request.canceled === true) {
+      return AskUserBridge.cancel(requestId)
+    }
+    const answer: AskAnswer = new AskAnswer()
+    answer.selections = Array.isArray(request.selections) ? request.selections : []
+    answer.note = typeof request.note === 'string' ? request.note : ''
+    return AskUserBridge.answer(requestId, answer)
   })
   ipcMain.handle(
     INVOKE.messagePatch,

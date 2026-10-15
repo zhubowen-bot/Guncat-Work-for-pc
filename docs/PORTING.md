@@ -253,20 +253,33 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 | `core/platform/kit/PDFKit.ts` | 新增 `PdfBackend.openAsync?`、`PdfPageBackend.prepare?`、`PdfDocument.loadDocumentAsync`、`PdfPage.prepare()`；两个同步渲染方法改为抛出「请用异步 renderToPixelMap」 | 承载上述异步差异；平台适配层本来就不是逐字移植的部分 |
 | `core/platform/kit/NetworkKit.ts` | `buildSignal` 的 `readTimeout` 由一次性整段超时改成**读空闲**计时（每收到一块数据 `refreshReadTimer`）；`connectTimeout` 单独覆盖「未拿到响应头」那一段；`destroy()` 清理两个计时器 | 端口代码传的是鸿蒙的读空闲语义（工作 300000 / 聊天 180000）。当成整段超时的话，**任何超过 5 分钟的流式都会被硬掐断** |
 | `core/platform/kit/ImageKit.ts` | 新增 `image.createPixelMapFromBuffer()` | PDF.js 渲染出来的是 PNG 字节，端口代码期望 PixelMap；让 Electron 的依赖只经由本模块 |
-| `core/service/HarnessTools.ts` | 删除 `ask_user_question` 的工具定义与调度分支（保留一条同步兜底返回）；删除 `AskUserBridge` 导入 | 本平台没有向用户提问的界面（原版的 `views/AskUserCard.ets` 未移植），不删就会一直挂到 5 分钟超时。详见 `docs/PORTING.md` 末节 |
-| `core/service/SubagentService.ts` | 子代理工具白名单移除 `'ask_user_question'` | 同上 |
-| `core/service/AgentLoopService.ts` | ① 三处写文档工具说明与「需求分析」流程条目里的「必须先 ask_user_question 前置提问」改为「不得调用、改用最合理默认假设并在总结集中说明」；② 静态工具清单删掉该条目；③ 平台文案：`HarmonyOS 平台原生构建` → 桌面端、`手机竖屏/手机其他目录/手机可读格式` → 平台无关措辞 | ①不给提问界面就不能再要求模型去调用它，否则必然挂起。③逐字保留的原版文案会让模型自称鸿蒙手机应用、按手机窄屏排版 |
-| `core/common/PromptBuilder.ts` | 同上三项（工具说明、需求分析条目、工具清单、平台文案）；交互模式「不要 ask_user_question」改为「不要用提问工具」 | 同上 |
-| `core/service/WorkFileService.ts` | 三个写文档工具的描述改写；`search_web` 结果头部与注释里的「手机直连」改为「本机直连」 | 同上 |
-| `core/service/WorkSkillService.ts` | ppt/docx/xlsx 技能描述里的「新建前须前置提问」改为新口径 | 同上 |
+| `core/service/HarnessTools.ts` | **已恢复**：`ask_user_question` 的工具定义与调度分支照原版回来，`AskUserBridge` 导入一并恢复 | 这条补丁曾把该工具删掉（改成回一句「本平台没有提问界面，请用默认假设继续」），理由是原版的 `views/AskUserCard.ets` 没移植，真挂起等待就会一直挂到 5 分钟超时。**现在界面那一半补齐了**（AskUserBridge 通知 → `ask:user`/`ask:done` 事件 → 渲染层 `AskUserCard` → `work:answer` → 桥 resolve），于是恢复原版行为；超时与中止两条兜底路径都还在。 |
+| `core/service/SubagentService.ts` | **已恢复**：`'ask_user_question'` 回到 `excludedTools()` | 与上游逐字一致 —— 子代理本来就没有宿主界面通道，工具面必须排除它，否则子代理提问同样会挂到超时 |
+| `core/service/AgentLoopService.ts` | ① 写文档工具说明与「需求分析」流程条目里的「新建前必须 ask_user_question 前置提问」**已恢复原版措辞**；② 静态工具清单里的 `ask_user_question` 条目**已恢复**；③ 平台文案：`HarmonyOS 平台原生构建` → 桌面端、`手机竖屏/手机其他目录/手机可读格式` → 平台无关措辞 | ①② 工具回来了，提示词也必须跟着回来，否则模型根本不知道该问。③ 逐字保留的原版文案会让模型自称鸿蒙手机应用、按手机窄屏排版 |
+| `core/common/PromptBuilder.ts` | 同上三项（工具说明、需求分析条目、工具清单、平台文案）；交互模式那一条已恢复成原版的「不要 ask_user_question: 要问就用界面问」 | 同上；交互模式**不在**工具白名单里，那条纪律的原文口径本来就准确 |
+| `core/service/WorkFileService.ts` | 三个写文档工具的描述恢复原版；`search_web` 结果头部与注释里的「手机直连」改为「本机直连」 | 同上 |
+| `core/service/WorkSkillService.ts` | ppt/docx/xlsx 技能描述恢复成原版的「新建前须前置提问」 | 同上 |
 | `core/service/LocalWebSearch.ts` | 工具自述与结果文案里的「手机本地网络 / 手机内置 / 手机直连」改为「本机」 | 原版这么说是因为它真的跑在手机上；桌面端会据此说错话 |
 | `core/service/WebFetchService.ts` | `User-Agent` 从 `Mozilla/5.0 (HarmonyOS) GuncatWork/6.1` 改成桌面 UA | 同上 |
 | `core/common/GuncatUiLibrary.ts` | 组件提示文案「横向卡片轮播(手机上比网格更好读)」改为「在窄栏里比网格更好读」；「横向条形图(手机竖屏最易读)」改为「排名类数据在窄栏里最易读」 | 交互模式的组件选择说明，同样是平台措辞 |
-| `resources/skills/{docx,xlsx,ppt}/SKILL.md`、`ppt/reference/design-guide.md` | 「前置提问门」整节改为「默认假设门」（保留 5 项默认值表，改为自己取值并写进总结） | 与上面的 ask_user_question 下线配套 |
+| `resources/skills/{docx,xlsx,ppt}/SKILL.md`、`ppt/reference/design-guide.md` | **已恢复**：整节「默认假设门」改回原版的「前置提问门」（5 项问题表、`options` 建议、跳过条件都照原版） | 与上面的 ask_user_question 恢复配套：技能要求「新建前必须问」，工具与卡片都就位了才成立 |
 
 > 除上表外，`src/core/` 下**没有**对上游逻辑做过任何语义修改。
-> 同步上游时请按本表逐条重新施加 —— 尤其 `ask_user_question` 那几条：
-> 整体覆盖上游而不重新施加的话，那个工具会复活，而桌面端没有它的 UI，模型会一直挂到超时。
+> 同步上游时请按本表逐条重新施加。**`ask_user_question` 那几条现在是「不要删」而不是「要删」**：
+> 整体覆盖上游之后，只要渲染层的提问卡片链路（`AskUserBridge` 通知 → `ask:user` → `AskUserCard` → `work:answer`）
+> 还在，工具就是可用的；反过来，如果哪天又把卡片链路拿掉，必须同步把这四条补丁撤回去 ——
+> 没有界面的挂起等待就是当初删它的唯一原因。
+
+### 5.1.1 ask_user_question 的完整链路（同步上游时的核对清单）
+
+删掉它只需改一处（工具定义），恢复它却要四处同时到位，缺一处都会退化成「挂到超时」：
+
+| 环节 | 位置 | 缺了会怎样 |
+| --- | --- | --- |
+| 工具定义 + 挂起等待 | `core/service/HarnessTools.ts`（`toolDefs()` / `toolAskUser`） | 模型不知道有这个工具，永远不会问 |
+| 生命周期通知 | `core/service/AskUserBridge.ts` 的 `setNotifier` | 工具挂起了，但主进程不发 `ask:user`，界面不知道要画卡片 |
+| 事件 → 界面 | `SessionManager` 构造里装通知器；`store.ts` 的 `pendingAsk`；`components/AskUserCard.tsx`；`Timeline.tsx` 末尾渲染 | 用户看不到问题，只能等 5 分钟超时 |
+| 回填 + 取消 | `ipc.ts` 的 `work:answer`、preload/env.d.ts 的 `work.answer`、`SessionManager.abort()` 里的 `AskUserBridge.cancelAll()` | 点了提交没反应，或者点了「停止」后那一轮永远结束不了 |
 
 ### 5.2 阶段七新增的平台层改动（同步上游时同样要重新施加）
 
@@ -275,6 +288,11 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 | `src/main/session/SessionManager.ts` | ① 工作循环接入三级上下文预算管理（修剪早期工具结果 → 摘要压缩重建 → 从最旧处裁剪），并把说明写进轮次正文；② 收尾标注（手动停止 / max tokens / 步数耗尽 / 失败原因）；③ `turn:finished` 在「本轮无工具调用」路径上按 `abort.aborted` 报状态；④ 顶到 `max_tokens` 时按 `LoopDecisions.shouldBreakOnMaxTokens` 收尾（排在工具执行之前） | ①②③④ 都是原版有、桌面端漏掉的行为。③尤其隐蔽：手动停止的一轮会被报成「正常完成」 |
 | `src/core/common/LoopDecisions.ts` | 无改动，但**首次被主进程调用** | 它本来就是原版的决策层，端口一直没人调 |
 | `src/renderer/src/components/Markdown.tsx` | 新增 `safeUrlTransform` 并接到 `ReactMarkdown` 的 `urlTransform` | react-markdown v9 的默认变换会把 `data:` 整个剥掉，而桌面端的图片正是 data URL。白名单放行 http/https/mailto/app:/`data:image/*`/相对路径，拒绝 `javascript:` 与 `data:text/html` |
+| `src/core/service/AskUserBridge.ts` | 新增 `setNotifier` / `AskPhase` / `PendingAsk.conversationId`；`ask()` 多一个可选 `conversationId` | 鸿蒙侧 ChatPage 每秒轮询 `current()` 就能画卡片（只有一个前台会话）；桌面端渲染层在另一个进程、而且多会话并存，必须由主进程按会话推事件 |
+| `src/ipc/contract.ts` | `ask:user` 事件补 `multiSelect`；新增 `ask:done` 事件与 `WorkAnswerRequest` | 前者是单选/多选两种卡片形态的唯一判据；后者让卡片在作答/跳过/超时后收起来 |
+| `src/main/ipc.ts` · `src/preload/index.ts` · `src/renderer/src/env.d.ts` | 实现 `work:answer`（含 `canceled` 取消路径）并暴露 `window.guncat.work.answer` | 契约里这条通道早就声明着，但从来没有处理器 —— 因为工具被删了 |
+| `src/main/session/SessionManager.ts` | 构造函数里装 `AskUserBridge` 通知器（翻译成 `ask:user` / `ask:done`）；`abort()` 末尾加 `AskUserBridge.cancelAll()` | 不装通知器界面看不到卡片；不 cancelAll 则「停止」之后工具还挂在原处，轮次永远结束不了 |
+| `src/renderer/src/components/AskUserCard.tsx`、`Timeline.tsx`、`store.ts`、`styles.css` | 新增提问卡片（原版 `views/AskUserCard.ets` 的逐条对应）、时间线末尾渲染、`pendingAsk` 状态与作答动作 | 原版由 `ChatPage` 每秒轮询 ViewModel 的 `pendingAsk` 并渲染卡片；桌面端换成事件驱动 |
 
 ### 5.3 有意保留的差异（不是漏掉）
 

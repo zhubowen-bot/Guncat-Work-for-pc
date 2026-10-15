@@ -2879,6 +2879,333 @@ snapshotServer.close()
 
 console.log(`\n运行时快照验证：通过 ${passed - passedBeforeSnapshot} 项`)
 
+// --- ask_user_question：工具下发 / 挂起 / 回填 / 中止 ---
+//
+// 事故形状（用户报障的原话：「第一轮为什么不是修复 ask_user_question 工具而是给我删掉了」）：
+// 这个工具曾被**整个删掉**，理由是没有提问卡片时它会一直挂到 5 分钟超时。
+// 恢复它必须四个环节同时到位，缺任何一个都会退化成「挂到超时」，所以这里逐环节钉死：
+//   1. 工具定义真的进了请求体（模型看得到才可能问）；
+//   2. 工具挂起时主进程真的 emit 了 ask:user（带 question/options/multiSelect/requestId）；
+//   3. work:answer 回填后工具返回、轮次继续（回答文本真的进了下一轮请求体）；
+//   4. 中止时挂起的提问被取消（ask:done/canceled，且 run 承诺一定会落定）。
+const passedBeforeAsk = passed
+console.log('\n21. ask_user_question（工具下发 / 挂起 / 回填 / 中止）')
+
+const ASK_QUESTION_1 = '这份季度复盘要交成什么？'
+const ASK_OPTION_A = '内部汇报稿'
+const ASK_OPTION_B = '对外发布稿'
+const ASK_NOTE = '页数控制在 5 页以内'
+const ASK_FINAL_TEXT = '已按你的选择继续'
+
+const ASK_TOOL_RESULT_MARK = '[ask_user_question]'
+const ASK_CANCEL_MARK = '用户未回答(已取消)'
+
+/**
+ * 请求体里是不是已经带着 ask_user_question 的工具结果了。
+ * 作答与「跳过」两条路径的回填文本不同（前者带 [ask_user_question] 前缀，后者只有取消说明），
+ * 两段都要认 —— 只认前者的后果很严重：跳过之后假服务会再要求一次提问，
+ * 而那次没有任何人会作答，测试就会真的挂起来。
+ */
+const hasAskResult = (raw) => raw.includes(ASK_TOOL_RESULT_MARK) || raw.includes(ASK_CANCEL_MARK)
+
+/**
+ * 假模型服务：工具结果还没回填时要求调用 ask_user_question（工具会真的挂起等待界面作答），
+ * 一旦请求体里出现了工具结果就给最终答复。请求体全部留下来供断言。
+ */
+function makeAskServer(askArgs) {
+  const bodies = []
+  const server = http.createServer((req, res) => {
+    let raw = ''
+    req.on('data', (chunk) => {
+      raw += chunk.toString('utf8')
+    })
+    req.on('end', () => {
+      bodies.push(raw)
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      const send = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n')
+      const done = () => {
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }
+      // 标题生成是旁路请求，不参与轮次编排（与上面的快照场景同一写法）
+      if (raw.includes('会话标题生成器')) {
+        send({ choices: [{ delta: { content: '提问' } }] })
+        done()
+        return
+      }
+      if (hasAskResult(raw)) {
+        send({ choices: [{ delta: { content: ASK_FINAL_TEXT } }] })
+        done()
+        return
+      }
+      send({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_ask_1',
+                  type: 'function',
+                  function: { name: 'ask_user_question', arguments: JSON.stringify(askArgs) }
+                }
+              ]
+            }
+          }
+        ]
+      })
+      done()
+    })
+  })
+  return { server, bodies }
+}
+
+/** 只看轮次请求：标题生成与上下文压缩是旁路请求，会打乱「第几轮」的判据 */
+const askLoop = (bodies) =>
+  bodies.filter((b) => !b.includes('会话标题生成器') && !b.includes('【上下文压缩指令】'))
+
+async function useAskServer(port) {
+  await inv('settings:saveApiConfig', {
+    provider: 'openai-completions',
+    baseUrl: 'http://127.0.0.1:' + String(port),
+    apiKey: 'sk-ask-test',
+    model: 'ask-model',
+    temperature: 0,
+    topP: 0,
+    maxTokens: 0,
+    extraParams: '',
+    autoSuffix: true
+  })
+}
+
+const askOptionsJson = JSON.stringify([ASK_OPTION_A, ASK_OPTION_B])
+const ask1 = makeAskServer({
+  question: ASK_QUESTION_1,
+  // options / multi_select 都按工具定义声明的 string 形态传（与本项目 todo_write 的 todos 同一约定：
+  // JSON 字符串进、工具内部再解析；HarnessTools 的 strListArg / boolArg 两种形态都吃得下）
+  options: askOptionsJson,
+  multi_select: 'false'
+})
+await new Promise((resolve) => ask1.server.listen(0, '127.0.0.1', () => resolve()))
+await useAskServer(ask1.server.address().port)
+const ask1Loop = () => askLoop(ask1.bodies)
+
+const convAsk = await inv('conversations:create', agents[0].id, 'work')
+events.length = 0
+const askRun = inv('work:run', {
+  conversationId: convAsk.id,
+  text: '做一份季度复盘',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const askUserEvent = await waitForEvent((e) => e.type === 'ask:user')
+check('工具挂起时主进程 emit 了 ask:user', askUserEvent !== null)
+check(
+  'ask:user 带着问题原文',
+  askUserEvent !== null && askUserEvent.question === ASK_QUESTION_1,
+  askUserEvent === null ? '(没有事件)' : String(askUserEvent.question)
+)
+check(
+  'ask:user 带着全部选项（界面才画得出 chips）',
+  askUserEvent !== null &&
+    Array.isArray(askUserEvent.options) &&
+    askUserEvent.options.length === 2 &&
+    askUserEvent.options[0] === ASK_OPTION_A,
+  askUserEvent === null ? '(没有事件)' : JSON.stringify(askUserEvent.options)
+)
+check(
+  'ask:user 带着 multiSelect=false（单选卡片）',
+  askUserEvent !== null && askUserEvent.multiSelect === false
+)
+check(
+  'ask:user 带 requestId 且属于本会话',
+  askUserEvent !== null &&
+    typeof askUserEvent.requestId === 'string' &&
+    askUserEvent.requestId !== '' &&
+    askUserEvent.conversationId === convAsk.id,
+  askUserEvent === null ? '(没有事件)' : String(askUserEvent.requestId)
+)
+check(
+  '此时轮次确实还挂在那里（没有 turn:finished）',
+  !events.some((e) => e.type === 'turn:finished' && e.conversationId === convAsk.id)
+)
+check(
+  '工具定义真的下发给模型了（第一轮请求体的工具表里有 ask_user_question）',
+  ask1Loop().length >= 1 && ask1Loop()[0].includes('"ask_user_question"'),
+  `${ask1Loop().length} 轮请求`
+)
+check(
+  '工具定义里带了「仅当存在影响整体方向的关键缺口…」的原版措辞',
+  ask1Loop().length >= 1 && ask1Loop()[0].includes('仅当存在影响整体方向的关键缺口')
+)
+
+// 作答：单选一项 + 文字补充
+const answered = await inv('work:answer', {
+  conversationId: convAsk.id,
+  requestId: askUserEvent.requestId,
+  canceled: false,
+  selections: [ASK_OPTION_A],
+  note: ASK_NOTE
+})
+check('work:answer 回填成功', answered === true)
+await askRun
+check(
+  '作答后工具返回、轮次继续跑完（拿到最终答复）',
+  (await inv('conversation:get', convAsk.id)).messages.some(
+    (m) => m.role === 'assistant' && String(m.content).includes(ASK_FINAL_TEXT)
+  )
+)
+const askSecondBody = ask1Loop()[ask1Loop().length - 1]
+check(
+  '回答被回填进下一轮请求体（选择与补充都真的送到了模型）',
+  ask1Loop().length >= 2 &&
+    askSecondBody.includes(ASK_OPTION_A) &&
+    askSecondBody.includes(ASK_NOTE) &&
+    askSecondBody.includes('[ask_user_question] 用户已回答'),
+  `${ask1Loop().length} 轮请求`
+)
+check(
+  '作答后界面收到 ask:done(answered)（卡片该收起来）',
+  events.some(
+    (e) =>
+      e.type === 'ask:done' &&
+      e.requestId === askUserEvent.requestId &&
+      e.outcome === 'answered'
+  )
+)
+check(
+  '轮次以 ok 收尾（不是挂到超时）',
+  events.some((e) => e.type === 'turn:finished' && e.conversationId === convAsk.id && e.status === 'ok')
+)
+check(
+  '给一条已经不存在的提问作答会返回 false（界面据此直接收卡片，不报错）',
+  (await inv('work:answer', {
+    conversationId: convAsk.id,
+    requestId: 'ask_不存在',
+    canceled: false,
+    selections: [],
+    note: ''
+  })) === false
+)
+ask1.server.closeAllConnections?.()
+ask1.server.close()
+
+// --- 多选 + 「跳过，由智能体自行决定」（取消路径） ---
+const ask2 = makeAskServer({
+  question: '这份复盘要涵盖哪些方面？',
+  options: askOptionsJson,
+  multi_select: 'true'
+})
+await new Promise((resolve) => ask2.server.listen(0, '127.0.0.1', () => resolve()))
+await useAskServer(ask2.server.address().port)
+const ask2Loop = () => askLoop(ask2.bodies)
+const convAsk2 = await inv('conversations:create', agents[0].id, 'work')
+events.length = 0
+const askRun2 = inv('work:run', {
+  conversationId: convAsk2.id,
+  text: '再出一版复盘',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const askUserEvent2 = await waitForEvent((e) => e.type === 'ask:user')
+check('多选提问同样 emit 了 ask:user', askUserEvent2 !== null)
+check(
+  'ask:user 带着 multiSelect=true（界面据此画「可多选」与方框选项）',
+  askUserEvent2 !== null && askUserEvent2.multiSelect === true
+)
+check(
+  '多选提问同样带上全部选项（数组元素逐个还原，不是把 JSON 原样当一项）',
+  askUserEvent2 !== null &&
+    askUserEvent2.options.length === 2 &&
+    askUserEvent2.options[1] === ASK_OPTION_B,
+  askUserEvent2 === null ? '(没有事件)' : JSON.stringify(askUserEvent2.options)
+)
+const skipped = await inv('work:answer', {
+  conversationId: convAsk2.id,
+  requestId: askUserEvent2.requestId,
+  canceled: true,
+  selections: [],
+  note: ''
+})
+check('「跳过，由智能体自行决定」走取消路径且被接受', skipped === true)
+await askRun2
+check(
+  '跳过后界面收到 ask:done(canceled)',
+  events.some(
+    (e) => e.type === 'ask:done' && e.requestId === askUserEvent2.requestId && e.outcome === 'canceled'
+  )
+)
+check(
+  '跳过后工具以「用户未回答(已取消)」返回，模型按合理假设继续（轮次不挂死）',
+  ask2Loop().length >= 2 &&
+    ask2Loop()[ask2Loop().length - 1].includes(ASK_CANCEL_MARK),
+  `${ask2Loop().length} 轮请求`
+)
+check(
+  '跳过的轮次同样以 ok 收尾',
+  events.some((e) => e.type === 'turn:finished' && e.conversationId === convAsk2.id && e.status === 'ok')
+)
+ask2.server.closeAllConnections?.()
+ask2.server.close()
+
+// --- 中止：挂起中的提问必须被取消，不能留下永不结束的 Promise ---
+const ask3 = makeAskServer({
+  question: '这一版要对外发布吗？',
+  options: askOptionsJson,
+  multi_select: 'false'
+})
+await new Promise((resolve) => ask3.server.listen(0, '127.0.0.1', () => resolve()))
+await useAskServer(ask3.server.address().port)
+const convAsk3 = await inv('conversations:create', agents[0].id, 'work')
+events.length = 0
+const askRun3 = inv('work:run', {
+  conversationId: convAsk3.id,
+  text: '改一版对外稿',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const askUserEvent3 = await waitForEvent((e) => e.type === 'ask:user')
+check('中止场景：提问确实挂起了', askUserEvent3 !== null)
+await inv('work:abort', convAsk3.id)
+// 用竞速断言「一定会落定」：中止没生效的话这个 promise 会一直吊着（正是当初删掉工具的症状）
+const askSettled = await Promise.race([
+  askRun3.then(() => true),
+  new Promise((resolve) => setTimeout(() => resolve(false), 4000))
+])
+check(
+  '中止后轮次真的落定（挂起的提问被取消，没有永不结束的 Promise）',
+  askSettled === true
+)
+check(
+  '中止时界面收到 ask:done(canceled)',
+  events.some(
+    (e) => e.type === 'ask:done' && e.requestId === askUserEvent3.requestId && e.outcome === 'canceled'
+  )
+)
+check(
+  '被中止的轮次报 aborted（不是 ok）',
+  events.some(
+    (e) => e.type === 'turn:finished' && e.conversationId === convAsk3.id && e.status === 'aborted'
+  )
+)
+check(
+  '中止后挂起列表里不再有它（再作答只会返回 false）',
+  (await inv('work:answer', {
+    conversationId: convAsk3.id,
+    requestId: askUserEvent3.requestId,
+    canceled: false,
+    selections: [],
+    note: ''
+  })) === false
+)
+ask3.server.closeAllConnections?.()
+ask3.server.close()
+
+console.log(`\nask_user_question 验证：通过 ${passed - passedBeforeAsk} 项`)
+
 console.log(`\nIPC 验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

@@ -128,8 +128,10 @@ export class SubagentService {
   }
 
   // 子代理工具面: 从全量工具定义中排除自身(防递归)与交互/调度类(无宿主通道)
+  // ask_user_question 属于「交互类」: 子代理没有自己的界面通道, 让它提问只会挂到超时
+  // (原版就是这么排除的, 这里照原版恢复)。
   private static excludedTools(): string[] {
-    return ['subagent',
+    return ['subagent', 'ask_user_question',
       'schedule_create', 'schedule_delete', 'schedule_list',
       'goal_create', 'goal_update', 'todo_write'];
   }

@@ -53,6 +53,7 @@ import {
   isLocalSearchToolName
 } from '@core/service/LocalWebSearch'
 import { WEB_FETCH_TOOL_NAME, HarnessTools } from '@core/service/HarnessTools'
+import { AskUserBridge, PendingAsk, AskPhase } from '@core/service/AskUserBridge'
 import { ScheduleService } from '@core/service/ScheduleService'
 import { GoalService } from '@core/service/GoalService'
 import {
@@ -145,6 +146,32 @@ export class SessionManager {
 
   constructor(emit: Emit) {
     this.emit = emit
+    // ask_user_question 的桥 → 界面通道。
+    //
+    // 为什么装在构造函数里: 提问可能在任何一个会话的任意一轮里挂起, 而桥是纯逻辑模块、
+    // 不认识 Electron。把生命周期翻译成事件的唯一位置就是这里(emit 的订阅者见 main/index.ts)。
+    // 生命周期两种相位:
+    //   'ask'     → ask:user(界面画卡片; 带 multiSelect, 否则单选/多选画不出来)
+    //   'settled' → ask:done(界面收卡片; outcome 按有没有答案区分「已回答」与「已跳过/超时」)
+    AskUserBridge.setNotifier((item: PendingAsk, phase: AskPhase, answered: boolean): void => {
+      if (phase === 'ask') {
+        this.emit({
+          type: 'ask:user',
+          conversationId: item.conversationId,
+          requestId: item.id,
+          question: item.question,
+          options: item.options,
+          multiSelect: item.multiSelect
+        })
+        return
+      }
+      this.emit({
+        type: 'ask:done',
+        conversationId: item.conversationId,
+        requestId: item.id,
+        outcome: answered ? 'answered' : 'canceled'
+      })
+    })
   }
 
   private ctx(): Context {
@@ -614,6 +641,12 @@ export class SessionManager {
     // 两个服务各自持有活跃请求注册表，都要中断
     ChatService.abort()
     AgentLoopService.abort()
+    // 挂起中的 ask_user_question 立即落定(以取消收场)。
+    //
+    // 这一步不能省：工具此刻正 await 在 AskUserBridge 里，只看 abort 标志它是不会
+    // 自己醒过来的 —— 用户点了「停止」，工具却还挂在那儿等一个永远不会来的答案，
+    // 轮次就永远结束不了（原版 stopStreaming 里同样是先 cancelAll 再收尾）。
+    AskUserBridge.cancelAll()
   }
 
   // ===== 插话（工作模式执行中补充要求） =====

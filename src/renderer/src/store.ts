@@ -33,6 +33,21 @@ export interface Notice {
   at: number
 }
 
+/**
+ * 一条挂起等待作答的提问（原版 ChatViewModel.pendingAsk 的桌面端投影）。
+ *
+ * 有它才有提问卡片：主进程里的 ask_user_question 工具此刻正 await 在
+ * AskUserBridge 上，界面拿到的只是这个「问题 + 选项」的描述；
+ * 用户点提交/跳过时再用 requestId 把答案送回去唤醒那条工具。
+ */
+export interface PendingAskState {
+  conversationId: string
+  requestId: string
+  question: string
+  options: string[]
+  multiSelect: boolean
+}
+
 // 偏好键（与主进程 Constants 里的键名一致）
 const PREF_EFFORT_WORK = 'guncat_reasoning_effort'
 const PREF_EFFORT_INTERACTIVE = 'guncat_interactive_effort'
@@ -171,6 +186,12 @@ interface State {
   scrollFreezeUntil: number
   /** 「填入输入框 / 重新编辑」请求：由消息操作行写入，输入框消费后清空 */
   pendingDraft: { text: string; at: number } | null
+  /**
+   * 当前挂起的提问（无 = null）。非空时时间线末尾渲染提问卡片 ——
+   * 原版 ChatPage 也是在时间线末尾渲染 AskUserCard，三种形态共用一条时间线，
+   * 所以卡片对工作/交互/聊天三种模式都可见。
+   */
+  pendingAsk: PendingAskState | null
 
   init(): Promise<void>
   reloadSummaries(): Promise<void>
@@ -217,6 +238,10 @@ interface State {
   /** 把一段文本填进输入框（消息操作行的「编辑 / 重新编辑」） */
   fillDraft(text: string): void
   consumeDraft(): void
+  /** 提交一次提问卡片（原版 ChatViewModel.answerAsk） */
+  answerAsk(requestId: string, selections: string[], note: string): Promise<void>
+  /** 跳过提问，由智能体自行决定（原版 ChatViewModel.cancelAsk） */
+  cancelAsk(requestId: string): Promise<void>
   /** 端侧增强：把外部文件导入当前会话工作区 */
   intakeFiles(paths: string[]): Promise<void>
   /** 端侧增强：弹系统文件选择框并导入（工作区面板的「上传」按钮） */
@@ -305,6 +330,31 @@ function applyEvent(state: State, event: GuncatEvent): Partial<State> {
     case 'notice':
       return { notice: { level: event.level, text: event.text, at: Date.now() } }
 
+    // 提问挂起：只认当前会话的（多会话后台跑任务时，别的会话的提问不该弹在本会话里）
+    case 'ask:user':
+      if (state.active === null || state.active.id !== event.conversationId) {
+        return {}
+      }
+      return {
+        pendingAsk: {
+          conversationId: event.conversationId,
+          requestId: event.requestId,
+          question: event.question,
+          options: event.options ?? [],
+          // 老事件没有这个字段（契约里是后补的）时按单选处理
+          multiSelect: event.multiSelect === true
+        }
+      }
+
+    // 提问落定（作答 / 跳过 / 超时 / 被中止）：卡片必须收掉。
+    // 只按 requestId 比对：同一会话里连续两次提问会拿到不同的 requestId，
+    // 用会话比对的话第二次提问会被上一次的 done 事件误收。
+    case 'ask:done':
+      if (state.pendingAsk === null || state.pendingAsk.requestId !== event.requestId) {
+        return {}
+      }
+      return { pendingAsk: null }
+
     default:
       return {}
   }
@@ -381,6 +431,7 @@ export const useStore = create<State>((set, get) => {
     lightboxUrl: '',
     scrollFreezeUntil: 0,
     pendingDraft: null,
+    pendingAsk: null,
 
     async init() {
       window.guncat.onEvent((event: GuncatEvent) => {
@@ -845,6 +896,40 @@ export const useStore = create<State>((set, get) => {
 
     consumeDraft() {
       set({ pendingDraft: null })
+    },
+
+    // ===== 提问卡片（原版 ChatViewModel.answerAsk / cancelAsk） =====
+    //
+    // 两处都先本地收卡片、再发通道：
+    // 主进程那边工具被唤醒后会继续跑，ask:done 事件随后就到；
+    // 但「点了提交 → 卡片还在 → 用户又点一次」的窗口哪怕只有一瞬也很难看，
+    // 而窗口里重复提交是安全的（第二次回去时提问已经落定，主进程返回 false）。
+    async answerAsk(requestId, selections, note) {
+      const ask = get().pendingAsk
+      set({ pendingAsk: null })
+      const ok = await window.guncat.work.answer({
+        conversationId: ask?.conversationId ?? get().activeId ?? '',
+        requestId,
+        canceled: false,
+        selections,
+        note
+      })
+      if (!ok) {
+        // 提问已经落定（超时/被中止）：卡片保持收起，但要让用户知道这一下没生效
+        get().pushNotice('warn', '这条提问已经结束，回答没有送出')
+      }
+    },
+
+    async cancelAsk(requestId) {
+      const ask = get().pendingAsk
+      set({ pendingAsk: null })
+      await window.guncat.work.answer({
+        conversationId: ask?.conversationId ?? get().activeId ?? '',
+        requestId,
+        canceled: true,
+        selections: [],
+        note: ''
+      })
     },
 
     async intakeFiles(paths) {

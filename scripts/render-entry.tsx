@@ -64,6 +64,7 @@ import {
   workspaceFileIcon
 } from '@renderer/components/WorkspacePanel'
 import { LightboxView } from '@renderer/components/ImageLightbox'
+import { AskUserCard, askConfirmLabel, askToggle } from '@renderer/components/AskUserCard'
 import { TableOcrPanel } from '@renderer/components/TableOcrDialog'
 import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
 import { AssistantBody, marqueeText } from '@renderer/components/MessageView'
@@ -920,4 +921,53 @@ export function renderInteractiveTimeline(program: string): string {
       onEditToInput: () => {}
     })
   )
+}
+
+// ===== 提问卡片（ask_user_question） =====
+//
+// 工具真的会挂起等待作答，所以这张卡是「工具能不能用」的一半：没有它就只能等 5 分钟超时。
+// 单选/多选两种形态的差别不只是文案 —— 选项标记的形状、能不能同时选中多项、
+// 提交按钮要不要带数量，都要逐条钉住。
+
+/** 提问卡片：multiSelect 决定单选（圆点）/ 多选（方框）两种形态 */
+export function renderAskCard(multiSelect: boolean): string {
+  return renderToStaticMarkup(
+    createElement(AskUserCard, {
+      ask: {
+        requestId: 'ask_test_1',
+        question: '这份季度复盘要交成什么？',
+        options: ['内部汇报稿', '对外发布稿', '先给我看看大纲'],
+        multiSelect
+      },
+      onAnswer: () => {},
+      onCancel: () => {}
+    })
+  )
+}
+
+/** 排查用：提问卡片在时间线末尾的落位（AskAtTimelineEnd 的挂载点） */
+export function renderAskSlot(): string {
+  return renderToStaticMarkup(
+    createElement(Timeline, {
+      messages: [] as never,
+      mode: 'work',
+      running: true,
+      lastAssistantId: '',
+      onEditToInput: () => {}
+    })
+  )
+}
+
+/** 纯函数：单选/多选的勾选行为（SSR 点不了按钮，只能在这里断言） */
+export function askToggleSelection(
+  selected: string[],
+  option: string,
+  multiSelect: boolean
+): string[] {
+  return askToggle(selected, option, multiSelect)
+}
+
+/** 纯函数：提交按钮文案（多选且已勾选时才带数量） */
+export function askSubmitLabel(multiSelect: boolean, count: number): string {
+  return askConfirmLabel(multiSelect, count)
 }

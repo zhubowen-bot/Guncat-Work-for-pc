@@ -20,6 +20,7 @@ import type {
   WorkArtifactsDto,
   SearchEngineDto,
   WorkspaceEntryDto,
+  WorkAnswerRequest,
   WorkRunRequest
 } from '@ipc/contract'
 
@@ -65,6 +66,8 @@ export interface GuncatApi {
   work: {
     run(request: WorkRunRequest): Promise<void>
     abort(conversationId: string): Promise<void>
+    /** 回答一次挂起的 ask_user_question；false = 提问已不在挂起列表里（界面应直接收卡片） */
+    answer(request: WorkAnswerRequest): Promise<boolean>
   }
   workspace: {
     list(conversationId: string): Promise<WorkspaceEntryDto[]>

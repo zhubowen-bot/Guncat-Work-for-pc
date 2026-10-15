@@ -947,17 +947,27 @@ select {
   color: var(--text-muted);
 }
 
+/* 空态标识：**不要圆形底、不要阴影、不要色块**，直接把智能体自己的图标放上去
+   （用户明确要求：去掉那个蓝色圆形背景，只是放图标）。
+   尺寸也不再固定成 96 的方盒 —— 描边 SVG（工作/交互模式）的 viewBox 自带留白，
+   放在同一个盒子里会显得比满幅的 PNG 头像小一圈，所以推荐尺寸在组件里按类型给。 */
 .empty__hero {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 96px;
-  height: 96px;
-  border-radius: 48px;
-  background: var(--accent-soft);
-  color: var(--accent);
   margin-bottom: 14px;
-  box-shadow: 0 8px 24px rgba(65, 118, 230, 0.16);
+  color: var(--text);
+}
+
+/* 空态里的图标统一按「视觉面积相同」处理：PNG 头像满幅，描边 SVG 放大一点点抵消 viewBox 留白 */
+.empty__hero img {
+  display: block;
+  border-radius: 50%;
+  object-fit: contain;
+}
+
+.empty__hero svg {
+  display: block;
 }
 
 .empty h1 {
@@ -1016,19 +1026,22 @@ select {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.07);
 }
 
-/* 用户气泡 = raised_surface（原版 ChatBubbleView.buildUserMessage），
-   助手气泡 = ai_msg。深色主题下两者同色，与原版一致。
+/* 用户气泡 = 自己发出去的那一条，**只有它带底色**（浅色主题下就是那层淡蓝 ai_msg）。
    圆角组合对齐原版：助手 {8,22,22,22}（左上收窄）、用户 {22,8,22,22}（右上收窄）。 */
 .bubble--user {
   max-width: 82%;
-  background: var(--bg-elevated);
+  background: var(--ai-msg);
   border-radius: 22px 8px 22px 22px;
   /* 原版用户行内边距：左 60 / 右 16 / 上下 8 */
   margin: 8px 16px 8px 60px;
 }
 
+/* 助手回答**不给底色**：只有用户自己发出去的那条才是「一张卡片」，
+   回答应该是直接铺在页面上的正文。原版助手气泡用的是 ai_msg，
+   但在浅色主题下那是一整块淡蓝底，和正文拼在一起非常突兀（用户明确要求去掉）。
+   只保留圆角与内边距，阅读体验与 Markdown 正文一致。 */
 .bubble--ai {
-  background: var(--ai-msg);
+  background: transparent;
   border-radius: 8px 22px 22px 22px;
 }
 
@@ -1901,10 +1914,11 @@ select {
   font-size: 12.5px;
 }
 
+/* 工作/交互模式的回答块同样不给底色（理由见 .bubble--ai）：
+   回答是正文，底色只有用户自己发的那条才有。 */
 .answer {
-  background: var(--ai-msg);
-  border-radius: 14px;
-  padding: 12px 14px;
+  background: transparent;
+  padding: 2px 0;
 }
 
 .answer--pending {
@@ -2116,6 +2130,13 @@ select {
   background: var(--bg-sunken);
   outline: none;
   line-height: 1.5;
+  /* 输入框右侧那条原生滚动条又粗又丑，而输入框本身只有几行高、
+     滚动一下就能看完 —— 直接隐藏（内容仍可滚动）。 */
+  scrollbar-width: none;
+}
+
+.composer textarea::-webkit-scrollbar {
+  display: none;
 }
 
 .composer textarea:focus {
@@ -3081,4 +3102,161 @@ select {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-muted);
+}
+
+/* ===== 提问卡片（ask_user_question） =====
+   对齐原版 views/AskUserCard.ets：1.5px 品牌色描边 + 14 圆角 + 14 内边距 + 阴影。
+   它是**唯一一个会让模型停下来等**的卡片，所以描边要显眼到一眼能看见，
+   但不能用红/黄这类报警色 —— 提问不是错误。 */
+.askcard-slot {
+  margin-top: 12px;
+}
+
+.askcard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1.5px solid var(--accent);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.askcard__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.askcard__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
+
+.askcard__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* 「单选 / 可多选」靠右，与标题同高（原版用 Blank() 顶开） */
+.askcard__mode {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.askcard__question {
+  font-size: 14px;
+  line-height: 21px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.askcard__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 选项 chip：未选是 raised 底 + 分割线描边，选中转品牌色底 + 品牌色描边 */
+.askchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.askchip[data-selected='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 选中指示：单选画圆点、多选画方框（形状本身在说「这里能不能选多个」）。
+   未选中时只留一个 1.5px 的描边空框，与原版一致。 */
+.askchip__mark {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 7px;
+  background: transparent;
+}
+
+.askchip[data-shape='box'] .askchip__mark {
+  border-radius: 4px;
+}
+
+.askchip[data-selected='true'] .askchip__mark {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.askcard__note {
+  width: 100%;
+  min-height: 36px;
+  max-height: 90px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+.askcard__note:focus {
+  border-color: var(--accent);
+}
+
+.askcard__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+/* 「跳过，由智能体自行决定」是幽灵按钮：它是一条出路，不是主操作 */
+.askcard__skip {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.askcard__skip:hover {
+  color: var(--text);
+}
+
+.askcard__submit {
+  height: 36px;
+  padding: 0 20px;
+  border-radius: 10px;
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.askcard__submit:hover {
+  filter: brightness(1.06);
 }

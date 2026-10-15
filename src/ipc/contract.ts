@@ -399,6 +399,24 @@ export interface WorkRunRequest {
 export const REASONING_EFFORTS: string[] = ['max', 'high', 'low', 'none']
 
 /**
+ * 回答一次挂起的 ask_user_question（对应原版 ChatViewModel.answerAsk / cancelAsk）。
+ *
+ * 只有一个通道而不是「作答/取消」两条：两者的差别只是一个 canceled 标志，
+ * 分成两条通道会让主进程侧多一份重复的「requestId 找不到」错误处理。
+ */
+export interface WorkAnswerRequest {
+  conversationId: string
+  /** AskUserBridge 分配的提问 id（由 ask:user 事件带来） */
+  requestId: string
+  /** true = 用户点了「跳过，由智能体自行决定」（此时 selections/note 无意义） */
+  canceled?: boolean
+  /** 用户勾选的选项；自由作答（无 options）时为空数组 */
+  selections?: string[]
+  /** 用户补充的文字，可空 */
+  note?: string
+}
+
+/**
  * 重新生成最后一条回答（对应原版消息操作行的「重答」）。
  *
  * 语义：把最后一条用户消息之后的 assistant 消息全部丢弃（那次失败的/被中止的输出
@@ -461,7 +479,33 @@ export type GuncatEvent =
    * 用户既不知道能不能发，也看不到失败原因。
    */
   | { type: 'attachment:parsed'; path: string; status: 'ready' | 'error'; error?: string }
-  | { type: 'ask:user'; conversationId: string; requestId: string; question: string; options: string[] }
+  /**
+   * ask_user_question 工具挂起在等用户作答（工具执行期间，轮次还没结束）。
+   *
+   * 这条事件以前只在契约里躺着、全库没有发送方 —— 因为那个工具被整个删掉了。
+   * 恢复后由 SessionManager 从 AskUserBridge 的生命周期回调里发出来；
+   * requestId 就是 AskUserBridge 里的提问 id，作答时要原样回传。
+   */
+  | {
+      type: 'ask:user'
+      conversationId: string
+      requestId: string
+      question: string
+      options: string[]
+      /** 是否多选：界面据此画「可多选」并允许勾多个（原版 PendingAsk.multiSelect） */
+      multiSelect: boolean
+    }
+  /**
+   * 提问已落定（用户作答 / 点「跳过」/ 超时 / 轮次被中止），界面该收起卡片了。
+   * 必须有这条：卡片是跟着挂起的工具走的，工具一旦不再挂起，卡片留在屏幕上
+   * 就会让用户对着一个「点了也没用」的按钮反复点。
+   */
+  | {
+      type: 'ask:done'
+      conversationId: string
+      requestId: string
+      outcome: 'answered' | 'canceled'
+    }
 
 export interface AppInfoDto {
   version: string

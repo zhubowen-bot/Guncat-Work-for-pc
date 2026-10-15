@@ -56,7 +56,7 @@ export class WorkSkillService {
     ppt.name = 'PPT 制作与编辑';
     ppt.description = '制作/修改/美化演示文稿(.pptx)时加载，V3 全量加载所有 reference：Deck JSON 完整语法(13 种版式/图表/表格/图片/备注/背景装饰)、' +
       '8 套主题 + themeOverride 多色混搭、视觉风格目录(科技/古风/简约/杂志/商务/学术/路演)与每页内容配图(流程图/时间轴/架构图/插画/信息图)、设计规范、内容纪律与自检报告。' +
-      '任何 write_pptx / read_ppt / edit_ppt 任务开始前先 load_skill("ppt") 全量加载；本平台没有提问界面，不得调用 ask_user_question，直接采用最合理的默认假设(篇幅/风格/口径)并在最终总结集中说明；默认 20 页以上；每页装饰 + 内容配图；交付前写 ppt_qa_report.md。';
+      '任何 write_pptx / read_ppt / edit_ppt 任务开始前先 load_skill("ppt") 全量加载；新建 PPT 前须 ask_user_question 前置提问；默认 20 页以上；每页装饰 + 内容配图；交付前写 ppt_qa_report.md。';
     let f1: SkillFileInfo = new SkillFileInfo();
     f1.file = 'reference/deck-dsl.md';
     f1.desc = 'Deck JSON 完整字段定义与示例';
@@ -94,7 +94,7 @@ export class WorkSkillService {
     docx.id = 'docx';
     docx.name = 'Word 文档制作与编辑';
     docx.description = '制作/修改 Word 文档(.docx)时加载，V3 全量加载所有 reference：Doc JSON 完整语法(封面/目录/分级标题/正文/列表/表格/图片/引用/代码块)、' +
-      '三种样式预设、中文排版规范、文档形态选型与表格门禁、专业文书规范、自检报告。任何 write_docx / read_docx / edit_docx 任务开始前先 load_skill("docx") 全量加载；本平台没有提问界面，不得调用 ask_user_question，直接采用最合理的默认假设(篇幅/风格/口径)并在最终总结集中说明；交付前写 docx_qa_report.md。';
+      '三种样式预设、中文排版规范、文档形态选型与表格门禁、专业文书规范、自检报告。任何 write_docx / read_docx / edit_docx 任务开始前先 load_skill("docx") 全量加载；新建文档前须 ask_user_question 前置提问；交付前写 docx_qa_report.md。';
     let d1: SkillFileInfo = new SkillFileInfo();
     d1.file = 'reference/doc-dsl.md';
     d1.desc = 'Doc JSON 完整字段定义与示例';
@@ -124,7 +124,7 @@ export class WorkSkillService {
     xlsx.id = 'xlsx';
     xlsx.name = 'Excel 表格制作与编辑';
     xlsx.description = '制作/修改/分析 Excel 表格(.xlsx)时加载，V3 全量加载所有 reference：Workbook JSON 完整语法(多工作表/表头/公式/数字格式/列宽/冻结窗格)、' +
-      '表格规范(公式优先/数字格式矩阵/负数与零值显示/假设区与模型区分离)、数据分析与报表交付链路、编辑完整性规则与自检报告。任何 write_xlsx / read_xlsx / edit_xlsx 任务开始前先 load_skill("xlsx") 全量加载；本平台没有提问界面，不得调用 ask_user_question，直接采用最合理的默认假设(口径/周期/格式)并在最终总结集中说明；交付前写 xlsx_qa_report.md。';
+      '表格规范(公式优先/数字格式矩阵/负数与零值显示/假设区与模型区分离)、数据分析与报表交付链路、编辑完整性规则与自检报告。任何 write_xlsx / read_xlsx / edit_xlsx 任务开始前先 load_skill("xlsx") 全量加载；新建工作簿前须 ask_user_question 前置提问；交付前写 xlsx_qa_report.md。';
     let x1: SkillFileInfo = new SkillFileInfo();
     x1.file = 'reference/workbook-dsl.md';
     x1.desc = 'Workbook JSON 完整字段定义与示例';

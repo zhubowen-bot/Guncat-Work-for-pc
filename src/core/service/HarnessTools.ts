@@ -1,6 +1,7 @@
 // HarnessTools: Guncat Work 6.1 新增工具集(DeepSeek Harness 移植)
 // glob/grep(纯 TS 正则搜索, 对齐 tool-fs-search) / edit+str_replace_editor(对齐 tool-fs 与
-// str-replace-editor) / web_fetch(对齐 web-fetch-http) /
+// str-replace-editor) / web_fetch(对齐 web-fetch-http) / ask_user_question(对齐 ask-user,
+// 经 AskUserBridge 挂起等界面作答) /
 // schedule_*/goal_*(会话级提醒与目标) / subagent(进程内嵌套代理) / session_search(事件日志检索) /
 // run_js(JSVM-API 沙箱, 见 JsCodeService —— 无 shell 环境下的"执行代码"能力)。
 // 与 WorkFileService 的既有 25 工具并存; dispatch 由 WorkFileService 兜底转发至此。
@@ -16,6 +17,7 @@ import { GoalService, GoalItem } from './GoalService';
 import { WebFetchService } from './WebFetchService';
 import { SessionLogService } from './SessionLogService';
 import { JsCodeService } from './JsCodeService';
+import { AskUserBridge, AskAnswer } from './AskUserBridge';
 import { ToolExecResult, WorkFileService } from './WorkFileService';
 import { Constants } from '../common/Constants';
 import { AbortSignal } from '../common/Types';
@@ -113,7 +115,7 @@ export class HarnessTools {
       return await HarnessTools.toolWebFetch(args);
     }
     if (name === 'ask_user_question') {
-      return HarnessTools.toolAskUser();
+      return await HarnessTools.toolAskUser(args, convId);
     }
     if (name === 'schedule_create') {
       return HarnessTools.toolScheduleCreate(root, args);
@@ -463,16 +465,42 @@ export class HarnessTools {
     return r;
   }
 
-  // ===== ask_user_question(已停用) =====
+  // ===== ask_user_question =====
 
-  // 本平台没有向用户提问的渲染界面, 该工具的定义不再下发, 这里也不再挂起等待回答。
-  // 保留这条分支只为兜住历史会话/子代理残留的调用: 直接回一条可读结果, 让模型改用
-  // 合理默认值继续, 并把假设集中写进最终总结, 而不是静默卡到超时。
-  private static toolAskUser(): ToolExecResult {
-    return HarnessTools.ok(
-      '本平台没有向用户提问的界面, ask_user_question 不可用。' +
-      '请基于最合理的默认假设继续执行(篇幅/风格/口径/范围等), ' +
-      '并在最终总结里集中说明你做了哪些假设。');
+  // 向用户提问并挂起等待作答(与鸿蒙侧逐字一致)。
+  //
+  // 这条分支曾经被拿掉过(改成回一句「本平台没有提问界面, 请用默认假设继续」)，
+  // 原因是没有 UI 时它会挂到 5 分钟超时。现在界面那一半补齐了
+  // (AskUserBridge 通知 → ask:user 事件 → AskUserCard → work:answer → 桥 resolve)，
+  // 于是可以照原版恢复：真正的挂起等待由挂起链路上的取消/超时兜底。
+  private static async toolAskUser(args: Record<string, Object>,
+    convId: string): Promise<ToolExecResult> {
+    let question: string = HarnessTools.strArg(args, 'question', '');
+    if (question === '') {
+      return HarnessTools.fail('缺少参数 question');
+    }
+    let options: string[] = HarnessTools.strListArg(args, 'options');
+    let multiSelect: boolean = HarnessTools.boolArg(args, 'multi_select', false);
+    let noteAllowed: boolean = HarnessTools.boolArg(args, 'allow_note', true);
+    // 5 分钟未回答按取消处理, 避免工具永久挂起
+    let answer: AskAnswer | null = await AskUserBridge.ask(question, options, multiSelect,
+      300000, convId);
+    if (answer === null) {
+      return HarnessTools.fail('用户未回答(已取消), 请基于合理假设继续, 并在总结中标注该假设');
+    }
+    let lines: string[] = [];
+    lines.push('[ask_user_question] 用户已回答:');
+    lines.push('问题: ' + question);
+    if (answer.selections.length > 0) {
+      lines.push('选择: ' + answer.selections.join(' | '));
+    }
+    if (noteAllowed && answer.note !== '') {
+      lines.push('补充: ' + answer.note);
+    }
+    let r: ToolExecResult = new ToolExecResult();
+    r.ok = true;
+    r.output = lines.join('\n');
+    return r;
   }
 
   // ===== schedule =====
@@ -566,6 +594,13 @@ export class HarnessTools {
         'url', HarnessTools.strProp('要抓取的 http(s) 链接'),
         'max_chars', HarnessTools.strProp('可选: 返回文本字符上限, 默认 24000')),
       ['url']));
+    defs.push(HarnessTools.makeTool('ask_user_question',
+      '向用户提问并等待回答(会暂停执行)。仅当存在影响整体方向的关键缺口(目标格式/范围/口径/确认删除等)且无法用合理默认值时使用; 问题要一次问全(支持多个选项)。**技能强制前置提问(如 ppt/docx/xlsx 新建)优先于本默认**。options 为选项字符串数组(可空=自由回答); multi_select=true 允许多选; 用户也可补充文字。用户回答会作为本工具结果返回。',
+      HarnessTools.props3(
+        'question', HarnessTools.strProp('问题文本(把背景与影响一次说清)'),
+        'options', HarnessTools.strProp('可选: 选项 JSON 字符串数组, 如 ["方案A","方案B"]'),
+        'multi_select', HarnessTools.strProp('可选: 是否允许多选, 默认 false')),
+      ['question']));
     defs.push(HarnessTools.makeTool('schedule_create',
       '创建会话内定时提醒: after_seconds 秒后触发一次性提醒, 或 every_seconds 秒循环提醒(最小 300 秒)。到期时提醒会作为用户消息注入对话(自动唤醒执行)。适合"10 分钟后提醒我汇总进度"类诉求; 数量上限 10 条。',
       HarnessTools.props3(

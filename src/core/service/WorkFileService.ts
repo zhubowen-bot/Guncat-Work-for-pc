@@ -615,7 +615,7 @@ export class WorkFileService {
       return WorkFileService.ok(WorkFileService.LOAD_SKILL_SEARCH_NOTE + loaded);
     }
     // Guncat Work 6.1 新增工具(glob/grep/edit/str_replace_editor/web_fetch/
-    // schedule_*/goal_*/subagent/session_search)由 HarnessTools 兜底
+    // ask_user_question/schedule_*/goal_*/subagent/session_search)由 HarnessTools 兜底
     return await HarnessTools.dispatch(context, convId, name, args, root, abortSignal);
   }
 
@@ -1398,7 +1398,7 @@ export class WorkFileService {
         'width', WorkFileService.strProp('可选: 预览 PNG 的宽度(px), 默认 512, 高度按 viewBox 比例自动计算')),
       ['path', 'svg']));
     defs.push(WorkFileService.makeTool('write_docx',
-      '把结构化 Doc JSON 或 Markdown 生成 Word 文档(.docx)写入工作区。正式文档用 doc(Doc JSON 结构化源: 封面/目录/分级标题/正文/列表/表格/图片/引用/代码块, 图片 src 支持工作区相对路径, 排版规范)或 doc_file(工作区中 Doc JSON 文件路径, 长文档先 write_file/append_file 分块写好再导出); 简单内容可直接传 markdown(与旧版一致, 图片同样支持工作区路径)。title 可选文档标题, style 可选样式预设 default/academic/minimal。做正式 Word 文档前必须先 load_skill("docx") 全量加载；本平台没有提问界面，不得调用 ask_user_question，文档类型/篇幅/风格直接采用最合理默认假设并在最终总结集中说明；交付前写 docx_qa_report.md。',
+      '把结构化 Doc JSON 或 Markdown 生成 Word 文档(.docx)写入工作区。正式文档用 doc(Doc JSON 结构化源: 封面/目录/分级标题/正文/列表/表格/图片/引用/代码块, 图片 src 支持工作区相对路径, 排版规范)或 doc_file(工作区中 Doc JSON 文件路径, 长文档先 write_file/append_file 分块写好再导出); 简单内容可直接传 markdown(与旧版一致, 图片同样支持工作区路径)。title 可选文档标题, style 可选样式预设 default/academic/minimal。做正式 Word 文档前必须先 load_skill("docx") 全量加载；新建前 ask_user_question 前置提问；交付前写 docx_qa_report.md。',
       WorkFileService.props6(
         'path', WorkFileService.strProp('目标文件相对路径(建议以 .docx 结尾)'),
         'doc', WorkFileService.strProp('可选: Doc JSON 结构化源(与 doc_file/markdown 三选一)'),
@@ -1419,7 +1419,7 @@ export class WorkFileService {
         'ops', WorkFileService.strProp('操作 JSON 数组, 如 [{"op":"update_block","index":2,"block":{"text":"新标题"}}]')),
       ['path', 'ops']));
     defs.push(WorkFileService.makeTool('write_xlsx',
-      '把结构化 Workbook JSON 或表格文本生成 Excel 文件(.xlsx)写入工作区。正式表格用 workbook(Workbook JSON 结构化源: 多工作表/表头加粗/公式(单元格值以 = 开头, 如 "=SUM(B2:B9)")/数字格式(formats 列格式: money/int/percent/year/date/number/text)/列宽(colWidths)/冻结窗格(freeze))或 workbook_file(工作区中 Workbook JSON 文件路径, 长表先 write_file/append_file 分块写好再导出); 简单表格直接传 table(Markdown 表格/CSV/TSV, 首行作表头)。name 可选工作簿名, style 可选样式预设 default/academic/minimal。做正式 Excel 前必须先 load_skill("xlsx") 全量加载；本平台没有提问界面，不得调用 ask_user_question，口径/周期/格式直接采用最合理默认假设并在最终总结集中说明；交付前写 xlsx_qa_report.md。',
+      '把结构化 Workbook JSON 或表格文本生成 Excel 文件(.xlsx)写入工作区。正式表格用 workbook(Workbook JSON 结构化源: 多工作表/表头加粗/公式(单元格值以 = 开头, 如 "=SUM(B2:B9)")/数字格式(formats 列格式: money/int/percent/year/date/number/text)/列宽(colWidths)/冻结窗格(freeze))或 workbook_file(工作区中 Workbook JSON 文件路径, 长表先 write_file/append_file 分块写好再导出); 简单表格直接传 table(Markdown 表格/CSV/TSV, 首行作表头)。name 可选工作簿名, style 可选样式预设 default/academic/minimal。做正式 Excel 前必须先 load_skill("xlsx") 全量加载；新建前 ask_user_question 前置提问；交付前写 xlsx_qa_report.md。',
       WorkFileService.props6(
         'path', WorkFileService.strProp('目标文件相对路径(建议以 .xlsx 结尾)'),
         'workbook', WorkFileService.strProp('可选: Workbook JSON 结构化源(与 workbook_file/table 三选一)'),
@@ -1453,7 +1453,7 @@ export class WorkFileService {
       '对工作区文本数据文件执行本地转换管道(数据不经过模型上下文, 是处理大文件与非标格式的专用工具): 过滤/派生列/重算列/正则提取/拆列/去重/排序/替换/数值化, 以及 CSV↔TSV↔JSON↔Markdown表格↔XLSX 互转。流程: 先省略 output 预览前 3 行 → 修改 steps → 带 output 写盘 → read_file 抽查。全部操作与表达式语法见 load_skill("data")。限制: 输入 ≤2MB 文本、≤10 万行、steps ≤30 步。小表格直接 write_file/write_csv 更快, 不要滥用。',
       tfProps, ['input', 'steps']));
     defs.push(WorkFileService.makeTool('write_pptx',
-      '生成/重建 PowerPoint 演示文稿(.pptx, 16:9), 三种输入二选一: (1) deck: Deck JSON 结构化源, 支持 cover/toc/section/content/two-col/image-text/image/image-full/table/chart/quote/end/custom 13 种版式、主题、图表、表格、图片、演讲备注、背景装饰——正式 PPT 用它, 完整语法先 load_skill("ppt") 全量加载; (2) deck_file: 工作区中 Deck JSON 文件的路径(长 deck 先 write_file/append_file 分块写好再导出, 改内容后可重复导出); (3) outline: 简易大纲("# 页标题"开新页, "## 标题"开分节页, "- 要点"一级要点, 缩进"- 要点"二级要点)。theme 可选主题预设, title 为演示文稿标题。本平台没有提问界面，不得调用 ask_user_question，页数/风格/受众直接采用最合理默认假设并在最终总结集中说明; 默认 20 页以上; 每页需装饰性 SVG。',
+      '生成/重建 PowerPoint 演示文稿(.pptx, 16:9), 三种输入二选一: (1) deck: Deck JSON 结构化源, 支持 cover/toc/section/content/two-col/image-text/image/image-full/table/chart/quote/end/custom 13 种版式、主题、图表、表格、图片、演讲备注、背景装饰——正式 PPT 用它, 完整语法先 load_skill("ppt") 全量加载; (2) deck_file: 工作区中 Deck JSON 文件的路径(长 deck 先 write_file/append_file 分块写好再导出, 改内容后可重复导出); (3) outline: 简易大纲("# 页标题"开新页, "## 标题"开分节页, "- 要点"一级要点, 缩进"- 要点"二级要点)。theme 可选主题预设, title 为演示文稿标题。新建 PPT 前按 ppt 技能要求 ask_user_question 前置提问; 默认 20 页以上; 每页需装饰性 SVG。',
       WorkFileService.props3(
         'path', WorkFileService.strProp('目标文件相对路径(以 .pptx 结尾)'),
         'deck', WorkFileService.strProp('Deck JSON 字符串(结构化源, 与 deck_file/outline 三选一)'),

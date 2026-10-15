@@ -20,6 +20,7 @@ import { useMemo, useState } from 'react'
 import type { MessageDto } from '@ipc/contract'
 import { AssistantBody, MessageActions, MessageView, ThinkingBar, ToolList } from './MessageView'
 import { Disclosure } from './Disclosure'
+import { AskUserCard } from './AskUserCard'
 import { groupTurns, formatDuration, turnStats, finalRound, STOPPED_NOTE, type Turn } from '../turns'
 import { useStore } from '../store'
 import { IconCheck, IconInteractive, IconWork } from '../icons'
@@ -31,6 +32,39 @@ interface Props {
   /** 最新一条 assistant 的 id：交互模式只有它的界面可交互 */
   lastAssistantId: string
   onEditToInput: (text: string) => void
+}
+
+/**
+ * 时间线末尾的提问卡片（原版 ChatPage:1383-1395 的渲染位置）。
+ *
+ * 为什么挂在时间线末尾、而不是某一条消息里：ask_user_question 是在**这一轮还在跑**的时候
+ * 挂起的 —— 此刻正文可能只流了一半、甚至还没开始，它不属于任何一条已完成的 assistant 消息。
+ * 三种形态共用同一条时间线，挂在末尾三种模式就都能看到。
+ */
+function AskAtTimelineEnd() {
+  const pendingAsk = useStore((s) => s.pendingAsk)
+  const activeId = useStore((s) => s.activeId)
+  const answerAsk = useStore((s) => s.answerAsk)
+  const cancelAsk = useStore((s) => s.cancelAsk)
+
+  // 只认当前会话的提问：桌面端可以同时有别的会话在后台跑，那张卡不属于这里。
+  if (pendingAsk === null || pendingAsk.conversationId !== activeId) {
+    return null
+  }
+
+  return (
+    <div className="askcard-slot">
+      <AskUserCard
+        ask={pendingAsk}
+        onAnswer={(requestId, selections, note) => {
+          void answerAsk(requestId, selections, note)
+        }}
+        onCancel={(requestId) => {
+          void cancelAsk(requestId)
+        }}
+      />
+    </div>
+  )
 }
 
 export function Timeline({ messages, mode, running, lastAssistantId, onEditToInput }: Props) {
@@ -51,6 +85,7 @@ export function Timeline({ messages, mode, running, lastAssistantId, onEditToInp
             onEditToInput={onEditToInput}
           />
         ))}
+        <AskAtTimelineEnd />
       </>
     )
   }
@@ -95,6 +130,9 @@ export function Timeline({ messages, mode, running, lastAssistantId, onEditToInp
           />
         )
       )}
+
+      {/* 提问卡片排在整条时间线之后 —— 与它「这一轮还没结束、还在等用户」的时序一致 */}
+      <AskAtTimelineEnd />
     </div>
   )
 }
@@ -325,9 +363,27 @@ export function GroupedTurn({
         : `${summary} · ${formatDuration(totalMs)}`
       : summary
 
+  // 思考栏的正文 = **本回合所有轮的思考汇总**（原版做法：思考栏里汇总前面所有的思考，
+  // 而不是把它们藏进折叠栏）。用户报障「没有调用工具时思考全都不显示」的根因就是
+  // 本轮思考被放进了默认收起的活动折叠栏里 —— 没有工具时那条折叠栏几乎没有别的信息，
+  // 用户等于看不到任何思考。
+  const aggregatedReasoning = turn.rounds
+    .map((round) => round.reasoning.trim())
+    .filter((text) => text !== '')
+    .join('\n\n')
+
   return (
     <section className="turn">
       {turn.user !== null ? <TaskCard message={turn.user} onEditToInput={onEditToInput} /> : null}
+
+      {/* 思考栏放在折叠栏**外面**：它必须常显（折叠栏里只留工具行与历史轮正文） */}
+      {aggregatedReasoning !== '' || (streaming && thinkingExpected) ? (
+        <ThinkingBar
+          reasoning={aggregatedReasoning}
+          streaming={streaming && !bodyStarted}
+          workMode
+        />
+      ) : null}
 
       {hasActivity ? (
         <Disclosure
@@ -353,9 +409,6 @@ export function GroupedTurn({
         >
           {prior.map((round) => (
             <div className="process-round" key={round.id}>
-              {round.reasoning.trim() !== '' ? (
-                <ThinkingBar reasoning={round.reasoning} streaming={false} workMode />
-              ) : null}
               {round.toolCalls.length > 0 ? <ToolList calls={round.toolCalls} variant="loop" streaming={streaming} /> : null}
               {(round.displayContent !== '' ? round.displayContent : round.content).trim() !== '' ? (
                 <div className="process-round__text">
@@ -364,15 +417,11 @@ export function GroupedTurn({
               ) : null}
             </div>
           ))}
-          {/* 本轮思考也收进活动栏 —— 否则流式思考在交互模式里同样看不见
-              （原版 buildActivityThinking）。流式中还没内容时先挂出空条。 */}
-          {final !== null &&
-          (final.reasoning.trim() !== '' || (streaming && thinkingExpected)) ? (
-            <ThinkingBar
-              reasoning={final.reasoning}
-              streaming={streaming && !bodyStarted}
-              workMode
-            />
+          {/* 本轮思考已经移到外面的思考栏（汇总显示），折叠栏里不再重复挂一份。
+              这里只保留本轮的思考**时机提示**：流式中且思考还没内容时先挂出空条，
+              让用户知道模型正在想（否则那段时间界面上什么都没有）。 */}
+          {final !== null && final.reasoning.trim() === '' && streaming && thinkingExpected ? (
+            <ThinkingBar reasoning="" streaming workMode />
           ) : null}
           {final !== null && final.toolCalls.length > 0 ? (
             <ToolList calls={final.toolCalls} variant="loop" streaming={running} />
