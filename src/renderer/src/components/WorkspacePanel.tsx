@@ -341,6 +341,17 @@ export function WorkspacePanel() {
   // 计时状态放在组件里，展开面板时从会话开始时间起算即可（见下面 elapsedFrom）。
   const workElapsedSec = useWorkElapsed(activeId)
 
+  // 兜底刷新：原版在这个 1 秒定时器里每 3 拍刷一次工作区文件列表
+  // （`ChatPage.ets:243-247`：流式中或面板可见时），用来覆盖工具结果之外的写入
+  // ——定时任务、外部程序往工作区里丢文件这类变化不会发事件。
+  // 面板本身就是「可见」的条件，所以这里只要面板挂载着就按 3 秒兜底。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadWorkspace()
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [loadWorkspace])
+
   const messages = active?.messages ?? []
   const toolCalls = messages.reduce((sum, m) => sum + m.toolCalls.length, 0)
   // 速度与命中取**最后一条有值的** assistant（原版 WorkspaceBar 的 getSpeedText/getCacheHitText）

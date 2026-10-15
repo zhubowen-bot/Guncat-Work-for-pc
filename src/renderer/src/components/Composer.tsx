@@ -155,6 +155,32 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
       />
 
       <div className="composer__inner">
+        {/* 元素顺序逐条对齐原版 MessageInputView.build（55-66）：
+            语音 → （拍照：手机专属，不移植）→ 输入框 → 上传(附件) → 发送。
+            语音在输入框**左侧**是这个原版设计的一部分，不是随口排的。 */}
+        <button
+          type="button"
+          className="composer__mic"
+          data-recording={voice.state === 'recording'}
+          title={
+            voice.state === 'recording'
+              ? '点击结束录音并转写'
+              : voice.state === 'transcribing'
+                ? '正在转写…'
+                : running
+                  ? '生成中，暂不能录音'
+                  : parsing
+                    ? '文件解析中，暂不能录音'
+                    : '语音输入（点击开始录音）'
+          }
+          // 原版的门禁是 `!isStreaming && !isParsing`（MessageInputView.ets:83）：
+          // 生成中与解析中都不该再起一段录音，否则转写结果会插到正在跑的轮次里
+          disabled={voice.state === 'transcribing' || running || parsing}
+          onClick={voice.toggle}
+        >
+          {voice.state === 'recording' ? <IconStop size={18} /> : <IconMic size={18} />}
+        </button>
+
         <textarea
           ref={ref}
           value={text}
@@ -173,7 +199,8 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
             title={parsing ? '文件解析中，请稍候' : '添加图片或文档（发送给模型直接查看）'}
             // 解析中不可点（对齐原版 buildUploadButton 的 `!isParsing`）：此时再加一批文件
             // 只会让「哪张卡对应哪次解析」变得难懂，也让解析队列越排越长。
-            disabled={running || parsing}
+            // 录音中同样不可点（原版还多一个 `!isListening`）。
+            disabled={running || parsing || voice.state !== 'idle'}
             onClick={() => void pickAttachments()}
           >
             {/* 解析中：回形针变成旋转的刷新图标 + 品牌浅底（原版是 16ms 转 6° 的旋转） */}
@@ -184,23 +211,6 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
             )}
           </button>
         ) : null}
-
-        <button
-          type="button"
-          className="composer__mic"
-          data-recording={voice.state === 'recording'}
-          title={
-            voice.state === 'recording'
-              ? '点击结束录音并转写'
-              : voice.state === 'transcribing'
-                ? '正在转写…'
-                : '语音输入（点击开始录音）'
-          }
-          disabled={voice.state === 'transcribing'}
-          onClick={voice.toggle}
-        >
-          {voice.state === 'recording' ? <IconStop size={18} /> : <IconMic size={18} />}
-        </button>
 
         {running ? (
           <>
@@ -227,7 +237,8 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
             className="composer__send"
             title="发送（Enter）"
             onClick={submit}
-            disabled={text.trim() === '' && attachments.length === 0}
+            // 解析中/转写中不给发（原版发送钮同条件变灰，点击也直接 return）
+            disabled={parsing || voice.state !== 'idle' || (text.trim() === '' && attachments.length === 0)}
           >
             <IconSend size={18} />
             <span className="composer__send-label">发送</span>
