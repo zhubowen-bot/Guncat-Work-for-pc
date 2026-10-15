@@ -13,9 +13,14 @@
 | 二 | 交互模式：guncat-ui lang 渲染（76 个组件 + `$绑定` + 动作回传） | ✅ 已完成，见 [交互模式实现说明](INTERACTIVE-MODE.md) |
 | 三 | Office 生成器接入工具链 + 技能系统 | ✅ 已完成（生成→读回→算子编辑端到端验证） |
 | 四 | 端侧增强：朗读 / 语音输入 / 文件收件 / 导出 Word | ✅ 已完成 |
+| 五 | 平台适配层的两个「后端缺席」补完：PDF 解析、SVG 栅格化 | ✅ 已完成 |
+| 六 | 补上「内核已移植、但没有任何调用点」的那一批能力 | ✅ 已完成 |
+| 七 | 逐项对标审计后的第二轮补齐（界面与体验语义） | ✅ 已完成 |
 
 验证方式见 [README 的验证矩阵](../README.md#验证)：`npm run typecheck` / `npm run build` /
-`npm run smoke`（内核 135 项 + 渲染 175 项 + 契约 123 项 + 启动链路 150 项 + 端侧 74 项 + 语音 12 项）。
+`npm run smoke`（内核 341 项 + 渲染 272 项 + 契约 247 项 + 启动链路 150 项 + 字符扫描，共约 1010 项断言）。
+移植内核的起点是上游的 521 项纯逻辑回归，两边的断言口径不同：上游测的是 ArkTS 源码，
+这边测的是**跑在 Node 下、经别名解析后的同一套逻辑**。
 
 ### 阶段七：逐项对标审计后的第二轮补齐（界面与体验）
 
@@ -335,18 +340,22 @@ Node 在 Windows 把数值标志交给 CRT 的 `_open`，而 CRT 的 `_O_CREAT`/
 
 ---
 
-## 6. 阶段四（已从构建中移出，等待后续接入）
+## 6. 移出构建的鸿蒙端侧强绑定服务（`porting/deferred/`）
 
-以下服务是鸿蒙端侧强绑定的能力，桌面端需要**换实现思路**而不是照搬，
-因此暂时移到 `porting/deferred/`，不参与编译：
+以下服务是鸿蒙端侧强绑定的能力，桌面端**换了实现思路**而不是照搬。
+原始版本留在 `porting/deferred/` 作为**归档**，不参与编译、不参与类型检查 ——
+保留它们的唯一目的是同步上游时能看到原来的接口形状。
 
-| 文件 | 鸿蒙能力 | 电脑版计划 |
+| 归档文件 | 鸿蒙能力 | 电脑版实际做法 |
 | --- | --- | --- |
-| `TextReaderService.ts` | CoreSpeechKit TTS + AVSession + 后台长时任务 | 渲染进程 Web Speech API（`speechSynthesis`） |
-| `VoiceInputService.ts` | CoreSpeechKit ASR + AudioKit 采集 | 渲染进程 `MediaRecorder` + Web Speech `SpeechRecognition` |
+| `TextReaderService.ts` | CoreSpeechKit TTS + AVSession + 后台长时任务 | ✅ 渲染进程 Web Speech API（`speechSynthesis`）；音色取自系统 voice 列表，进度用 `onboundary` 逐词近似；桌面端没有 AVSession 与后台长时任务这些概念 |
+| `VoiceInputService.ts` | CoreSpeechKit ASR + AudioKit 采集 | ⚠️ **换实现**：`MediaRecorder` 录音 + 服务商 `/audio/transcriptions` 转写（Chromium 的 `SpeechRecognition` 在 Electron 里依赖 Google 语音服务凭据，默认不可用）。配置默认复用多模态预解析的 Base URL 与 Key |
 | `BackgroundReaderService.ts` | AVSession 媒体会话 | 桌面端无对应概念，朗读直接在前台/后台继续 |
 | `BackgroundTaskService.ts` | 后台任务申请 | 桌面端无对应概念，整体废弃 |
-| `PluginHotLoader.ts` | 基于沙箱目录的热加载 | 阶段三随插件系统一并接入 |
+| `PluginHotLoader.ts` | 基于沙箱目录的热加载 | ✅ **已在阶段六接入**：实现放在 `src/core/service/PluginHotLoader.ts`，随包 `resources/plugins/plugin_list.json` 在 `bootstrap()` 里加载 |
 
-同理，`entry/src/main/resources/rawfile/玩转应用`（32.5MB 静态教程站，ArkWeb 承载）
+同理，上游的 `entry/src/main/resources/rawfile/玩转应用`（32.5MB 静态教程站，ArkWeb 承载）
 未纳入随包资源。
+
+> `porting/deferred/` 下的文件**不是待办清单**，而是「已经用别的方式做完、原件留档」。
+> 新增归档文件时请同时更新上表。
