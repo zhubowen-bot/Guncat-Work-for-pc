@@ -431,6 +431,88 @@ export function RadialChartView({
   )
 }
 
+// ===== 雷达图（多维对比） =====
+
+/**
+ * 雷达图：多个维度上的一张「多边形指纹」。
+ *
+ * 为什么补这个：内核早就有完整几何（`UiChartGeom.radarGrid / radarSpokes / radarPoints /
+ * polygonPath`，见 GuncatUiPaint），提示词里也明确把 `RadarChart` 列为「多维对比」的推荐组件
+ * （`GuncatUiPrompt` 的能力对照表），但**渲染层没有它、组件库也没注册它** ——
+ * 于是模型照着提示词写出来的 `RadarChart` 会被当成未知组件丢掉（`GuncatUiLang` 的校验
+ * 会记一条「未知组件 RadarChart, 已忽略」），用户看到的是一块空白。
+ * 上游也有这个不一致（它的 GuncatUiCharts 里有 GuncatUiRadarChart，但 GuncatUiLibrary 没注册），
+ * 所以这是**有意补上的**一处：让提示词里承诺的能力真的存在。
+ *
+ * 归一化口径与上游一致（`GuncatUiView.seriesNorm`）：取所有序列里的**全局最大值**除之，
+ * 而不是每根轴各归各的 —— 后者会让同一张图里的不同轴失去可比性。
+ */
+export function RadarChartView({
+  labels,
+  series
+}: {
+  labels: string[]
+  series: SeriesData[]
+}) {
+  const [ref, width] = useWidth(320)
+  const count = labels.length
+  if (count === 0 || series.length === 0) {
+    return <div className="gui-empty">（无数据）</div>
+  }
+  const box = Math.min(width, 240)
+  const radius = box / 2 - 20
+  let max = 0
+  for (const s of series) {
+    for (const v of s.values) {
+      if (v > max) {
+        max = v
+      }
+    }
+  }
+  if (max <= 0) {
+    max = 1
+  }
+  const norm = series.map((s) => s.values.map((v) => v / max))
+
+  return (
+    <div className="gui-chart" ref={ref}>
+      {/* 用 viewBox + preserveAspectRatio 缩放：雷达图是**正方形**的，
+          而 `.gui-chart svg { width: 100% }` 会把没有 viewBox 的固定宽高 SVG 拉成扁的
+          （折线/柱状图是宽格式，拉伸不明显；正方形一拉就看得出走形）。
+          图内没有文字，缩放不会把字拉变形。 */}
+      <svg
+        viewBox={`0 0 ${box} ${box}`}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ width: '100%', maxWidth: box, height: 'auto' }}
+      >
+        {UiChartGeom.radarGrid(count, radius, 4, box).map((d, i) => (
+          <path key={`ring${i}`} d={d} stroke={UiPalette.GRID} strokeWidth={1} fill="none" />
+        ))}
+        {UiChartGeom.radarSpokes(count, radius, box).map((d, i) => (
+          <path key={`spoke${i}`} d={d} stroke={UiPalette.GRID} strokeWidth={1} fill="none" />
+        ))}
+        {norm.map((values, si) => (
+          <path
+            key={`series${si}`}
+            d={UiChartGeom.polygonPath(UiChartGeom.radarPoints(values, radius, box))}
+            stroke={UiPalette.series(si)}
+            strokeWidth={2}
+            fill={UiPalette.series(si)}
+            fillOpacity={0.18}
+          />
+        ))}
+      </svg>
+      {/* 每根轴的名字都要显示（不像折线图只给首/中/末三个刻度）—— 轴名是多维对比的语义本身 */}
+      <div className="gui-chart__labels gui-chart__labels--wrap">
+        {labels.map((label, i) => (
+          <span key={i}>{label}</span>
+        ))}
+      </div>
+      <Legend items={series.map((s, i) => ({ label: s.category, color: UiPalette.series(i) }))} />
+    </div>
+  )
+}
+
 // ===== 单条堆叠条 =====
 
 export function StackedBarChartView({

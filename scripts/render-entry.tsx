@@ -763,6 +763,27 @@ const PROGRAM = [
 
 const FENCE = '```'
 
+/**
+ * 只含雷达图的界面程序 —— 用于钉住「提示词推荐的 RadarChart 真的有实现」。
+ * 这条不是装饰：内核几何（UiChartGeom.radar*）早就移植好了，提示词也一直推荐它，
+ * 但渲染层与组件库此前都没有它，模型照提示词写出来会被当未知组件丢掉。
+ */
+export function renderRadarChart(): string {
+  const program = [
+    'root = Card([',
+    '  CardHeader("多维对比", "雷达图"),',
+    '  RadarChart(["价格","性能","续航","外观"], [Series("A 机型", [80, 92, 60, 74]), Series("B 机型", [95, 70, 88, 66])])',
+    '])'
+  ].join('\n')
+  return renderToStaticMarkup(
+    createElement(GuncatUiBlock, {
+      content: program,
+      interactive: true,
+      onSend: () => {}
+    })
+  )
+}
+
 export function renderProgram(): string {
   const content = '说明文字在前。\n\n' + FENCE + 'guncat-ui\n' + PROGRAM + '\n' + FENCE + '\n'
   return renderToStaticMarkup(

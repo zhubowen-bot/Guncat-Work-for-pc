@@ -489,6 +489,25 @@ check(
   !uiLocked.includes('gui--locked') && !uiLocked.includes('历史界面')
 )
 
+// --- 雷达图（提示词推荐了它，但此前渲染层与组件库都没有） ---
+const radar = mod.renderRadarChart()
+check(
+  'RadarChart 真的能渲染（不再落进「未知组件」分支）',
+  radar.includes('<svg') &&
+    radar.includes('<path') &&
+    !radar.includes('未知组件') &&
+    !radar.includes('gui-text'),
+  radar.includes('未知组件') ? '被当成未知组件了' : '渲染成 SVG'
+)
+check(
+  '雷达图的每根轴名都显示（多维对比的语义本身）',
+  radar.includes('价格') && radar.includes('性能') && radar.includes('续航') && radar.includes('外观')
+)
+check(
+  '多条序列时给出图例',
+  radar.includes('A 机型') && radar.includes('B 机型') && radar.includes('gui-chart__legend')
+)
+
 // --- 交互模式：整个回合收进一条活动折叠栏 ---
 const groupedShell = mod.renderGroupedTurn(false)
 const groupedRunning = mod.renderGroupedTurn(true)

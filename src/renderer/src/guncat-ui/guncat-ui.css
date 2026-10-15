@@ -373,6 +373,14 @@
   margin-top: 2px;
 }
 
+/* 雷达图要显示**每一根轴**的名字（轴名就是多维对比的语义），
+   所以改成可换行的均分排布，而不是折线图那种「首/中/末」三刻度 */
+.gui-chart__labels--wrap {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
 .gui-axis-title {
   font-size: 10.5px;
   color: var(--text-faint);

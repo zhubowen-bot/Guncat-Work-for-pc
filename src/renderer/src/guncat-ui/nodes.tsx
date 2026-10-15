@@ -16,6 +16,7 @@ import {
   LineChartView,
   HorizontalBarChartView,
   PieChartView,
+  RadarChartView,
   RadialChartView,
   StackedBarChartView,
   type SeriesData
@@ -607,6 +608,9 @@ function ChartView({ el }: { el: UiElement }) {
       return <PieChartView labels={labels} values={UiNode.numList(el, 'values')} variant={variant} />
     case 'RadialChart':
       return <RadialChartView labels={labels} values={UiNode.numList(el, 'values')} />
+    case 'RadarChart':
+      // 多维对比：series 里的每个序列画成一个多边形（归一化在视图内部做，与上游同口径）
+      return <RadarChartView labels={labels} series={seriesOf(el)} />
     case 'SingleStackedBarChart':
       return <StackedBarChartView labels={labels} values={UiNode.numList(el, 'values')} />
     default:
@@ -1298,6 +1302,7 @@ export function renderNode(el: UiElement | null, ctx: RenderCtx, key: string): R
     case 'HorizontalBarChart':
     case 'PieChart':
     case 'RadialChart':
+    case 'RadarChart':
     case 'SingleStackedBarChart':
       return <ChartView el={el} key={key} />
     case 'Series':

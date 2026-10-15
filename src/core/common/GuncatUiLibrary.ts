@@ -240,6 +240,12 @@ export class GuncatUiLibrary {
       [strings('labels', true), numbers('values', true), sOpt('variant')]));
     out.push(new UiComp('RadialChart', g4, '径向条形图(多个 0~100 的达成率)。',
       [strings('labels', true), numbers('values', true)]));
+    // 补注册: 提示词的能力对照表一直推荐「多维对比 → BarChart(grouped/stacked) / RadarChart」，
+    // 但组件库此前没登记它 —— 模型照着提示词写出来的 RadarChart 会被当成未知组件丢掉。
+    // （上游也有这个不一致，见 charts.tsx 里 RadarChartView 的注释。）
+    out.push(new UiComp('RadarChart', g4,
+      '雷达图, 用于多个维度上的对比。labels 是各维度名, series 传 Series 数组(每个序列一个多边形)。',
+      [strings('labels', true), els('series', true)]));
     out.push(new UiComp('SingleStackedBarChart', g4, '单条堆叠条, 表达整体构成。',
       [strings('labels', true), numbers('values', true)]));
     out.push(new UiComp('Series', g4, '图表的一条数据序列: category 系列名 + values 数值数组。',
