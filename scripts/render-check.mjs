@@ -1086,6 +1086,13 @@ check(
     /\.sidebar--rail \{[\s\S]{0,200}?width: 56px/.test(rendererCss)
 )
 
+check(
+  '正文栏宽度：对话 / 输入栏 / 附件条 / 提示行四处共用 --content-max（桌面铺开，不再是窄屏 800）',
+  /--content-max: min\(1440px, 100%\)/.test(rendererCss) &&
+    (rendererCss.match(/max-width: var\(--content-max\)/g) ?? []).length === 4 &&
+    !/max-width: 800px/.test(rendererCss)
+)
+
 // --- 智能体图标：尺寸不能被 `.agent-avatar` 的 20px 吃掉（用户两轮报障） ---
 //
 // 事故形状：`.agent-avatar` 类里写着 width/height: 20px（侧栏那一档的尺寸），

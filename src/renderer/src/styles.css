@@ -22,6 +22,10 @@
   --accent-soft: #e4edfd;
   --ai-msg: #edf3fe;
   --user-msg: #4176e6;
+  /* 正文栏（对话、输入栏、提示行共用）的最大宽度。
+     原版是手机窄屏口径的 800，桌面上会在两侧留下两条很宽的空白（用户明确要求铺开）。
+     这里放开到 1440 并跟着窗口走 —— 超宽屏时仍有个上限，不至于一行拉到看不下去。 */
+  --content-max: min(1440px, 100%);
   --danger: #ec1313;
   --warn: #b6791f;
   --ok: #22c55e;
@@ -941,7 +945,7 @@ select {
 }
 
 .timeline__inner {
-  max-width: 800px;
+  max-width: var(--content-max);
   margin: 0 auto;
   padding: 0 22px;
 }
@@ -2148,7 +2152,7 @@ select {
 }
 
 .composer__inner {
-  max-width: 800px;
+  max-width: var(--content-max);
   margin: 0 auto;
   /* 元素间距不用 gap，而是照原版的显式边距：语音右 6、上传左 8（MessageInputView.ets:81,152） */
   display: flex;
@@ -2242,7 +2246,7 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  max-width: 800px;
+  max-width: var(--content-max);
   margin: 0 auto 8px;
 }
 
@@ -2359,7 +2363,7 @@ select {
 }
 
 .composer__hint {
-  max-width: 800px;
+  max-width: var(--content-max);
   margin: 7px auto 0;
   font-size: 11px;
   color: var(--text-faint);
