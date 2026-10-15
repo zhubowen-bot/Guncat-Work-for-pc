@@ -112,12 +112,15 @@ select {
 
 .app {
   display: grid;
-  grid-template-columns: 252px minmax(0, 1fr);
+  /* 侧栏这一列用 auto 跟着**侧栏自己的宽度**走（展开 252 / 折叠 56）。
+     之前这里写死 252px，而折叠状态是 Sidebar 的局部 state —— 折叠只换了内容，
+     列宽没变，于是留下一条又宽又空的白栏（用户报障「侧边栏折叠失败」）。 */
+  grid-template-columns: auto minmax(0, 1fr);
   height: 100%;
 }
 
 .app.with-workspace {
-  grid-template-columns: 252px minmax(0, 1fr) 286px;
+  grid-template-columns: auto minmax(0, 1fr) 286px;
 }
 
 /* 图标按钮：所有不再用 emoji 的图标入口都走这一个类 */
@@ -149,12 +152,15 @@ select {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* 展开态宽度写在这里（外壳那一列是 auto，跟着它走）—— 与折叠态 56 是一对 */
+  width: 252px;
   background: var(--sidebar-fill);
   border-right: 1px solid var(--divider);
   padding: 6px;
 }
 
 .sidebar--rail {
+  width: 56px;
   align-items: center;
   gap: 12px;
   padding: 8px 6px 12px;

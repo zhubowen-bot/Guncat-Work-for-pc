@@ -9,6 +9,7 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { SpeechBar } from './components/SpeechBar'
 import { MODE_HINT, agentById, isVirtualAgentId } from './conversations'
 import { AgentGlyph } from './components/AgentGlyph'
+import { EmptyState } from './components/EmptyState'
 import { WorkArtifactsCard } from './components/WorkArtifactsCard'
 import { TableOcrDialog } from './components/TableOcrDialog'
 import { ImageLightbox } from './components/ImageLightbox'
@@ -353,34 +354,7 @@ export default function App() {
         <div className="timeline" ref={scrollRef}>
           <div className="timeline__inner">
             {active === null || active.messages.length === 0 ? (
-              <div className="empty">
-                <div className="empty__hero">
-                  {/* 新会话空态图标 = **当前智能体自己的标识**（侧栏引擎区同一枚）：
-                      交互模式是画框加星火、工作模式是机器人、聊天智能体是它的原图。
-                      电脑版没有原版的启动飞入动画，这里就没有必要再借用应用头像。 */}
-                  {/* 空态是唯一需要「视觉大小归一」的地方（侧栏图标太小看不出来）：
-                      各智能体图标的墨迹占比不同，靠 inkNormalize 把可见图形拉齐。 */}
-                  <AgentGlyph
-                    agent={engine}
-                    size={48}
-                    inkNormalize
-                    title={engine?.name ?? 'Guncat Work'}
-                  />
-                </div>
-                <h1>{engine?.name ?? 'Guncat Work'}</h1>
-                <p>
-                  {mode === 'chat'
-                    ? '三协议流式对话。配置好 API 后直接开始。'
-                    : mode === 'interactive'
-                      ? '回答即界面，可视可交互。适用于生活中的大部分场景。'
-                      : '数十种工具和技能，端到端交付成果。适用于对质量要求较高的复杂长程任务。'}
-                </p>
-                <p className="empty__hint">
-                  {mode === 'chat'
-                    ? '提示：在左下角「设置」里配置接入方式、Base URL、API Key 与模型；在左侧「引擎」里切换智能体。'
-                    : '当前共 45 个内置工具；工作区文件可直接打开所在文件夹查看。'}
-                </p>
-              </div>
+              <EmptyState mode={mode} engine={engine} />
             ) : (
               <>
                 <Timeline

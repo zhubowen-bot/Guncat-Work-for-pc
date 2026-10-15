@@ -1,4 +1,4 @@
-﻿// 交互模式渲染器的无头验证：用 react-dom/server 把界面程序渲染成 HTML 字符串，
+// 交互模式渲染器的无头验证：用 react-dom/server 把界面程序渲染成 HTML 字符串，
 // 断言关键组件确实出现在产物里。
 //
 // 为什么值得做：Electron GUI 在本机跑不起来，但「元素树 → React 组件树」这一段
@@ -1029,6 +1029,61 @@ check(
     mod.isVirtualAgentId('work') &&
     !mod.isVirtualAgentId('guncat-3.1-flash') &&
     mod.modeForAgentId('interactive') === 'interactive'
+)
+
+// --- 空态文案：必须是智能体自己的 description（用户报障：端口自己编了一段） ---
+const proAgent = {
+  id: 'guncat-3.0-pro',
+  name: '专家模式',
+  description: 'Guncat 3.0-Pro：最强大的专家级单体化超级智能体，融合多轮搜索与多步推理。',
+  shortDescription: 'Guncat 3.0-Pro',
+  icon: 'icons/guncat-3.0-pro.png',
+  category: '通用智能体',
+  prompt: ''
+}
+const chatEmpty = mod.renderEmptyState('chat', proAgent)
+check(
+  '聊天模式空态：标题下面是**智能体自己的 description**（agents.json 那段）',
+  chatEmpty.includes('最强大的专家级单体化超级智能体'),
+  chatEmpty.includes('最强大的专家级') ? '用的是 description' : '文案不对'
+)
+check(
+  '聊天模式空态：不再出现端口自己编的「三协议流式对话」与「提示：在左下角设置…」',
+  !chatEmpty.includes('三协议流式对话') && !chatEmpty.includes('提示：在左下角'),
+  '旧文案已清除'
+)
+check(
+  '聊天模式空态：没有 description 时退回原版兜底句「选择一个智能体开始对话」',
+  mod.renderEmptyState('chat', { ...proAgent, description: '' }).includes(
+    '选择一个智能体开始对话'
+  )
+)
+check(
+  '交互/工作模式空态：两句说明在**第一个句号后强制换行**（原版 replace 的口径）',
+  mod.renderEmptyState('interactive', null).includes(
+    '回答即界面，可视可交互。<br/>适用于生活中的大部分场景。'
+  ) &&
+    mod.renderEmptyState('work', null).includes('端到端交付成果。') &&
+    !mod.renderEmptyState('interactive', null).includes('提示：')
+)
+
+// --- 侧栏折叠：列宽必须跟着侧栏自己走（用户报障：折叠后留一条又宽又空的白栏） ---
+//
+// 事故形状：`collapsed` 是 Sidebar 的局部 state，而外壳 `.app` 把侧栏那一列写死成 252px ——
+// 折叠只换了内容，列宽没变，于是留下一条空栏。现在列宽是 auto，宽度由 `.sidebar` /
+// `.sidebar--rail` 自己声明（252 / 56），两侧必须成对存在。
+const rendererCss = fs.readFileSync(
+  path.join(root, 'src/renderer/src/styles.css'),
+  'utf8'
+)
+check(
+  '侧栏列宽跟着侧栏走：外壳 auto + 展开 252 + 折叠 56（缺一个就会折叠失败）',
+  /\.app \{[\s\S]{0,400}?grid-template-columns: auto minmax\(0, 1fr\)/.test(rendererCss) &&
+    /\.app\.with-workspace \{[\s\S]{0,200}?grid-template-columns: auto minmax\(0, 1fr\) 286px/.test(
+      rendererCss
+    ) &&
+    /\.sidebar \{[\s\S]{0,300}?width: 252px/.test(rendererCss) &&
+    /\.sidebar--rail \{[\s\S]{0,200}?width: 56px/.test(rendererCss)
 )
 
 // --- 智能体图标：尺寸不能被 `.agent-avatar` 的 20px 吃掉（用户两轮报障） ---

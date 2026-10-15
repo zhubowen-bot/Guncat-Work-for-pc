@@ -68,6 +68,7 @@ import { AskUserCard, askConfirmLabel, askToggle } from '@renderer/components/As
 import { TableOcrPanel } from '@renderer/components/TableOcrDialog'
 import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
 import { AssistantBody, marqueeText } from '@renderer/components/MessageView'
+import { EmptyState } from '@renderer/components/EmptyState'
 import { AgentGlyph } from '@renderer/components/AgentGlyph'
 import type { MessageDto, PickedAttachmentDto } from '@ipc/contract'
 
@@ -874,8 +875,14 @@ export function renderAssistantBody(content: string): string {
   )
 }
 
-/** 排查用：单个智能体标识的产物（空态图标大小归一化要看得见才敢说对） */
-export function renderAgentGlyph(
+/** 排查用：空态（说明文案对不对齐原版，全靠这里看） */
+export function renderEmptyState(mode: string, engine: unknown): string {
+  return renderToStaticMarkup(
+    createElement(EmptyState, { mode: mode as never, engine: engine as never })
+  )
+}
+
+/** 排查用：单个智能体标识的产物（空态图标大小归一化要看得见才敢说对） */export function renderAgentGlyph(
   agent: unknown,
   size: number,
   inkNormalize: boolean
