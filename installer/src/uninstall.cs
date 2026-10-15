@@ -46,6 +46,33 @@ namespace GuncatSetup
                                        : Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
             waitPid = o.WaitPid;
 
+            // 卸载要删 C:\Program Files 下的文件、写 HKLM、清公共桌面快捷方式，同样必须提权。
+            // 提权放在「交接给临时副本」之前：这样临时副本天然继承提权后的令牌，
+            // 不必再弹第二次 UAC。
+            //
+            // `!o.FromTemp` 那一项不是可有可无：临时副本在 %TEMP% 里，如果让它再去提权，
+            // Windows 会在 UAC 之前先弹一个「打开文件 - 安全警告」（位置不可信），
+            // 而且它是无人应答就卡住的模态框 —— 实测踩到过。既然交接前必定已提权，
+            // 副本就永远不需要自己提权。
+            if (o.ShotDir == null && !o.FromTemp && !o.NoElevate && !Elevation.IsAdmin())
+            {
+                Logr.Write("当前不是管理员，尝试提权重启");
+                int code = 0;
+                if (!Elevation.RelaunchSelf(Elevation.BuildArgLine(args), o.Silent, out code))
+                {
+                    if (o.Silent)
+                    {
+                        Logr.Write("提权被拒绝，静默卸载中止");
+                        Environment.Exit(3);
+                    }
+                    MessageBox.Show("卸载需要管理员权限。\n\n刚才的 UAC 请求被取消了，卸载没有开始。",
+                                    "Guncat Work", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    Environment.Exit(3);
+                }
+                Logr.Write("已提权重启，本进程退出");
+                Environment.Exit(o.Silent ? code : 0);
+            }
+
             Application app = new Application();
             app.ShutdownMode = ShutdownMode.OnMainWindowClose;
             Theme.Install(app);
@@ -92,6 +119,7 @@ namespace GuncatSetup
             public bool FromTemp;
             public bool Silent;
             public bool Purge;
+            public bool NoElevate;
             public string ShotDir;
             public int WaitPid;
 
@@ -105,6 +133,7 @@ namespace GuncatSetup
                     else if (s == "--from-temp") o.FromTemp = true;
                     else if (s == "--silent" || s == "/s") o.Silent = true;
                     else if (s == "--purge") o.Purge = true;
+                    else if (s == "--no-elevate") o.NoElevate = true;
                     else if (s == "--shots" && i + 1 < a.Length) o.ShotDir = a[++i];
                     else if (s == "--wait-pid" && i + 1 < a.Length) int.TryParse(a[++i], out o.WaitPid);
                 }
@@ -242,10 +271,17 @@ namespace GuncatSetup
         /// <summary>返回是否已经把安装目录清干净 —— 静默模式的退出码看它。</summary>
         static bool RunUninstall(DeleteReport report)
         {
-            // 先从注册表里把安装时记下的信息读出来 —— 那些键马上就会被删掉
-            string desktopLnk = Reg.GetString(Reg.UninstallKey, "GuncatDesktopShortcut");
-            string startMenuDir = Reg.GetString(Reg.UninstallKey, "GuncatStartMenuDir");
-            string registered = Reg.GetString(Reg.UninstallKey, "InstallLocation");
+            // 先从注册表里把安装时记下的信息读出来 —— 那些键马上就会被删掉。
+            // 主记录在 HKLM（机器级安装）；HKCU 那份是早期「当前用户安装」的遗留，一并兜底。
+            string desktopLnk = Reg.GetString(true, Reg.UninstallKey, "GuncatDesktopShortcut");
+            string startMenuDir = Reg.GetString(true, Reg.UninstallKey, "GuncatStartMenuDir");
+            string registered = Reg.GetString(true, Reg.UninstallKey, "InstallLocation");
+            if (string.IsNullOrEmpty(desktopLnk))
+                desktopLnk = Reg.GetString(false, Reg.UninstallKey, "GuncatDesktopShortcut");
+            if (string.IsNullOrEmpty(startMenuDir))
+                startMenuDir = Reg.GetString(false, Reg.UninstallKey, "GuncatStartMenuDir");
+            if (string.IsNullOrEmpty(registered))
+                registered = Reg.GetString(false, Reg.UninstallKey, "InstallLocation");
             if (!string.IsNullOrEmpty(registered) && Directory.Exists(registered)) installDir = registered;
 
             report(0, 100, "正在关闭 Guncat Work…");
@@ -264,12 +300,19 @@ namespace GuncatSetup
             DeleteTree(installDir, ref doneBytes, ref doneFiles, totalBytes, totalFiles, report);
 
             report(totalBytes, totalBytes, "正在清理快捷方式与注册表…");
+            string exeInDir = Path.Combine(installDir, BuildInfo.ExeName);
+            // 公共位置（当前安装方式）+ 当前用户位置（早期版本）+ 安装时记下的确切路径：
+            // 三个都试一遍，删不存在的只是空转，比漏删干净。
             TryDeleteFile(Path.Combine(Shortcuts.DesktopDir(), BuildInfo.AppName + ".lnk"));
+            TryDeleteFile(Path.Combine(Shortcuts.PerUserDesktopDir(), BuildInfo.AppName + ".lnk"));
             if (!string.IsNullOrEmpty(desktopLnk)) TryDeleteFile(desktopLnk);
             TryDeleteDir(Shortcuts.StartMenuDir());
+            TryDeleteDir(Shortcuts.PerUserStartMenuDir());
             if (!string.IsNullOrEmpty(startMenuDir)) TryDeleteDir(startMenuDir);
-            Reg.DeleteValue(Reg.CompatLayersKey, Path.Combine(installDir, BuildInfo.ExeName));
-            Reg.DeleteTree(Reg.UninstallKey);
+            Reg.DeleteValue(true, Reg.CompatLayersKey, exeInDir);
+            Reg.DeleteValue(false, Reg.CompatLayersKey, exeInDir);
+            Reg.DeleteTree(true, Reg.UninstallKey);
+            Reg.DeleteTree(false, Reg.UninstallKey);
 
             if (deleteData)
             {

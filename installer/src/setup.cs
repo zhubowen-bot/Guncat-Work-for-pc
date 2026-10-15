@@ -41,13 +41,13 @@ namespace GuncatSetup
         static TextBlock txtSpace;
         static CheckBox chkDesktop, chkStartMenu, chkLaunch, chkAdmin;
         static Grid pageOptions, pageProgress, pageDone, pageError;
-        static TextBlock txtStep, txtStage, txtPercent, txtSpeed, txtDetail, txtDoneWhere, txtError, txtErrorLog;
+        static TextBlock txtStep, txtStage, txtPercent, txtSpeed, txtDetail, txtDoneWhere, txtError,
+            txtErrorLog, txtWarn;
         static ProgressBar barProgress;
         static Button btnInstall, btnCancel, btnAbort, btnLaunch, btnOpenDir, btnErrorClose, btnRetry;
 
         static volatile bool installRunning;
         static volatile bool cancelRequested;
-        static string lastError = "";
 
         [STAThread]
         static void Main(string[] args)
@@ -86,6 +86,32 @@ namespace GuncatSetup
             Logr.Write("=== Guncat Work 安装程序启动 ===");
             Logr.Write("命令行：" + string.Join(" ", args));
             Logr.Write("版本：" + BuildInfo.Version + "  载荷：" + Fmt.Bytes(BuildInfo.PayloadBytes));
+
+            // 本产品是「为所有用户安装」：要写 C:\Program Files、HKLM 与公共桌面，
+            // 必须提权。清单里写的是 asInvoker（不然没法用 runas 重新拉起自己），
+            // 于是这里自己判断、自己重启 —— 重启出来的那个进程才继续往下走。
+            if (o.ShotDir == null && !o.NoElevate && !Elevation.IsAdmin())
+            {
+                Logr.Write("当前不是管理员，尝试提权重启");
+                int code = 0;
+                bool started = Elevation.RelaunchSelf(Elevation.BuildArgLine(args), o.Silent, out code);
+                if (!started)
+                {
+                    // 用户在 UAC 上点了「否」。静默模式直接失败，界面模式给一句人话。
+                    if (o.Silent)
+                    {
+                        Logr.Write("提权被拒绝，静默安装中止");
+                        Environment.Exit(3);
+                    }
+                    MessageBox.Show(
+                        "安装需要管理员权限（要把程序装到 " + DefaultDir() + "，并登记到「应用和功能」）。\n\n" +
+                        "刚才的 UAC 请求被取消了，安装没有开始。",
+                        "Guncat Work 安装程序", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    Environment.Exit(3);
+                }
+                Logr.Write("已提权重启，本进程退出");
+                Environment.Exit(o.Silent ? code : 0);
+            }
 
             // Application 在四条路径上都要有：主题资源挂在它身上，XAML 里的
             // StaticResource 才查得到（静默模式虽然不建窗口，留着也无害）。
@@ -132,6 +158,7 @@ namespace GuncatSetup
             public bool ForceAdmin;
             public bool NoDesktop;
             public bool NoStartMenu;
+            public bool NoElevate;
 
             public static Options Parse(string[] args)
             {
@@ -144,6 +171,7 @@ namespace GuncatSetup
                     else if (a == "--admin") o.ForceAdmin = true;
                     else if (a == "--no-desktop") o.NoDesktop = true;
                     else if (a == "--no-startmenu") o.NoStartMenu = true;
+                    else if (a == "--no-elevate") o.NoElevate = true;
                     else if (a == "--dir" && i + 1 < args.Length) o.Dir = args[++i];
                     else if (a == "--shots" && i + 1 < args.Length) o.ShotDir = args[++i];
                 }
@@ -153,8 +181,11 @@ namespace GuncatSetup
 
         static string DefaultDir()
         {
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                                "Programs", BuildInfo.DefaultDirName);
+            // Program Files 而不是 %LOCALAPPDATA%\Programs：这是「为所有用户安装」，
+            // 与 HKLM 登记项、公共桌面/开始菜单快捷方式配套。
+            // 注意 exe 必须是 AnyCPU（64 位进程才拿得到 C:\Program Files 而不是 (x86)）。
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                                BuildInfo.DefaultDirName);
         }
 
         // ================= 界面装配 =================
@@ -166,6 +197,7 @@ namespace GuncatSetup
             pageError = (Grid)pages.FindName("PageError");
             txtDir = (TextBox)pages.FindName("TxtDir");
             txtSpace = (TextBlock)pages.FindName("TxtSpace");
+            txtWarn = (TextBlock)pages.FindName("TxtWarn");
             chkDesktop = (CheckBox)pages.FindName("ChkDesktop");
             chkStartMenu = (CheckBox)pages.FindName("ChkStartMenu");
             chkLaunch = (CheckBox)pages.FindName("ChkLaunch");
@@ -251,6 +283,16 @@ namespace GuncatSetup
             }
             txtSpace.Text = text;
             txtSpace.Foreground = (Brush)shell.Shell.FindResource("TextMuted");
+
+            // 先探一次可写性：等用户点完「开始安装」再报「访问被拒绝」毫无帮助 ——
+            // 他既不知道为什么，也不知道该做什么。（实测踩到过：从受限环境里启动时，
+            // 目标目录整个写不进去，而界面只丢出一句原始的 .NET 异常。）
+            bool writable = string.IsNullOrEmpty(dir) || Fsx.CanWriteDir(dir);
+            txtWarn.Visibility = writable ? Visibility.Collapsed : Visibility.Visible;
+            if (!writable)
+            {
+                txtWarn.Text = "这个位置当前写不进去，换一个位置即可（例如 D:\\Guncat Work）。";
+            }
         }
 
         static void RequestCancel()
@@ -319,9 +361,8 @@ namespace GuncatSetup
                     }
                     if (error != null)
                     {
-                        lastError = error;
                         txtError.Text = error;
-                        txtErrorLog.Text = "详细日志：" + Logr.Path_;
+                        txtErrorLog.Text = Logr.Exists ? "详细日志：" + Logr.Path_ : "日志未能写入（%TEMP% 不可写）。";
                         Show(pageError);
                         return;
                     }
@@ -429,7 +470,24 @@ namespace GuncatSetup
             r.Step = "检查安装位置";
             r.Percent = 0;
             report(r);
-            Directory.CreateDirectory(target);
+            try
+            {
+                Directory.CreateDirectory(target);
+            }
+            catch (Exception ex)
+            {
+                // 直接把 .NET 那句「对路径…的访问被拒绝」丢给用户等于没说：
+                // 他不明白为什么，也不知道下一步该做什么。
+                throw new InvalidOperationException(
+                    "无法创建安装目录：\n" + target + "\n\n" + ex.Message +
+                    "\n\n请点「重试」换一个可以写入的位置（例如 D:\\Guncat Work）。");
+            }
+            if (!Fsx.CanWriteDir(target))
+            {
+                throw new InvalidOperationException(
+                    "安装目录无法写入：\n" + target +
+                    "\n\n请点「重试」换一个位置，或检查该目录的权限。");
+            }
             long free = Fsx.FreeSpace(target);
             if (free >= 0 && free < BuildInfo.PayloadBytes + 32L * 1024 * 1024)
             {
@@ -481,7 +539,7 @@ namespace GuncatSetup
                 }
                 Thread.Sleep(220);
                 long done = Fsx.DirSize(target);
-                // 走局部变量而不是直接比常量：常量比较会被编译器判成「恒真表达式」而告警
+                // 走局部变量而不是直接比常量：常量比较会被编译器判成「恒真/恒假表达式」而告警
                 double ratio = totalBytes <= 0 ? 0 : (double)done / totalBytes;
                 if (ratio > 1) ratio = 1;
                 DateTime now = DateTime.Now;
@@ -581,23 +639,27 @@ namespace GuncatSetup
         {
             try
             {
-                Reg.SetString(Reg.UninstallKey, "DisplayName", BuildInfo.AppName);
-                Reg.SetString(Reg.UninstallKey, "DisplayVersion", BuildInfo.Version);
-                Reg.SetString(Reg.UninstallKey, "Publisher", BuildInfo.Publisher);
-                Reg.SetString(Reg.UninstallKey, "DisplayIcon", appExe);
-                Reg.SetString(Reg.UninstallKey, "InstallLocation", target);
-                Reg.SetString(Reg.UninstallKey, "UninstallString", "\"" + uninstaller + "\"");
-                Reg.SetString(Reg.UninstallKey, "QuietUninstallString", "\"" + uninstaller + "\" --silent");
-                Reg.SetString(Reg.UninstallKey, "InstallDate",
+                Reg.SetString(true, Reg.UninstallKey, "DisplayName", BuildInfo.AppName);
+                Reg.SetString(true, Reg.UninstallKey, "DisplayVersion", BuildInfo.Version);
+                Reg.SetString(true, Reg.UninstallKey, "Publisher", BuildInfo.Publisher);
+                Reg.SetString(true, Reg.UninstallKey, "DisplayIcon", appExe);
+                Reg.SetString(true, Reg.UninstallKey, "InstallLocation", target);
+                Reg.SetString(true, Reg.UninstallKey, "UninstallString", "\"" + uninstaller + "\"");
+                Reg.SetString(true, Reg.UninstallKey, "QuietUninstallString", "\"" + uninstaller + "\" --silent");
+                Reg.SetString(true, Reg.UninstallKey, "InstallDate",
                               DateTime.Now.ToString("yyyyMMdd", CultureInfo.InvariantCulture));
                 // 卸载时按这两条记录精确删除快捷方式：用户可能改过安装位置，
                 // 也可能当初就没勾选桌面快捷方式，靠猜只会删错或删不干净。
-                Reg.SetString(Reg.UninstallKey, "GuncatDesktopShortcut", desktopLnk == null ? "" : desktopLnk);
-                Reg.SetString(Reg.UninstallKey, "GuncatStartMenuDir", startMenuDir == null ? "" : startMenuDir);
-                Reg.SetDword(Reg.UninstallKey, "NoModify", 1);
-                Reg.SetDword(Reg.UninstallKey, "NoRepair", 1);
-                Reg.SetDword(Reg.UninstallKey, "EstimatedSize",
+                Reg.SetString(true, Reg.UninstallKey, "GuncatDesktopShortcut",
+                              desktopLnk == null ? "" : desktopLnk);
+                Reg.SetString(true, Reg.UninstallKey, "GuncatStartMenuDir",
+                              startMenuDir == null ? "" : startMenuDir);
+                Reg.SetDword(true, Reg.UninstallKey, "NoModify", 1);
+                Reg.SetDword(true, Reg.UninstallKey, "NoRepair", 1);
+                Reg.SetDword(true, Reg.UninstallKey, "EstimatedSize",
                              (int)Math.Min(int.MaxValue, BuildInfo.PayloadBytes / 1024));
+                // 早期版本把登记项写在 HKCU：清掉，免得「应用和功能」里出现两条
+                Reg.DeleteTree(false, Reg.UninstallKey);
             }
             catch (Exception ex)
             {
@@ -605,19 +667,21 @@ namespace GuncatSetup
                 Logr.Write("写注册表（应用和功能）失败：" + ex.Message);
             }
 
-            // AppCompatFlags：按 exe 完整路径匹配，存在 HKCU。
+            // AppCompatFlags：机器级安装就写 HKLM，对所有用户生效
+            // （HKCU 那份是早期「当前用户安装」留下的，一并清掉）。
             // 这是「双击没反应」的最后一道保险，只有用户主动勾选才写。
             try
             {
                 if (adminCompat)
                 {
-                    Reg.SetString(Reg.CompatLayersKey, appExe, "~ RUNASADMIN");
-                    Logr.Write("已写入 RUNASADMIN 兼容层");
+                    Reg.SetString(true, Reg.CompatLayersKey, appExe, "~ RUNASADMIN");
+                    Logr.Write("已写入 RUNASADMIN 兼容层（HKLM）");
                 }
                 else
                 {
-                    Reg.DeleteValue(Reg.CompatLayersKey, appExe);
+                    Reg.DeleteValue(true, Reg.CompatLayersKey, appExe);
                 }
+                Reg.DeleteValue(false, Reg.CompatLayersKey, appExe);
             }
             catch (Exception ex)
             {
@@ -645,6 +709,7 @@ namespace GuncatSetup
             pageError = (Grid)pages.FindName("PageError");
             txtDir = (TextBox)pages.FindName("TxtDir");
             txtSpace = (TextBlock)pages.FindName("TxtSpace");
+            txtWarn = (TextBlock)pages.FindName("TxtWarn");
             txtStep = (TextBlock)pages.FindName("TxtStep");
             txtStage = (TextBlock)pages.FindName("TxtStage");
             txtPercent = (TextBlock)pages.FindName("TxtPercent");
@@ -659,6 +724,9 @@ namespace GuncatSetup
 
             txtDir.Text = DefaultDir();
             UpdateSpaceHint();
+            // 截图是给文档用的，要的是「一切正常」的样子。可写性探测在受限环境里会返回 false，
+            // 于是这里强制收掉那条警告（真实运行该显示就显示）。
+            txtWarn.Visibility = Visibility.Collapsed;
             // 界面模式下没编载荷，UpdateSpaceHint 会算出「需要 0 B」，预览里看着像坏了 —— 给个真值
             // （经局部变量比较：直接比常量会被编译器判成恒假而报「无法访问的代码」）
             long previewPayload = BuildInfo.PayloadBytes;

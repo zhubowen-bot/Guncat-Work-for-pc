@@ -72,8 +72,16 @@ if (!uiOnly && !has('--skip-build')) {
   fail('--skip-build 但 out/main/index.js 不存在，先跑一次完整构建。')
 }
 
+// --skip-7z 只有在「压缩包与解压出来的载荷目录都还在」时才真的能跳过：
+// 载荷目录还要用来统计文件数与体积（写进 BuildInfo），缺一个就必须重来。
+const reusePayload =
+  has('--skip-7z') && fs.existsSync(payloadArchive) && fs.existsSync(payloadRoot)
+if (has('--skip-7z') && !reusePayload) {
+  step('--skip-7z 用不了（缺 payload.7z 或载荷目录），改为重新组装并压缩')
+}
+
 // ===== 2. 组装载荷目录（与便携版完全同一份产物）=====
-if (!uiOnly && (!has('--skip-7z') || !fs.existsSync(payloadArchive))) {
+if (!uiOnly && !reusePayload) {
   step('组装应用载荷目录')
   run(process.execPath, [path.join(root, 'scripts', 'package-portable.mjs')], {
     env: { ...process.env, GUNCAT_PACKAGE_OUTDIR: payloadRoot }
@@ -97,7 +105,7 @@ function find7za() {
   return null
 }
 
-if (!uiOnly && (!has('--skip-7z') || !fs.existsSync(payloadArchive))) {
+if (!uiOnly && !reusePayload) {
   const sevenZip = find7za()
   if (!sevenZip) {
     fail(

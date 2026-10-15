@@ -34,6 +34,9 @@
       </Grid>
       <TextBlock x:Name="TxtSpace" Style="{StaticResource T_Muted}" Margin="0,7,0,0"
                  Text="需要 0 MB"/>
+      <TextBlock x:Name="TxtWarn" Margin="0,5,0,0" TextWrapping="Wrap" Visibility="Collapsed"
+                 FontFamily="{StaticResource UiFont}" FontSize="12" Foreground="#FFE8574A"
+                 Text="这个位置当前写不进去。"/>
 
       <Border Height="1" Background="{StaticResource StrokeSoft}" Margin="0,18,0,16"/>
 
@@ -152,7 +155,9 @@
       <TextBlock Text="安装未完成" Style="{StaticResource T_Title}" Margin="0,20,0,0"/>
       <TextBlock x:Name="TxtError" Style="{StaticResource T_Body}" Margin="0,10,0,0"
                  TextWrapping="Wrap"/>
-      <TextBlock x:Name="TxtErrorLog" Style="{StaticResource T_Muted}" Margin="0,14,0,0"
+      <TextBlock Style="{StaticResource T_Muted}" Margin="0,12,0,0" TextWrapping="Wrap"
+                 Text="点「重试」可以回去换一个安装位置；装到别处不影响使用。"/>
+      <TextBlock x:Name="TxtErrorLog" Style="{StaticResource T_Muted}" Margin="0,8,0,0"
                  TextWrapping="Wrap"/>
     </StackPanel>
 

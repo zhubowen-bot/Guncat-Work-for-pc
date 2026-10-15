@@ -10,6 +10,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Security.Principal;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -150,6 +151,34 @@ namespace GuncatSetup
             catch { }
         }
 
+        /// <summary>
+        /// 目标目录到底能不能写 —— 用于在用户点「开始安装」之前就给出提示，
+        /// 而不是让他等界面上弹一个「访问被拒绝」。
+        ///
+        /// 探测方式：从目标往上找到第一个已存在的祖先，在那里建一个 DeleteOnClose 的探针文件。
+        /// 不直接建目标目录本身，是因为那会在用户只是改了改路径时留下一个空目录。
+        /// </summary>
+        public static bool CanWriteDir(string dir)
+        {
+            try
+            {
+                string probe = dir;
+                while (!string.IsNullOrEmpty(probe) && !Directory.Exists(probe))
+                {
+                    DirectoryInfo parent = Directory.GetParent(probe);
+                    if (parent == null) return false;
+                    probe = parent.FullName;
+                }
+                if (!Directory.Exists(probe)) return false;
+                string file = Path.Combine(probe, ".guncat-write-probe-" + Guid.NewGuid().ToString("N"));
+                FileStream fs = new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1,
+                                               FileOptions.DeleteOnClose);
+                fs.Dispose();
+                return true;
+            }
+            catch { return false; }
+        }
+
         /// <summary>把流写成文件（用于把嵌入的 payload / 7za 释放到临时目录）。</summary>
         public static void CopyStream(Stream src, string dest)
         {
@@ -197,18 +226,110 @@ namespace GuncatSetup
             lnk.Save();
         }
 
+        /// <summary>
+        /// 本项目是「为所有用户安装」，快捷方式一律放公共位置。
+        /// 放在「当前用户」的桌面/开始菜单是不行的：提权后进程可能跑在另一个账户下
+        /// （UAC 里输入了别的管理员账号时就是这样），那样快捷方式会跑到别人桌面上。
+        /// </summary>
         public static string DesktopDir()
+        {
+            return Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+        }
+
+        public static string StartMenuDir()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),
+                                "Guncat Work");
+        }
+
+        /// <summary>早期版本装的是「当前用户」，卸载时要顺手清掉那些位置的残留。</summary>
+        public static string PerUserDesktopDir()
         {
             return Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
         }
 
-        public static string StartMenuDir()
+        public static string PerUserStartMenuDir()
         {
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Guncat Work");
         }
     }
 
-    /// <summary>只写 HKCU —— 安装是「当前用户」级的，不该要管理员权限。</summary>
+    /// <summary>
+    /// 提权。清单里写的是 asInvoker（这样才可能用 runas 动词重新拉起自己），
+    /// 要写 C:\Program Files 与 HKLM 就必须走这一步。
+    /// </summary>
+    static class Elevation
+    {
+        public static bool IsAdmin()
+        {
+            try
+            {
+                WindowsIdentity id = WindowsIdentity.GetCurrent();
+                return new WindowsPrincipal(id).IsInRole(WindowsBuiltInRole.Administrator);
+            }
+            catch { return false; }
+        }
+
+        public static string SelfPath()
+        {
+            return Assembly.GetExecutingAssembly().Location;
+        }
+
+        /// <summary>
+        /// 用 runas 重新拉起自己（弹 UAC）。wait 为真时等它结束并把退出码带回来 ——
+        /// 静默安装必须等，否则调用方拿不到真实结果。
+        /// 返回 false 表示用户取消了 UAC，或系统不允许提权。
+        /// </summary>
+        public static bool RelaunchSelf(string arguments, bool wait, out int exitCode)
+        {
+            exitCode = 0;
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo(SelfPath());
+                psi.Verb = "runas";
+                psi.UseShellExecute = true;
+                psi.Arguments = arguments;
+                psi.WorkingDirectory = Path.GetDirectoryName(SelfPath());
+                Process p = Process.Start(psi);
+                if (wait && p != null)
+                {
+                    p.WaitForExit();
+                    exitCode = p.ExitCode;
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logr.Write("提权重启失败：" + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>把参数原样拼回命令行 —— 路径里的空格必须重新加引号。</summary>
+        public static string BuildArgLine(string[] args)
+        {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (i > 0) sb.Append(' ');
+                string a = args[i];
+                if (a.IndexOf(' ') >= 0 || a.IndexOf('\t') >= 0)
+                {
+                    sb.Append('"').Append(a.Replace("\"", "\\\"")).Append('"');
+                }
+                else
+                {
+                    sb.Append(a);
+                }
+            }
+            return sb.ToString();
+        }
+    }
+
+    /// <summary>
+    /// 注册表。本产品是「为所有用户安装」，所以登记项、兼容层都写 HKLM（machine = true）；
+    /// 保留 machine = false 的重载只是为了在卸载时顺手清掉早期版本的 HKCU 残留。
+    /// </summary>
     static class Reg
     {
         public const string UninstallKey =
@@ -217,33 +338,38 @@ namespace GuncatSetup
         public const string CompatLayersKey =
             @"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers";
 
-        public static void SetString(string subKey, string name, string value)
+        static RegistryKey Root(bool machine)
         {
-            using (RegistryKey k = Registry.CurrentUser.CreateSubKey(subKey))
+            return machine ? Registry.LocalMachine : Registry.CurrentUser;
+        }
+
+        public static void SetString(bool machine, string subKey, string name, string value)
+        {
+            using (RegistryKey k = Root(machine).CreateSubKey(subKey))
             {
                 k.SetValue(name, value, RegistryValueKind.String);
             }
         }
 
-        public static void SetDword(string subKey, string name, int value)
+        public static void SetDword(bool machine, string subKey, string name, int value)
         {
-            using (RegistryKey k = Registry.CurrentUser.CreateSubKey(subKey))
+            using (RegistryKey k = Root(machine).CreateSubKey(subKey))
             {
                 k.SetValue(name, value, RegistryValueKind.DWord);
             }
         }
 
-        public static void DeleteTree(string subKey)
+        public static void DeleteTree(bool machine, string subKey)
         {
-            try { Registry.CurrentUser.DeleteSubKeyTree(subKey, false); }
+            try { Root(machine).DeleteSubKeyTree(subKey, false); }
             catch { }
         }
 
-        public static void DeleteValue(string subKey, string name)
+        public static void DeleteValue(bool machine, string subKey, string name)
         {
             try
             {
-                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(subKey, true))
+                using (RegistryKey k = Root(machine).OpenSubKey(subKey, true))
                 {
                     if (k != null) k.DeleteValue(name, false);
                 }
@@ -251,11 +377,11 @@ namespace GuncatSetup
             catch { }
         }
 
-        public static string GetString(string subKey, string name)
+        public static string GetString(bool machine, string subKey, string name)
         {
             try
             {
-                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(subKey))
+                using (RegistryKey k = Root(machine).OpenSubKey(subKey))
                 {
                     if (k == null) return null;
                     object v = k.GetValue(name);
@@ -307,6 +433,16 @@ namespace GuncatSetup
             {
                 try { File.WriteAllText(Path_, "", Encoding.UTF8); }
                 catch { }
+            }
+        }
+
+        /// <summary>日志到底写没写成功 —— 界面上不该显示一个并不存在的路径。</summary>
+        public static bool Exists
+        {
+            get
+            {
+                try { return File.Exists(Path_); }
+                catch { return false; }
             }
         }
     }
