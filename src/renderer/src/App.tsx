@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
 import { reportStage } from './bootReport'
 import { Sidebar } from './components/Sidebar'
@@ -14,7 +14,20 @@ import { TableOcrDialog } from './components/TableOcrDialog'
 import { ImageLightbox } from './components/ImageLightbox'
 import { useWorkspacePreview } from './components/WorkspacePanel'
 import { useSpeech, speechTextOf } from './speech/speechStore'
-import { IconBrain, IconClose, IconGlobe, IconTable } from './icons'
+import { IconBrain, IconGlobe, IconTable } from './icons'
+
+/**
+ * 提示条（对齐原版 ToastView + ChatPage 的 10 拍定时器）。
+ *
+ * 原版：1 秒自动消失、`hitTestBehavior(HitTestMode.None)`（**点击穿透**、没有关闭钮）、
+ * 白字 13px、toast_bg 底、圆角 24、阴影 radius 18 / #22000000 / offsetY 6。
+ * 桌面端此前挂 6 秒并带一个关闭钮 —— 那会让提示条盖住界面且必须手动关。
+ *
+ * 一处保留的差异：**错误**类提示沿用原版自己在错误路径上的时长
+ * （`promptAction.showToast({ duration: 2500 })`，见原版朗读失败那条），
+ * 因为错误信息在桌面端没有第二个可见出口，1 秒来不及读。
+ */
+const NOTICE_MS: Record<string, number> = { error: 2500 }
 
 function Notice() {
   const notice = useStore((s) => s.notice)
@@ -24,7 +37,7 @@ function Notice() {
     if (notice === null) {
       return
     }
-    const timer = setTimeout(dismiss, 6000)
+    const timer = setTimeout(dismiss, NOTICE_MS[notice.level] ?? 1000)
     return () => clearTimeout(timer)
   }, [notice, dismiss])
 
@@ -32,11 +45,8 @@ function Notice() {
     return null
   }
   return (
-    <div className="notice" data-level={notice.level}>
+    <div className="notice" data-level={notice.level} role="status">
       <span>{notice.text}</span>
-      <button className="icon-btn" title="关闭提示" onClick={dismiss}>
-        <IconClose size={14} />
-      </button>
     </div>
   )
 }
@@ -45,6 +55,7 @@ export default function App() {
   const ready = useStore((s) => s.ready)
   const init = useStore((s) => s.init)
   const active = useStore((s) => s.active)
+  const activeId = useStore((s) => s.activeId)
   const mode = useStore((s) => s.mode)
   const running = useStore((s) => s.running)
   const thinkingEnabled = useStore((s) => s.thinkingEnabled)
@@ -171,6 +182,24 @@ export default function App() {
       element.scrollTop = element.scrollHeight
     }
   }, [messageCount, lastLength])
+
+  // 切会话 / 新建会话后**无条件**回到最新一条（原版 scrollToBottomDelayed(100)：
+  // 先立刻置底，再等一拍让 Markdown 完成布局后补一次）。
+  // 上面那个效果按「是否贴近底部」判断，切到一个被翻到中段的旧会话时就会留在原地 ——
+  // 用户看到的是一段没有上下文的中间内容。
+  useEffect(() => {
+    const element = scrollRef.current
+    if (element === null) {
+      return
+    }
+    element.scrollTop = element.scrollHeight
+    const timer = window.setTimeout(() => {
+      if (scrollRef.current !== null) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      }
+    }, 100)
+    return () => window.clearTimeout(timer)
+  }, [activeId])
 
   if (!ready) {
     return (

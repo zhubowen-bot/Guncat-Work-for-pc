@@ -1,4 +1,4 @@
-﻿// 单条消息的呈现。
+// 单条消息的呈现。
 //
 // 聊天模式 = 用户气泡 + 助手气泡（原版 ChatBubbleView 的信息层级：
 //   助手侧：思考条 → 工具行 → 正文/界面 → 操作行 → 统计行；用户侧：气泡 + 编辑/复制）。
@@ -384,10 +384,11 @@ export function MessageView({
             <MessageActions message={message} text={text} onEditToInput={onEditToInput} />
           ) : null}
           {/* 流式光标：气泡底部一条 2×14 的 brand 竖条（原版 ChatBubbleView.ets:656-668，
-              只在「正在流式且已有正文」时出现，左缩进 12） */}
+              只在「正在流式且已有正文」时出现，左缩进 12）。
+              竖条本身复用 Timeline 已有的 .stream-cursor，这里只加它与气泡的关系。 */}
           {streaming && text !== '' ? (
-            <div className="cursor">
-              <span className="cursor__bar" />
+            <div className="cursor-row">
+              <span className="stream-cursor" aria-hidden="true" />
             </div>
           ) : null}
         </div>
