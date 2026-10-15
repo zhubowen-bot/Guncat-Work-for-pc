@@ -20,9 +20,9 @@ import { useMemo, useState } from 'react'
 import type { MessageDto } from '@ipc/contract'
 import { AssistantBody, MessageActions, MessageView, ThinkingBar, ToolList } from './MessageView'
 import { Disclosure } from './Disclosure'
-import { groupTurns, formatDuration, turnStats, finalRound, type Turn } from '../turns'
+import { groupTurns, formatDuration, turnStats, finalRound, STOPPED_NOTE, type Turn } from '../turns'
 import { useStore } from '../store'
-import { IconInteractive, IconWork } from '../icons'
+import { IconCheck, IconInteractive, IconWork } from '../icons'
 
 interface Props {
   messages: MessageDto[]
@@ -265,17 +265,34 @@ export function GroupedTurn({
   const [manualOpen, setManualOpen] = useState(false)
   const open = touched ? manualOpen : streaming && !bodyStarted
 
-  // 是否还有活在做（原版 activityRunning）：保证「已完成」只在真的做完时才出现
+  // 是否还有活在做（原版 activityRunning）
   const activityRunning =
-    streaming && (!bodyStarted || (final?.toolCalls ?? []).some((c) => c.status === 'running'))
+    streaming &&
+    (!bodyStarted ||
+      (final?.toolCalls ?? []).some(
+        (c) => c.durationMs < 0 && (streaming || c.preparing === true || c.started === true)
+      ))
 
   if (turn.user === null && turn.rounds.length === 0) {
     return null
   }
 
-  const hasActivity = prior.length > 0 || stats.toolCalls > 0
+  // 本回合是否出现过活动（原版 WorkTurnView.hasActivity 588-591）：
+  // 前面几轮有消息、本轮有工具、**本轮有思考内容**、或流式中且期待思考，四者任一即可。
+  // 此前桌面端漏了后两条 —— 一个只思考没调工具的回合会连活动栏都不出现，
+  // 思考内容被整个藏起来。
+  const hasActivity =
+    prior.length > 0 ||
+    stats.toolCalls > 0 ||
+    (final !== null && final.reasoning.trim() !== '') ||
+    (streaming && thinkingExpected)
 
-  // 折叠态摘要（原版 activitySummary）：思考 ×N + M 个工具 · 12.4s
+  // 被手动停止的轮次：主进程在收尾时往正文末尾追加了这句标注（原版 appendTurnNote）。
+  // 折叠栏据此把「已完成」改成「已停止」—— 明明被打断却写着完成是误导。
+  const stopped = (final?.content ?? '').includes(STOPPED_NOTE)
+
+  // 折叠态摘要（原版 activitySummary 636-654）：`思考 ×N + M 个工具 · 12.4s`
+  // 思考与工具之间是「 + 」，耗时前面是「 · 」—— 原版就是这么接的。
   const thinkingRounds =
     prior.filter((r) => r.reasoning.trim() !== '').length +
     (final !== null && final.reasoning.trim() !== '' ? 1 : 0)
@@ -290,15 +307,18 @@ export function GroupedTurn({
     (sum, round) =>
       sum +
       round.toolCalls.reduce(
-        (s, c) => s + (c.finishedAt > 0 && c.startedAt > 0 ? c.finishedAt - c.startedAt : 0),
+        (s, c) => s + (c.durationMs > 0 ? c.durationMs : 0),
         0
       ),
     0
   )
-  if (totalMs > 0) {
-    summaryParts.push(formatDuration(totalMs))
-  }
   const summary = summaryParts.join(' + ')
+  const summaryWithMs =
+    totalMs > 0
+      ? summary === ''
+        ? formatDuration(totalMs)
+        : `${summary} · ${formatDuration(totalMs)}`
+      : summary
 
   return (
     <section className="turn">
@@ -306,9 +326,20 @@ export function GroupedTurn({
 
       {hasActivity ? (
         <Disclosure
-          title={activityRunning ? '正在处理…' : '已完成'}
-          subtitle={summary}
-          leading={activityRunning ? <span className="spinner spinner--sm" /> : undefined}
+          title={activityRunning ? '正在处理…' : stopped ? '已停止' : '已完成'}
+          subtitle={summaryWithMs}
+          // 完成态的对勾：正常是品牌色，**被停止的轮次转弱色** —— 表示「结束了」
+          // 而不是「成功完成了」（原版 WorkTurnView.buildActivityGroup 661-676）。
+          // 原版这里是一个对勾字符，本项目的渲染层禁用符号字符，改用 SVG。
+          leading={
+            activityRunning ? (
+              <span className="spinner spinner--sm" />
+            ) : (
+              <span className="activity__check" data-stopped={stopped}>
+                <IconCheck size={12} />
+              </span>
+            )
+          }
           open={open}
           onToggle={(next) => {
             setManualOpen(next)

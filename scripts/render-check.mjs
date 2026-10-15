@@ -485,6 +485,18 @@ check(
   groupedShell.includes('思考') && groupedShell.includes('1 个工具')
 )
 check(
+  '被手动停止的回合，折叠栏标题是「已停止」而不是「已完成」（原版 isStopped）',
+  mod.renderGroupedTurnStopped().includes('已停止') &&
+    !mod.renderGroupedTurnStopped().includes('>已完成<'),
+  '已停止'
+)
+check(
+  '只有思考、没有工具的回合也出现活动折叠栏（原版 hasActivity 含 reasoning）',
+  mod.renderGroupedTurnThinkingOnly().includes('思考') &&
+    mod.renderGroupedTurnThinkingOnly().includes('disclosure'),
+  '思考-only'
+)
+check(
   '交互模式：中间轮不单独成块（只有最终答复有 answer 块）',
   (groupedShell.match(/class="answer"/g) ?? []).length === 1
 )

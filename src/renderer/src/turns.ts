@@ -272,6 +272,12 @@ export function capText(text: string, max: number): string {
 }
 
 /**
+ * 手动停止的轮次会被追加这句标注（内核 `Constants.WORK_STOPPED_NOTE`）。
+ * 折叠栏据此把「已完成」改成「已停止」—— 明明被打断却写着完成是误导。
+ */
+export const STOPPED_NOTE = '任务已手动停止'
+
+/**
  * 取文本首行（并压掉多余空白）。
  * 原版用它把「工具出错时的结果首行」当成摘要显示（WorkTurnView 的 firstLineOf）：
  * 出错时参数摘要没意义，用户要看的是哪儿错了。

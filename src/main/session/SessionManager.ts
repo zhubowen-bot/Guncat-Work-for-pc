@@ -29,6 +29,7 @@ import { Agent } from '@core/model/Agent'
 import { ToolCallRecord } from '@core/model/ToolCallRecord'
 import { StreamCallbacks, AbortSignal } from '@core/common/Types'
 import { Constants } from '@core/common/Constants'
+import { LoopDecisions } from '@core/common/LoopDecisions'
 import { generateMessageId } from '@core/common/Utils'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { GuncatUiRuntime, GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
@@ -1013,9 +1014,13 @@ export class SessionManager {
     let assistantMsg: Message | null = null
     let streamed: string = ''
     let failure: string = ''
+    // 收尾标注要用到的两个状态：本轮最后的 finishReason，以及实际跑了几轮
+    let finishReason: string = ''
+    let stepsUsed: number = 0
 
     try {
       for (let step: number = 0; step < maxSteps; step++) {
+        stepsUsed = step + 1
         if (handle.abort.aborted) {
           break
         }
@@ -1067,6 +1072,7 @@ export class SessionManager {
         targetMsg.reasoning = turn.reasoning
         targetMsg.tokenSpeed = turn.tokenSpeed
         targetMsg.cacheHitRate = turn.cacheHitRate
+        finishReason = turn.finishReason ?? ''
         targetMsg.toolCalls = turn.toolCalls
         this.recordRunRound(conv.id, turn.tokenSpeed, turn.cacheHitRate)
 
@@ -1083,10 +1089,31 @@ export class SessionManager {
         const loopMsg: LoopMessage = LoopMessage.fromTurn(turn)
         messages.push(loopMsg)
 
+        // 模型输出顶到 max_tokens：收尾并提示「继续」（原版 ChatViewModel 2085-2094）。
+        // 排在工具执行**之前** —— 参数可能只生成了一半，执行它只会得到更糟的结果。
+        if (LoopDecisions.shouldBreakOnMaxTokens(turn.finishReason)) {
+          this.patchMessage(conv.id, targetMsg.id, { content: streamed })
+          await this.persist()
+          this.emit({
+            type: 'turn:finished',
+            conversationId: conv.id,
+            messageId: targetMsg.id,
+            status: handle.abort.aborted ? 'aborted' : 'ok'
+          })
+          break
+        }
+
         if (turn.toolCalls.length === 0) {
           this.patchMessage(conv.id, targetMsg.id, { content: streamed })
           await this.persist()
-          this.emit({ type: 'turn:finished', conversationId: conv.id, messageId: targetMsg.id, status: 'ok' })
+          // 状态必须看是否被中止：这里原先写死 'ok'，于是**用户手动停止的那一轮
+          // 在界面上报的是「正常完成」**（聊天模式同样的位置就是判 aborted 的）。
+          this.emit({
+            type: 'turn:finished',
+            conversationId: conv.id,
+            messageId: targetMsg.id,
+            status: handle.abort.aborted ? 'aborted' : 'ok'
+          })
           break
         }
 
@@ -1150,6 +1177,12 @@ export class SessionManager {
     } catch (e) {
       failure = (e as Error)?.message ?? String(e)
       if (assistantMsg !== null) {
+        // 失败也标注在正文里（原版：往最后一条 assistant 追加「警告 + 原因」；
+        // 没有 assistant 消息时才新起一条纯错误消息）。这样用户翻回来看得到原因，
+        // 而不是只有一条转瞬即逝的提示条。
+        if (!handle.abort.aborted) {
+          SessionManager.appendTurnNote(conv, assistantMsg, `⚠️ ${failure}`)
+        }
         this.emit({
           type: 'turn:finished',
           conversationId: conv.id,
@@ -1158,9 +1191,36 @@ export class SessionManager {
           error: failure
         })
       }
+      await this.persist()
     } finally {
       handle.busy = false
       this.finishRunStats(conv.id)
+      // ===== 收尾标注（原版 finalizeWorkTurn 3147-3160 / appendTurnNote 3162-3166）=====
+      // 手动停止 / 输出顶到上限 / 步数耗尽，都在这一轮的最后一条 assistant 正文末尾
+      // 追加一句说明。界面据此把折叠栏的「已完成」改成「已停止」，
+      // 也告诉用户「发『继续』可以接着跑」。
+      if (assistantMsg !== null) {
+        if (handle.abort.aborted) {
+          SessionManager.appendTurnNote(conv, assistantMsg, Constants.WORK_STOPPED_NOTE)
+        } else if (failure === '' && finishReason === 'max_tokens') {
+          SessionManager.appendTurnNote(
+            conv,
+            assistantMsg,
+            ' 本轮输出达到模型上限(max tokens), 已自动收尾。发送"继续"接着输出。'
+          )
+        } else if (failure === '' && stepsUsed >= maxSteps) {
+          SessionManager.appendTurnNote(
+            conv,
+            assistantMsg,
+            ` 已连续执行 ${maxSteps} 轮工具调用(防失控保险), 发送"继续"可接着执行。`
+          )
+        }
+        // 未走完的 preparing 记录在收尾时落定成「被打断」态（原版 3149-3151），
+        // 时间线据此显示「已中断」而不是永远转圈
+        for (const call of assistantMsg.toolCalls) {
+          call.preparing = false
+        }
+      }
       await this.persist()
       // 整轮跑完且没被中止时，用最终答复生成会话标题（原版在 turn_end 之后调用；
       // 失败静默、每会话只试一次）
@@ -1171,6 +1231,16 @@ export class SessionManager {
         }
       }
     }
+  }
+
+  /**
+   * 在轮次消息末尾追加标注（原版 ChatViewModel.appendTurnNote）：
+   * 正文为空就直接写这句，否则空一行再接 —— 这样它总是独立成段，
+   * 不会和模型正文粘成一行。
+   */
+  private static appendTurnNote(conv: Conversation, msg: Message, note: string): void {
+    msg.content = msg.content === '' ? note : `${msg.content}\n\n${note}`
+    msg.displayContent = msg.content
   }
 
   // ===== 会话标题（LLM 生成） =====

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import type { PickedAttachmentDto } from '@ipc/contract'
 import { useAutoResize } from '../hooks/useAutoResize'
 import { useVoiceInput } from '../speech/useVoiceInput'
@@ -156,7 +156,7 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
 
       <div className="composer__inner">
         {/* 元素顺序逐条对齐原版 MessageInputView.build（55-66）：
-            语音 → （拍照：手机专属，不移植）→ 输入框 → 上传(附件) → 发送。
+            语音、输入框、上传(附件)、发送依次排列（拍照是手机专属，不移植）。
             语音在输入框**左侧**是这个原版设计的一部分，不是随口排的。 */}
         <button
           type="button"

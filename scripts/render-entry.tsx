@@ -152,6 +152,59 @@ export function renderGroupedTurn(running = false, pendingBody = false): string 
   )
 }
 
+/** 被手动停止的回合：折叠栏标题应当是「已停止」而不是「已完成」（原版 isStopped） */
+export function renderGroupedTurnStopped(): string {
+  const messages = SHELL_MESSAGES.map((m) =>
+    m.id === 'm3' ? { ...m, content: `${m.content}\n\n任务已手动停止` } : m
+  )
+  return renderToStaticMarkup(
+    createElement(GroupedTurn, {
+      turn: groupTurns(messages)[0],
+      running: false,
+      lastAssistantId: 'm3',
+      onEditToInput: () => {}
+    })
+  )
+}
+
+/** 只有思考、没有工具调用的回合：活动折叠栏也必须出现（原版 hasActivity 的口径） */
+export function renderGroupedTurnThinkingOnly(): string {
+  const messages = [
+    {
+      id: 'u1',
+      role: 'user',
+      content: '想想怎么做',
+      displayContent: '想想怎么做',
+      reasoning: '',
+      createdAt: 0,
+      attachments: [],
+      toolCalls: [],
+      tokenSpeed: -1,
+      cacheHitRate: -1
+    },
+    {
+      id: 'a1',
+      role: 'assistant',
+      content: '',
+      displayContent: '',
+      reasoning: '先看看目录结构，再决定从哪儿下手…',
+      createdAt: 1,
+      attachments: [],
+      toolCalls: [],
+      tokenSpeed: -1,
+      cacheHitRate: -1
+    }
+  ] as typeof SHELL_MESSAGES
+  return renderToStaticMarkup(
+    createElement(GroupedTurn, {
+      turn: groupTurns(messages)[0],
+      running: false,
+      lastAssistantId: 'a1',
+      onEditToInput: () => {}
+    })
+  )
+}
+
 /** 思考跑马灯取文本末尾 400 字并压成单行（原版 getMarqueeText） */
 export { marqueeText }
 export { workspaceFileIcon }

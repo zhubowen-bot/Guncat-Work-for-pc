@@ -1003,6 +1003,109 @@ check(
 steerServer.closeAllConnections?.()
 steerServer.close()
 
+// --- 收尾标注：手动停止 / 输出顶到上限（原版 appendTurnNote + finalizeWorkTurn） ---
+//
+// 事故形状：手动停止一个任务后，那条被中断的回答在界面上和「正常答完」一模一样
+// （没有「已停止」），用户回头翻记录时分不清哪些是被自己打断的；
+// 模型的输出顶到 max_tokens 时也没有任何说明，看上去像「答到一半没了」。
+const noteBodies = []
+const noteServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    noteBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    if (noteBodies.length % 2 === 1) {
+      // 奇数轮：慢慢吐（留出中止的时间窗），最后给一个正常结尾
+      res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: '正在整理' } }] }) + '\n\n')
+      setTimeout(() => {
+        res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: '……' } }] }) + '\n\n')
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }, 400)
+      return
+    }
+    // 偶数轮：输出顶到模型上限
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: '写到一半' } }] }) + '\n\n')
+    res.write(
+      'data: ' +
+        JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] }) +
+        '\n\n'
+    )
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => noteServer.listen(0, '127.0.0.1', () => resolve()))
+const notePort = noteServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(notePort),
+  apiKey: 'sk-note-test',
+  model: 'note-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convStop = await inv('conversations:create', agents[0].id, 'work')
+events.length = 0
+const stopRun = inv('work:run', {
+  conversationId: convStop.id,
+  text: '整理一份季度总结',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+for (let i = 0; i < 250 && noteBodies.length === 0; i++) {
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+await inv('work:abort', convStop.id)
+await stopRun
+const stopDto = await inv('conversation:get', convStop.id)
+const stopMessage = (stopDto?.messages ?? []).filter((m) => m.role === 'assistant').pop()
+check(
+  '手动停止会在那一轮正文末尾留下「任务已手动停止」标注（原版 WORK_STOPPED_NOTE）',
+  String(stopMessage?.content ?? '').includes('任务已手动停止'),
+  String(stopMessage?.content ?? '').slice(-40)
+)
+check(
+  '标注是独立成段追加的（不是和模型正文粘在一行）',
+  String(stopMessage?.content ?? '').includes('\n\n任务已手动停止')
+)
+check(
+  '停止的事件状态仍是 aborted（标注不影响状态语义）',
+  events.some((e) => e.type === 'turn:finished' && e.status === 'aborted'),
+  JSON.stringify(events.filter((e) => e.type === 'turn:finished').map((e) => e.status))
+)
+
+const convMax = await inv('conversations:create', agents[0].id, 'work')
+const maxRun = inv('work:run', {
+  conversationId: convMax.id,
+  text: '写一份很长的报告',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+await maxRun
+const maxDto = await inv('conversation:get', convMax.id)
+const maxMessage = (maxDto?.messages ?? []).filter((m) => m.role === 'assistant').pop()
+check(
+  '输出顶到 max_tokens 时收尾并提示「发送继续」（原版 shouldBreakOnMaxTokens）',
+  String(maxMessage?.content ?? '').includes('达到模型上限'),
+  String(maxMessage?.content ?? '').slice(-60)
+)
+check(
+  '顶到上限后**不再多跑一轮**（原版是 break，不是继续循环）',
+  noteBodies.length === 2,
+  `共 ${noteBodies.length} 次模型请求`
+)
+noteServer.closeAllConnections?.()
+noteServer.close()
+
 // --- 任务统计与目标卡（审计 P2-10） ---
 //
 // 事故形状：工作区面板只有「N 个文件 / N 个目录 / N 次工具调用」，而且是全会话累计，
