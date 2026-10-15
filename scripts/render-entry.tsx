@@ -68,6 +68,7 @@ import { AskUserCard, askConfirmLabel, askToggle } from '@renderer/components/As
 import { TableOcrPanel } from '@renderer/components/TableOcrDialog'
 import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
 import { AssistantBody, marqueeText } from '@renderer/components/MessageView'
+import { AgentGlyph } from '@renderer/components/AgentGlyph'
 import type { MessageDto, PickedAttachmentDto } from '@ipc/contract'
 
 /** 导出文件名推导 —— 纯函数，可直接断言 */
@@ -869,6 +870,21 @@ export function renderAssistantBody(content: string): string {
         cacheHitRate: -1
       } as never,
       interactive: true
+    })
+  )
+}
+
+/** 排查用：单个智能体标识的产物（空态图标大小归一化要看得见才敢说对） */
+export function renderAgentGlyph(
+  agent: unknown,
+  size: number,
+  inkNormalize: boolean
+): string {
+  return renderToStaticMarkup(
+    createElement(AgentGlyph, {
+      agent: agent as never,
+      size,
+      inkNormalize
     })
   )
 }

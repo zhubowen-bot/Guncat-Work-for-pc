@@ -95,14 +95,17 @@ export function AgentGlyph({
           title={title ?? agent.name}
           width={size}
           height={size}
-          // transform 不参与布局：盒子仍是 size（布局统一），只有图形按墨迹占比放大
-          style={
-            ink < 1
-              ? { borderRadius: size / 2, transform: `scale(${(1 / ink).toFixed(3)})` }
-              : rounded
-                ? { borderRadius: size / 2 }
-                : undefined
-          }
+          // **尺寸必须写进 style**，不能只靠 width/height 属性：
+          // 默认类 `.agent-avatar` 里写着 `width:20px; height:20px`（侧栏那一档的尺寸），
+          // 而 CSS 类的优先级高于 `<img width>` 这类表现属性 —— 于是空态里 48 的图标
+          // 被死死压成 20（用户看到的「轻简/效率/专家的图标特别特别小」就是这个）。
+          // transform 不参与布局：盒子仍是 size（排版统一），只有图形按墨迹占比放大。
+          style={{
+            width: size,
+            height: size,
+            ...(rounded ? { borderRadius: size / 2 } : {}),
+            ...(ink < 1 ? { transform: `scale(${(1 / ink).toFixed(3)})` } : {})
+          }}
           onError={() => setBroken(true)}
         />
       )
@@ -126,7 +129,8 @@ export function AgentGlyph({
       title={title ?? 'Guncat Work'}
       width={size}
       height={size}
-      style={rounded ? { borderRadius: size / 2 } : undefined}
+      // 同 AgentGlyph：尺寸写进 style，否则会被 `.agent-avatar` 的 20px 覆盖
+      style={{ width: size, height: size, ...(rounded ? { borderRadius: size / 2 } : {}) }}
     />
   )
 }

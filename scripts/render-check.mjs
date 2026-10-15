@@ -1003,6 +1003,44 @@ check(
     mod.modeForAgentId('interactive') === 'interactive'
 )
 
+// --- 智能体图标：尺寸不能被 `.agent-avatar` 的 20px 吃掉（用户两轮报障） ---
+//
+// 事故形状：`.agent-avatar` 类里写着 width/height: 20px（侧栏那一档的尺寸），
+// 而 CSS 类的优先级高于 `<img width="48">` 这种表现属性 —— 空态里 48 的图标被压成 20。
+// 虚拟智能体走 SVG（没有这个类）所以是正常大小，于是「同一排图标有的大有的小」。
+const realAgent = {
+  id: 'guncat-3.1-flash',
+  name: '轻简模式',
+  description: '',
+  shortDescription: '',
+  icon: 'icons/guncat-3.1-flash.png',
+  category: '通用智能体',
+  prompt: ''
+}
+const glyphReal = mod.renderAgentGlyph(realAgent, 48, true)
+check(
+  '真实智能体的图标：尺寸写进 style（CSS 类的 20px 不能覆盖）',
+  glyphReal.includes('style="width:48px;height:48px') ||
+    /style="[^"]*width:48px[^"]*height:48px/.test(glyphReal),
+  glyphReal.replace(/\s+/g, ' ').slice(0, 180)
+)
+check(
+  '真实智能体的图标按墨迹占比放大（轻简模式 96x96 只有 80% 墨迹）',
+  /transform:scale\(1\.2/.test(glyphReal),
+  (glyphReal.match(/transform:scale\([^)]*\)/) ?? ['(无缩放)'])[0]
+)
+check(
+  '虚拟智能体的描边图标同样按占比放大（viewBox 自带留白）',
+  mod.renderAgentGlyph({ ...realAgent, id: 'interactive', icon: '' }, 48, true).includes(
+    'width="58"'
+  )
+)
+check(
+  '不做归一化时两种图标都按传入尺寸（侧栏 20px 那一档）',
+  mod.renderAgentGlyph(realAgent, 20, false).includes('width:20px;height:20px') &&
+    mod.renderAgentGlyph({ ...realAgent, id: 'work', icon: '' }, 20, false).includes('width="20"')
+)
+
 // --- 图片灯箱 + 正文图片可点（原版 ImageLightbox 此前整条链路缺失） ---
 console.log('\n29. 图片灯箱')
 const lightboxOpen = mod.renderLightbox(true)
