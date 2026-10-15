@@ -786,6 +786,20 @@ export function renderBare(): string {
 }
 
 /**
+ * 界面块的可交互性开关（原版 `interactive() = complete && !locked`）。
+ * 传 false 就是「历史界面块 / 执行中的界面」应当有的样子：控件 disabled。
+ */
+export function renderUiProgramBlock(interactive: boolean): string {
+  return renderToStaticMarkup(
+    createElement(GuncatUiBlock, {
+      content: PROGRAM,
+      interactive,
+      onSend: () => {}
+    })
+  )
+}
+
+/**
  * 复现 MessageView 的组合方式：纯文本片段走 Markdown，界面片段走 GuncatUiBlock。
  * 界面块本身只负责界面，正文里的说明文字由外层渲染 —— 这条组合关系值得单独钉住。
  */

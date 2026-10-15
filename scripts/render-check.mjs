@@ -470,6 +470,25 @@ check(
     !mod.stripMarkdown('前\n\n![图](a.png)\n\n后').includes('a.png')
 )
 
+// --- 界面块的可交互性（原版 uiLocked 的两种口径） ---
+// 交互态由 `stale = !interactive || !complete` 决定，落成控件的 disabled 属性，
+// 所以可以直接在产物里断言「有没有 disabled」。
+const uiLive = mod.renderUiProgramBlock(true)
+const uiLocked = mod.renderUiProgramBlock(false)
+check(
+  '可交互的界面块：控件不带 disabled（原版 interactive() = complete && !locked）',
+  uiLive.includes('<button') && !uiLive.includes('disabled'),
+  uiLive.includes('disabled') ? '被禁用了' : '可点'
+)
+check(
+  '不可交互的界面块：控件带 disabled（原版 .enabled(false)）',
+  uiLocked.includes('<button') && uiLocked.includes('disabled')
+)
+check(
+  '不可交互时**不给整块蒙灰、也不挂只读横幅**（原版只有一个 locked 语义）',
+  !uiLocked.includes('gui--locked') && !uiLocked.includes('历史界面')
+)
+
 // --- 交互模式：整个回合收进一条活动折叠栏 ---
 const groupedShell = mod.renderGroupedTurn(false)
 const groupedRunning = mod.renderGroupedTurn(true)

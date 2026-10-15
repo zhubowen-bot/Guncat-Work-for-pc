@@ -162,6 +162,12 @@ interface State {
    * 原版 ImageLightbox 由 ChatPage 挂载、气泡的 onImageTap 打开；桌面端此前整条链路都缺。
    */
   lightboxUrl: string
+  /**
+   * 自动置底的「冻结」截止时间戳。界面块里的**本地状态回传**（拖动/勾选/填表）
+   * 不该把页面拽到底部 —— 原版为此专门分了两类回传：
+   * `action`=需要模型重算（会滚到底）、`state`=只本地调参（不动滚动位置）。
+   */
+  scrollFreezeUntil: number
   /** 「填入输入框 / 重新编辑」请求：由消息操作行写入，输入框消费后清空 */
   pendingDraft: { text: string; at: number } | null
 
@@ -184,6 +190,8 @@ interface State {
   openTableOcr(open: boolean): void
   /** 打开/关闭大图查看（传空串即关闭） */
   openLightbox(url: string): void
+  /** 在接下来这段时间内不要自动置底（界面块的本地状态回传用） */
+  freezeAutoScroll(ms: number): void
   reloadSettings(): Promise<void>
   send(text: string, attachmentPaths?: string[]): Promise<void>
   /**
@@ -370,6 +378,7 @@ export const useStore = create<State>((set, get) => {
     workspaceOpen: true,
     tableOcrOpen: false,
     lightboxUrl: '',
+    scrollFreezeUntil: 0,
     pendingDraft: null,
 
     async init() {
@@ -604,6 +613,10 @@ export const useStore = create<State>((set, get) => {
 
     openLightbox(url) {
       set({ lightboxUrl: url })
+    },
+
+    freezeAutoScroll(ms) {
+      set({ scrollFreezeUntil: Date.now() + ms })
     },
 
     async reloadSettings() {

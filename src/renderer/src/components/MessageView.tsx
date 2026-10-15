@@ -248,6 +248,7 @@ export function AssistantBody({
 }) {
   const send = useStore((s) => s.send)
   const patchMessageContent = useStore((s) => s.patchMessageContent)
+  const freezeAutoScroll = useStore((s) => s.freezeAutoScroll)
   const { body, text, hasUi } = useBody(message)
 
   return (
@@ -263,8 +264,11 @@ export function AssistantBody({
           interactive={interactive}
           onSend={(value) => void send(value)}
           onStateChange={(stateJson) => {
+            // 本地状态回传（拖动/勾选/填表）：先冻结自动置底 —— 用户正在卡片里操作时
+            // 页面被拽到底部是原版专门修过的问题（见 ChatPage.ets:1523-1526 的注释）。
             // 把控件状态以尾标记追加到正文并落盘：滚动、切会话、重启后仍在。
             // GuncatUiTrailer.append 会先剥掉旧尾标记再写新的，不会重复叠加。
+            freezeAutoScroll(600)
             void patchMessageContent(message.id, GuncatUiTrailer.append(body, stateJson))
           }}
         />

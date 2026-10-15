@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store'
 import { reportStage } from './bootReport'
 import { Sidebar } from './components/Sidebar'
@@ -174,6 +174,11 @@ export default function App() {
   useEffect(() => {
     const element = scrollRef.current
     if (element === null) {
+      return
+    }
+    // 界面块里的本地状态回传会临时冻结自动置底（用户正在拖滑块/填表时，
+    // 页面突然被拽到底部是原版专门修过的问题）
+    if (Date.now() < useStore.getState().scrollFreezeUntil) {
       return
     }
     const nearBottom =

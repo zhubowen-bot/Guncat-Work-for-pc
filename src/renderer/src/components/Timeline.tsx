@@ -1,4 +1,4 @@
-﻿// 时间线：按形态决定呈现方式。
+// 时间线：按形态决定呈现方式。
 //
 //   聊天模式  → 逐条气泡（MessageView）。
 //   工作模式  → **一个用户请求 = 一个回合**，回合内每一轮 assistant 按发生顺序**直接陈列**：
@@ -43,7 +43,10 @@ export function Timeline({ messages, mode, running, lastAssistantId, onEditToInp
           <MessageView
             key={message.id}
             message={message}
-            interactive={!running && message.id === lastAssistantId}
+            // 聊天模式的可交互性只看「是否在流式」（原版 ChatPage:1372 `uiLocked: isStreaming`）：
+            // 历史回答里的界面块同样可以继续操作 —— 每条回答是一个独立的卡片，
+            // 没有「只有最新那条才算当前界面」这回事（那是交互模式的规则）。
+            interactive={!running}
             streaming={running && message.id === lastAssistantId}
             onEditToInput={onEditToInput}
           />
@@ -182,7 +185,9 @@ export function WorkTurn({
 
             {body.trim() !== '' ? (
               <div className="answer">
-                <AssistantBody message={round} interactive={false} />
+                {/* 工作模式同样只看是否在流式（原版 WorkTurnView 拿到的 uiLocked 就是 isStreaming）：
+                    历史轮次的界面块也能继续操作，用户不必回到那轮重新跑一遍。 */}
+                <AssistantBody message={round} interactive={!running} />
               </div>
             ) : null}
 
@@ -379,6 +384,9 @@ export function GroupedTurn({
         <div className="answer">
           <AssistantBody
             message={final}
+            // 交互模式是唯一有「当前界面」概念的模式：只有**最新一轮**且不在执行中
+            // 才可交互（原版 ChatPage:1521 `interactiveMode && (id !== pendingUiMessageId || isStreaming)`）
+            // —— 历史界面块与执行中的界面置灰，防重复提交。
             interactive={!running && final.id === lastAssistantId}
           />
           {!running ? (
