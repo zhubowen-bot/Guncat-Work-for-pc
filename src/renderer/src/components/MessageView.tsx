@@ -88,11 +88,14 @@ export function ThinkingBar({
         <span className="thinking__leading">
           <IconBrain size={13} />
         </span>
-        <span className="thinking__label">
-          {(workMode ? '思考' : '深度思考') + (streaming ? '' : ' · 持续了几秒')}
-        </span>
+        <span className="thinking__label">{workMode ? '思考' : '深度思考'}</span>
         {streaming ? <span className="spinner spinner--sm" /> : null}
-        {streaming && !open && tail !== '' ? (
+        {/* 折叠态**始终**显示思考内容的末段（不再只在流式中显示）。
+            用户报障：交互模式下不调工具时，思考一个字都看不见 ——
+            因为折叠态此前只在流式期间挂跑马灯，跑完就只剩一个标题，
+            而那一轮的思考如果没被折叠进活动栏，就等于彻底不可见。
+            现在折叠态也带一段末段摘录（点开看全文），思考永远看得见。 */}
+        {!open && tail !== '' ? (
           <span className="thinking__marquee" title={tail} ref={marqueeRef}>
             {tail}
           </span>

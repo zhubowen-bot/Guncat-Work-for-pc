@@ -206,6 +206,15 @@ export function MermaidBlock({ code }: { code: string }): React.ReactElement {
     let cancelled = false
     seq.current += 1
     const id = `guncat-mermaid-${seq.current}-${Date.now()}`
+    // mermaid 在渲染期间会往 body 里塞临时节点（`#d<id>` / `#<id>`），
+    // 失败时**不一定清干净** —— 用户看到页面最底下冒出一串
+    // 「Syntax error in text / mermaid version 11.17.2」就是这些残留节点。
+    // 所以这里渲染前先记账、渲染后一律清掉（成功失败都清）。
+    const cleanupNodes = (): void => {
+      for (const stray of [id, `d${id}`]) {
+        document.getElementById(stray)?.remove()
+      }
+    }
     void (async () => {
       try {
         const mermaid = (await import('mermaid')).default
@@ -213,15 +222,28 @@ export function MermaidBlock({ code }: { code: string }): React.ReactElement {
           startOnLoad: false,
           securityLevel: 'strict',
           theme: dark ? 'dark' : 'default',
+          // 关键：不让 mermaid 自己把「错误图」画进页面
+          // （默认行为就是往 DOM 里插一张写着 Syntax error 的图）
+          suppressErrorRendering: true,
           fontFamily:
             '-apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif'
         })
+        // 先解析再渲染：语法不过关时根本不要走 render（render 报错就会留下上面那些节点）
+        const parsed = await mermaid
+          .parse(code, { suppressErrors: true })
+          .then(() => true)
+          .catch(() => false)
+        if (!parsed) {
+          throw new Error('语法检查未通过')
+        }
         const result = await mermaid.render(id, code)
+        cleanupNodes()
         if (!cancelled) {
           setSvg(result.svg)
           setError('')
         }
       } catch (e) {
+        cleanupNodes()
         if (!cancelled) {
           setSvg('')
           setError(e instanceof Error ? e.message : String(e))
@@ -230,17 +252,15 @@ export function MermaidBlock({ code }: { code: string }): React.ReactElement {
     })()
     return () => {
       cancelled = true
+      cleanupNodes()
     }
   }, [code, dark])
 
   if (error !== '') {
-    // 图没画出来时**退回源码**，而不是留一片空白：用户至少能看到模型原本写的是什么
-    return (
-      <div className="mermaid-block">
-        <div className="mermaid-block__error">这张图没能渲染（{error}）。以下是它的源码：</div>
-        <CodeBlock language="mermaid" code={code} />
-      </div>
-    )
+    // 画不出来时**静默**退回源码：不给红色报错横幅。
+    // 用户明确要求隐藏报错提示 —— mermaid 的报错经常是「其实画出来了」的误报，
+    // 一屏红字只会让人以为页面坏了；源码本身还在，用户能看出模型写了什么。
+    return <CodeBlock language="mermaid" code={code} />
   }
 
   if (svg === '') {

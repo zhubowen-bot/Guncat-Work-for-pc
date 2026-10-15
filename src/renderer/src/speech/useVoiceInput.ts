@@ -2,9 +2,12 @@
 //
 // 与鸿蒙版的差异见 main/asr.ts 的说明：桌面端没有端侧识别可用，
 // 走「MediaRecorder 录音 → 主进程转写接口」这条路。
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type VoiceState = 'idle' | 'recording' | 'transcribing'
+
+/** 语音错误的自动消失时长：够读一句提示，又不会一直占着输入区上方那一行 */
+const VOICE_ERROR_MS = 5000
 
 interface VoiceInput {
   state: VoiceState
@@ -19,6 +22,16 @@ export function useVoiceInput(onText: (text: string) => void): VoiceInput {
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
+
+  // 错误提示必须自己消失（用户报障：没配语音识别时那条提示一直挂在输入区上方）。
+  // 每一次新错误都重新计时 —— 连点两次不会因为第一次的计时器提前把它清掉。
+  useEffect(() => {
+    if (error === '') {
+      return
+    }
+    const timer = window.setTimeout(() => setError(''), VOICE_ERROR_MS)
+    return () => window.clearTimeout(timer)
+  }, [error])
 
   const supported =
     typeof navigator !== 'undefined' &&
