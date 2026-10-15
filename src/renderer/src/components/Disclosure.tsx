@@ -32,6 +32,7 @@ import {
   toolIconKind,
   toolStatus,
   capText,
+  firstLineOf,
   formatDuration,
   type ToolIconKind
 } from '../turns'
@@ -137,7 +138,6 @@ export function ToolCallRow({
 }) {
   const [open, setOpen] = useState(defaultExpanded)
   const status = toolStatus(call)
-  const summary = toolArgsSummary(call.argsJson)
   // edit / str_replace_editor 的改动行、todo_write 的清单都已经被工具层结构化好了
   // （见 core/common/DiffUtil 与 todo_write 的结果格式），直接渲染成卡片，
   // 不必让用户去读转义 JSON —— 原版 WorkTurnView 就是这么做的。
@@ -148,12 +148,16 @@ export function ToolCallRow({
   const todos = useTodo ? parseTodoRows(call.result) : []
   // 执行中用转圈代替图标，并且不给耗时与展开箭头（原版以「durationMs 是否为负」为唯一判据）
   const finished = call.durationMs >= 0
+  const failed = status.state === 'error'
+  // 出错时摘要改成**结果的首行**（80 字截断）—— 原版 WorkTurnView.ets:972-978 就是这么做的：
+  // 参数摘要这时候没意义，用户要看的是「哪儿错了」。
+  const summary = failed ? capText(firstLineOf(call.result), 80) : toolArgsSummary(call.argsJson)
 
   return (
     <div className="tool" data-state={status.state}>
       <button className="tool__head" onClick={() => setOpen((v) => !v)}>
         <span className="tool__icon">
-          {finished ? <IconForKind kind={toolIconKind(call.name)} /> : <span className="spinner" />}
+          {finished ? <IconForKind kind={toolIconKind(call.name)} size={13} /> : <span className="spinner" />}
         </span>
         <span className="tool__name">{toolDisplayName(call.name)}</span>
         {/* 原版这里是「·」分隔符 + 参数摘要；摘要可能为空，那时连分隔符一起省掉 */}

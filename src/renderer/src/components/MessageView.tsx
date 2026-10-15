@@ -1,4 +1,4 @@
-// 单条消息的呈现。
+﻿// 单条消息的呈现。
 //
 // 聊天模式 = 用户气泡 + 助手气泡（原版 ChatBubbleView 的信息层级：
 //   助手侧：思考条 → 工具行 → 正文/界面 → 操作行 → 统计行；用户侧：气泡 + 编辑/复制）。
@@ -9,7 +9,7 @@ import type { MessageDto } from '@ipc/contract'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
 import { Markdown } from './Markdown'
-import { Disclosure, ToolCallRow } from './Disclosure'
+import { ToolCallRow } from './Disclosure'
 import { GuncatUiBlock } from '../guncat-ui/GuncatUiBlock'
 import { APP_ICON_SRC } from './AgentGlyph'
 import { docxFileName } from '../fileName'
@@ -340,9 +340,10 @@ export function MessageView({
           />
         ) : null}
         {message.toolCalls.length > 0 ? (
-          <Disclosure title="工具调用" subtitle={`${message.toolCalls.length} 次`}>
-            <ToolList calls={message.toolCalls} />
-          </Disclosure>
+          /* 工具行直接陈列，**不套折叠栏边框卡** —— 原版 ChatBubbleView.buildToolSteps
+             就是一组裸行（CLI 式观感）；套一层 .disclosure 会在气泡里多出一个框，
+             与「工具行是正文的一部分」这个观感冲突。 */
+          <ToolList calls={message.toolCalls} />
         ) : null}
         <div className="bubble bubble--ai">
           <AssistantBody message={message} interactive={interactive} />

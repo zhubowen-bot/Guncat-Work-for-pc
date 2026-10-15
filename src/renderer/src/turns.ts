@@ -1,4 +1,4 @@
-﻿// 消息 → 回合（turn）的重组，以及工具行/统计的展示纯函数。
+// 消息 → 回合（turn）的重组，以及工具行/统计的展示纯函数。
 //
 // 为什么要在渲染层重组（对齐鸿蒙原版 ChatPage.buildWorkTimeline 的注释）：
 //   Agent Loop 的既定结构就是「一个用户请求 → 若干条 assistant 消息」，
@@ -269,6 +269,16 @@ export function capText(text: string, max: number): string {
     return text
   }
   return `${text.substring(0, max)}…`
+}
+
+/**
+ * 取文本首行（并压掉多余空白）。
+ * 原版用它把「工具出错时的结果首行」当成摘要显示（WorkTurnView 的 firstLineOf）：
+ * 出错时参数摘要没意义，用户要看的是哪儿错了。
+ */
+export function firstLineOf(text: string): string {
+  const line = text.split('\n')[0] ?? ''
+  return line.replace(/\s+/g, ' ').trim()
 }
 
 /**

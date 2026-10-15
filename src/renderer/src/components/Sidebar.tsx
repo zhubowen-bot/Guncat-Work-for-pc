@@ -13,6 +13,7 @@ import { APP_ICON_SRC, AgentGlyph } from './AgentGlyph'
 import {
   IconChat,
   IconChevronDown,
+  IconChevronRight,
   IconFolder,
   IconInteractive,
   IconPlus,
@@ -132,12 +133,17 @@ export function Sidebar() {
   if (collapsed) {
     return (
       <aside className="sidebar sidebar--rail">
+        {/* 品牌行：原版折叠态也保留 36vp 的居中头像（DswSidebar.ets:26-58）——
+            折叠的是文字与列表，不是品牌标识本身。 */}
+        <div className="rail__brand" title="Guncat Work">
+          <img className="rail__logo" src={APP_ICON_SRC} alt="Guncat Work" />
+        </div>
         <button
           className="rail__btn"
           title="展开侧边栏"
           onClick={() => setCollapsed(false)}
         >
-          <IconSidebar size={19} />
+          <IconChevronRight size={19} />
         </button>
         <button
           className="rail__btn"
@@ -147,6 +153,16 @@ export function Sidebar() {
           <IconPlus size={19} />
         </button>
         <div className="rail__spacer" />
+        {/* 折叠后侧栏底部的「工作区」入口会整块消失，这里必须补一个 ——
+            否则折叠态下**没有任何办法**打开工作区面板（原版 DswSidebar.ets:65 就有这一颗）。 */}
+        <button
+          className="rail__btn"
+          title={workspaceOpen ? '收起工作区面板' : '展开工作区面板'}
+          data-active={workspaceOpen}
+          onClick={() => toggleWorkspace()}
+        >
+          <IconFolder size={19} />
+        </button>
         <button className="rail__btn" title="设置" onClick={() => openSettings(true)}>
           <IconSettings size={19} />
         </button>
