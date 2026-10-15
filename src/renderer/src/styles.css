@@ -16,6 +16,8 @@
   --text-faint: #81858c;
   /* 四级文字色（原版 text_quaternary）：用于工具行的 2×2 分隔点这类极轻的装饰 */
   --text-quaternary: #adb2b8;
+  /* 提示条底色（原版 color.json 的 toast_bg） */
+  --toast-bg: #353638;
   --accent: #4176e6;
   --accent-soft: #e4edfd;
   --ai-msg: #edf3fe;
@@ -51,6 +53,7 @@
     --text-muted: #cfd3d6;
     --text-faint: #adb2b8;
     --text-quaternary: #81858c;
+    --toast-bg: #43454a;
     --accent: #5686fe;
     --accent-soft: #34415b;
     --ai-msg: #2c2c2e;
@@ -1976,22 +1979,13 @@ select {
   display: none;
 }
 
-/* ===== 流式光标（原版 ChatBubbleView.ets:656-668） =====
-   气泡底部一条 2×14 的 brand 竖条、圆角 1，左缩进 12、下边距 6。 */
-.cursor {
+/* ===== 流式光标行（原版 ChatBubbleView.ets:656-668） =====
+   竖条本身是 .stream-cursor（2×14 brand），这里只负责左缩进 12 与下边距 6。 */
+.cursor-row {
   display: flex;
   width: 100%;
   padding-left: 12px;
   margin-bottom: 6px;
-}
-
-.cursor__bar {
-  display: inline-block;
-  width: 2px;
-  height: 14px;
-  border-radius: 1px;
-  background: var(--accent);
-  animation: cursor-blink 1s steps(2, start) infinite;
 }
 
 .thinking__gap {
@@ -2104,9 +2098,11 @@ select {
 .composer__inner {
   max-width: 800px;
   margin: 0 auto;
+  /* 元素间距不用 gap，而是照原版的显式边距：语音右 6、上传左 8（MessageInputView.ets:81,152） */
   display: flex;
-  gap: 9px;
+  gap: 0;
   align-items: flex-end;
+  padding: 0;
 }
 
 .composer textarea {
@@ -2126,17 +2122,20 @@ select {
   border-color: var(--accent);
 }
 
+/* 语音按钮 38×38（原版 buildVoiceButton），比右侧 42 高的上传/发送钮小一圈，
+   用右 6 / 下 2 的边距与它们对齐 */
 .composer__mic {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 22px;
+  width: 38px;
+  height: 38px;
+  border-radius: 19px;
   border: 1px solid var(--border);
   background: var(--bg-sunken);
   color: var(--text-muted);
   flex: none;
+  margin: 0 6px 2px 0;
 }
 
 .composer__mic:hover:not(:disabled) {
@@ -2155,18 +2154,19 @@ select {
   cursor: default;
 }
 
-/* 附件入口（聊天模式）：与麦克风同规格的圆形按钮 */
+/* 附件入口（聊天模式）：42×42，与发送钮同规格（原版 buildUploadButton） */
 .composer__clip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 22px;
+  width: 42px;
+  height: 42px;
+  border-radius: 21px;
   border: 1px solid var(--border);
   background: var(--bg-sunken);
   color: var(--text-muted);
   flex: none;
+  margin-left: 8px;
 }
 
 .composer__clip:hover:not(:disabled) {
@@ -2250,9 +2250,12 @@ select {
   background: var(--bg-sunken);
 }
 
-.composer__mic[data-recording='true'] {  color: #fff;
-  background: var(--danger);
-  border-color: var(--danger);
+/* 录音中：品牌色圆底 + 白图标（原版 buildVoiceButton 用 brand，不是危险色 ——
+   录音不是破坏性操作） */
+.composer__mic[data-recording='true'] {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
   animation: mic-pulse 1.2s ease-in-out infinite;
 }
 
@@ -2260,13 +2263,14 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 44px;
-  padding: 0 18px;
-  border-radius: 22px;
+  height: 42px;
+  padding: 0 16px;
+  border-radius: 21px;
   background: var(--accent);
   color: #fff;
   font-weight: 500;
   flex: none;
+  margin-bottom: 2px;
   box-shadow: 0 2px 8px rgba(65, 118, 230, 0.28);
 }
 
@@ -2759,32 +2763,41 @@ select {
 
 /* ===== 提示条 ===== */
 
+/* 提示条 = 原版 ToastView.ets：白字 13px、toast_bg 底（浅 #353638 / 深 #43454A）、
+   圆角 24、内边距 10/16、阴影 radius 18 / #22000000 / offsetY 6，
+   并且 `hitTestBehavior(HitTestMode.None)` —— 也就是**点击穿透**（没有关闭钮）。
+   底部居中是本项目的既有差异：原版在屏幕中下部弹出，桌面窗口里底部居中最不挡内容。 */
 .notice {
   position: fixed;
   bottom: 18px;
   left: 50%;
   transform: translateX(-50%);
   max-width: 640px;
-  padding: 8px 10px 8px 15px;
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  background: var(--bg-elevated);
+  padding: 10px 16px;
+  border-radius: 24px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.13);
+  background: var(--toast-bg);
   border: 1px solid var(--border);
+  color: #fff;
   font-size: 13px;
   display: flex;
   gap: 10px;
   align-items: center;
   z-index: 40;
+  /* 提示条不该拦住任何点击（原版 HitTestMode.None） */
+  pointer-events: none;
 }
 
+/* 错误/警告用左侧的色条区分，而不是把整条文字染色 ——
+   原版 Toast 是白字，染成 danger 后在 toast_bg 上对比度不足。 */
 .notice[data-level='error'] {
-  border-color: var(--danger);
-  color: var(--danger);
+  border-left: 3px solid var(--danger);
+  color: #fff;
 }
 
 .notice[data-level='warn'] {
-  border-color: var(--warn);
-  color: var(--warn);
+  border-left: 3px solid var(--warn);
+  color: #fff;
 }
 
 /* ===== 弹层 ===== */
@@ -3010,4 +3023,62 @@ select {
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ===== 设置面板：可折叠小节 ===== */
+
+/* 对齐原版 SettingsPanel.ets 的三个折叠区（高级模型参数 / 本地联网搜索 / 多模态解析 API）。
+   标题整行可点：14px Medium 次要色，上下各 14px、与上一项留 12px，右侧 12px 开合指示。
+   不直接复用侧栏的 .sidebar__label--toggle —— 那是侧栏的行高与配色，
+   搬进对话框里字重和间距都不对，改一处还会影响另一处。 */
+.settings-section {
+  width: 100%;
+}
+
+.settings-section__head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 0;
+  margin-top: 12px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.settings-section__head:hover {
+  color: var(--text);
+}
+
+.settings-section__title {
+  flex: 1;
+}
+
+/* 开合指示：data-open 翻转 180 度（与 Sidebar 的 chevron 同一套写法） */
+.settings-section__caret {
+  display: inline-flex;
+  align-items: center;
+  transition: transform 0.15s;
+}
+
+.settings-section__caret[data-open='true'] {
+  transform: rotate(180deg);
+}
+
+.settings-section__body {
+  padding-bottom: 8px;
+}
+
+/* 表单底部的接入方式说明（原版 getHint() 的三段文案）：
+   12px 次要色 —— 比字段级提示（11px faint）更值得看一眼，但不抢字段本身的注意力 */
+.settings-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
 }

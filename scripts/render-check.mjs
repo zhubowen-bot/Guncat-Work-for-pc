@@ -942,6 +942,128 @@ check(
   mdWithImage.slice(mdWithImage.indexOf('<img'), mdWithImage.indexOf('<img') + 80)
 )
 
+// --- 设置面板（对齐原版 views/SettingsPanel.ets） ---
+console.log('\n30. 设置面板')
+const settingsHtml = mod.renderSettings()
+const settingsText = decode(settingsHtml)
+check(
+  '面板整体可渲染（标题 + 表单主体）',
+  settingsHtml.includes('dialog__body') && settingsText.includes('设置')
+)
+check(
+  '三个可折叠小节都在：高级模型参数 / 本地联网搜索 / 多模态解析 API',
+  settingsText.includes('高级模型参数') &&
+    settingsText.includes('本地联网搜索') &&
+    settingsText.includes('多模态解析 API (可选)')
+)
+check(
+  '小节缺省全部收起（高级参数与多模态字段首帧不出现）',
+  !settingsText.includes('数值越低回答越确定') && !settingsText.includes('先行解析附件'),
+  '开合状态由 data-open 与条件渲染共同决定'
+)
+check(
+  '开合指示是 SVG 图标而不是几何符号（check-emoji 会拦 ▲ / ▼）',
+  settingsHtml.includes('settings-section__caret') &&
+    !settingsHtml.includes('▲') &&
+    !settingsHtml.includes('▼')
+)
+check(
+  'Base URL 占位符按当前接入方式给出',
+  settingsHtml.includes('https://api.openai.com/v1 或 https://api.deepseek.com')
+)
+check(
+  '底部接入方式提示就是原版 completions 那一段',
+  settingsText.includes('通用API接入方式') &&
+    settingsText.includes('建议切换 Responses API 或 Anthropic API 选项')
+)
+
+const copyC = mod.settingsCopy('openai-completions', 'bing')
+const copyR = mod.settingsCopy('openai-responses', 'tavily')
+const copyA = mod.settingsCopy('anthropic-messages', 'metaso')
+check(
+  'completions：Base URL / 模型占位符逐字对齐原版',
+  copyC.baseUrl === 'https://api.openai.com/v1 或 https://api.deepseek.com' &&
+    copyC.model === 'deepseek-chat / deepseek-reasoner / gpt-...',
+  `${copyC.baseUrl} | ${copyC.model}`
+)
+check(
+  'responses：Base URL / 模型占位符逐字对齐原版',
+  copyR.baseUrl === 'https://api.deepseek.com 或 https://ark.cn-beijing.volces.com/api/v3' &&
+    copyR.model === 'deepseek-v4-flash / deepseek-v4-pro / ep-xxx',
+  `${copyR.baseUrl} | ${copyR.model}`
+)
+check(
+  'anthropic：Base URL / 模型占位符逐字对齐原版',
+  copyA.baseUrl === 'https://api.anthropic.com/v1 或 https://api.deepseek.com' &&
+    copyA.model === 'deepseek-v4-pro / deepseek-v4-flash / claude-...',
+  `${copyA.baseUrl} | ${copyA.model}`
+)
+check(
+  '三段底部提示随接入方式变化，且都是原版 getHint() 的文案',
+  copyC.hint !== copyR.hint &&
+    copyC.hint !== copyA.hint &&
+    copyR.hint.includes('OpenAI Responses') &&
+    copyA.hint.includes('Anthropic Messages')
+)
+check(
+  '未知接入方式也退回一份占位符与提示（面板不能空着）',
+  mod.providerCopy('nope').baseUrl !== '' && mod.providerCopy('nope').hint !== ''
+)
+check(
+  '搜索提示按引擎 id 给（Bing / Tavily / Exa / Firecrawl / Metaso / 其它）',
+  copyC.searchHint === 'Bing 无需 API Key, 直接爬取搜索结果页; 请求失败自动回落 cn.bing.com。' &&
+    mod.searchEngineHint('tavily') === '默认 Base URL: https://api.tavily.com' &&
+    mod.searchEngineHint('exa') === '默认 Base URL: https://api.exa.ai' &&
+    mod.searchEngineHint('firecrawl') === '默认 Base URL: https://api.firecrawl.dev' &&
+    mod.searchEngineHint('metaso') === '密钥在 metaso.cn 开放平台获取, 端点固定为 metaso.cn/api/v1/search。' &&
+    mod.searchEngineHint('nope') === '在对应平台获取 API Key 后填入。'
+)
+
+const mmNorm = mod.normalizeMultimodal({
+  baseUrl: '   ',
+  apiKey: '  mk  ',
+  model: '',
+  preparseEnabled: false
+})
+check(
+  '多模态空 Base URL / 模型名回落到默认值（空串会让「先行解析附件」直接失效）',
+  mmNorm.baseUrl === 'https://open.bigmodel.cn/api/paas/v4' &&
+    mmNorm.model === 'glm-4.6v-flash' &&
+    mmNorm.apiKey === 'mk' &&
+    mmNorm.preparseEnabled === false,
+  `${mmNorm.baseUrl} / ${mmNorm.model}`
+)
+const mmKeep = mod.normalizeMultimodal({
+  baseUrl: ' https://mm.example.com/v1 ',
+  apiKey: '',
+  model: ' glm-4v-flash ',
+  preparseEnabled: true
+})
+check(
+  '多模态填了值就按填的存（只 trim，不覆盖）',
+  mmKeep.baseUrl === 'https://mm.example.com/v1' && mmKeep.model === 'glm-4v-flash'
+)
+const apiNorm = mod.normalizeApiConfig({
+  provider: ' openai-completions ',
+  baseUrl: '  https://api.deepseek.com  ',
+  apiKey: ' sk-x ',
+  model: ' deepseek-chat ',
+  temperature: 0.7,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '  {"a": 1}  ',
+  autoSuffix: true
+})
+check(
+  '保存前所有字符串 trim（对齐原版 buildConfig）',
+  apiNorm.provider === 'openai-completions' &&
+    apiNorm.baseUrl === 'https://api.deepseek.com' &&
+    apiNorm.apiKey === 'sk-x' &&
+    apiNorm.model === 'deepseek-chat' &&
+    apiNorm.extraParams === '{"a": 1}' &&
+    apiNorm.temperature === 0.7
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')
