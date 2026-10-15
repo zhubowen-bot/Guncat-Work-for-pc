@@ -1639,6 +1639,20 @@ select {
   font-size: 11px;
 }
 
+/* 标题行末尾的补充内容：思考栏用它挂「最新一句思考」的跑马灯
+   （折叠时也看得见模型在想什么，而不是只剩一个标题）。 */
+.disclosure__trailing {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.disclosure__trailing .thinking__marquee {
+  font-size: 11px;
+}
+
 .disclosure__body {
   padding: 8px 10px 10px;
   border-top: 1px solid var(--divider);

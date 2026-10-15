@@ -559,8 +559,23 @@ check(
     groupedPending.includes('Read')
 )
 check(
-  '交互模式：跑完才写「已完成」，跑动中写「正在处理…」',
-  groupedShell.includes('已完成') && groupedPending.includes('正在处理…')
+  '交互模式：跑动中写「正在处理…」，跑完后这一条就是**思考栏**（标题写「思考」/「思考 ×N」）',
+  // 「正在处理…」用「正文还没开始输出」那一帧来断言：只有那一刻活动栏才是跑动状态
+  groupedPending.includes('正在处理…') &&
+    groupedShell.includes('思考') &&
+    !groupedShell.includes('>已完成<'),
+  groupedShell.includes('>已完成<') ? '仍是「已完成」' : '已改为思考栏'
+)
+check(
+  '交互模式的活动栏**按时间顺序**铺开（思考与工具不各自归堆）—— 用户明确要求',
+  // 用「展开着」的那一帧（正文未开始输出时默认展开）来断言顺序
+  (() => {
+    const body = groupedPending.slice(groupedPending.indexOf('disclosure__body'))
+    const firstThinking = body.indexOf('thinking__head')
+    const firstTool = body.indexOf('tool__head')
+    return firstThinking >= 0 && firstTool >= 0 && firstThinking < firstTool
+  })(),
+  '思考在工具之前'
 )
 check(
   '渲染出来的 DOM 里没有 emoji / 装饰符号',

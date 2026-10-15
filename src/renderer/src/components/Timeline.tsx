@@ -1,4 +1,4 @@
-// 时间线：按形态决定呈现方式。
+﻿// 时间线：按形态决定呈现方式。
 //
 //   聊天模式  → 逐条气泡（MessageView）。
 //   工作模式  → **一个用户请求 = 一个回合**，回合内每一轮 assistant 按发生顺序**直接陈列**：
@@ -18,7 +18,7 @@
 // 「一条 assistant 同时调了所有工具」，时序错乱。
 import { useMemo, useState } from 'react'
 import type { MessageDto } from '@ipc/contract'
-import { AssistantBody, MessageActions, MessageView, ThinkingBar, ToolList } from './MessageView'
+import { AssistantBody, MessageActions, MessageView, ThinkingBar, ToolList, marqueeText } from './MessageView'
 import { Disclosure } from './Disclosure'
 import { AskUserCard } from './AskUserCard'
 import { groupTurns, formatDuration, turnStats, finalRound, STOPPED_NOTE, type Turn } from '../turns'
@@ -320,16 +320,22 @@ export function GroupedTurn({
     return null
   }
 
-  // 本回合是否有**折叠栏里真的装得下**的东西：工具行、或历史轮的正文。
-  // 刻意不再把「有思考」算进来 —— 思考已经归到外面的思考栏（汇总显示），
-  // 折叠栏里没有内容却还挂一条「已完成 · 思考」，展开是空的，纯粹是个摆设
-  // （用户原话：「思考这些应该放在思考栏里面啊，要不然拿来摆设啊」）。
+  // 本回合的活动栏 = 一条**思考栏**，内容按时间顺序依次是：
+  //   思考 → 工具 → 思考 → 工具 …（每轮的思考紧跟它那轮的工具），最后只剩最终回答在外面。
+  // 这与工作模式的时间线口径一致，只是把历史轮整体折叠起来。
+  //
+  // 两次用户反馈把这里定死了：
+  //   · 「思考这些应该放在思考栏里面啊，要不然拿来摆设啊」→ 折叠栏里必须真有思考，
+  //     且标题不再写「已完成 · 思考」而展开是空的；
+  //   · 「全部收一个思考栏里面…顺序还是一样的 思考-工具-思考-工具」→ 不要把思考与工具
+  //     各自归堆（那是把时间顺序打乱），而是顺着来。
+  const thinkingRounds = turn.rounds.filter((round) => round.reasoning.trim() !== '').length
   const priorHasContent = prior.some(
     (round) =>
       round.toolCalls.length > 0 ||
       (round.displayContent !== '' ? round.displayContent : round.content).trim() !== ''
   )
-  const hasActivity = priorHasContent || (final?.toolCalls.length ?? 0) > 0
+  const hasActivity = thinkingRounds > 0 || priorHasContent || (final?.toolCalls.length ?? 0) > 0
 
   // 被手动停止的轮次：主进程在收尾时往正文末尾追加了这句标注（原版 appendTurnNote）。
   // 折叠栏据此把「已完成」改成「已停止」—— 明明被打断却写着完成是误导。
@@ -337,9 +343,6 @@ export function GroupedTurn({
 
   // 折叠态摘要（原版 activitySummary 636-654）：`思考 ×N + M 个工具 · 12.4s`
   // 思考与工具之间是「 + 」，耗时前面是「 · 」—— 原版就是这么接的。
-  // 折叠态摘要：`M 个工具 · 12.4s`。
-  // 思考轮数**不在这里**了 —— 它归思考栏（见下面 ThinkingBar 的 rounds），
-  // 否则折叠栏标题上写着「思考」而展开是空的。
   const summaryParts: string[] = []
   if (stats.toolCalls > 0) {
     summaryParts.push(`${stats.toolCalls} 个工具`)
@@ -361,38 +364,31 @@ export function GroupedTurn({
         : `${summary} · ${formatDuration(totalMs)}`
       : summary
 
-  // 思考栏的正文 = **本回合所有轮的思考汇总**（原版做法：思考栏里汇总前面所有的思考，
-  // 而不是把它们藏进折叠栏）。用户报障「没有调用工具时思考全都不显示」的根因就是
-  // 本轮思考被放进了默认收起的活动折叠栏里 —— 没有工具时那条折叠栏几乎没有别的信息，
-  // 用户等于看不到任何思考。
-  const aggregatedReasoning = turn.rounds
-    .map((round) => round.reasoning.trim())
-    .filter((text) => text !== '')
-    .join('\n\n')
+  // 折叠态在标题右侧显示**最后一段思考的末句**（思考栏的跑马灯）：
+  // 收起时也看得见模型在想什么，不会出现「一整条折叠栏只有个标题」的空洞感。
+  const lastReasoning =
+    [...turn.rounds].reverse().find((round) => round.reasoning.trim() !== '')?.reasoning ?? ''
+  const marquee = marqueeText(lastReasoning)
 
   return (
     <section className="turn">
       {turn.user !== null ? <TaskCard message={turn.user} onEditToInput={onEditToInput} /> : null}
 
-      {/* 思考栏放在折叠栏**外面**：它必须常显（折叠栏里只留工具行与历史轮正文）。
-          内容是**本回合所有轮思考的汇总** —— 用户描述的原版形态就是「在思考栏里汇总前面所有的」。
-          rounds 用于标题上的「思考 ×N」，替代原先挂在活动折叠栏标题上的那一段。 */}
-      {aggregatedReasoning !== '' || (streaming && thinkingExpected) ? (
-        <ThinkingBar
-          reasoning={aggregatedReasoning}
-          streaming={streaming && !bodyStarted}
-          rounds={turn.rounds.filter((round) => round.reasoning.trim() !== '').length}
-          workMode
-        />
-      ) : null}
-
       {hasActivity ? (
         <Disclosure
-          title={activityRunning ? '正在处理…' : stopped ? '已停止' : '已完成'}
+          // 这一条就是「思考栏」：跑动中转圈，完成后对勾；有思考时标题写「思考 ×N」。
+          // 刻意不再用「已完成」当标题 —— 用户已经指出那样像摆设。
+          title={
+            activityRunning
+              ? '正在处理…'
+              : stopped
+                ? '已停止'
+                : thinkingRounds > 0
+                  ? `思考${thinkingRounds > 1 ? ` ×${thinkingRounds}` : ''}`
+                  : '已完成'
+          }
           subtitle={summaryWithMs}
-          // 完成态的对勾：正常是品牌色，**被停止的轮次转弱色** —— 表示「结束了」
-          // 而不是「成功完成了」（原版 WorkTurnView.buildActivityGroup 661-676）。
-          // 原版这里是一个对勾字符，本项目的渲染层禁用符号字符，改用 SVG。
+          trailing={!open && marquee !== '' ? <span className="thinking__marquee">{marquee}</span> : undefined}
           leading={
             activityRunning ? (
               <span className="spinner spinner--sm" />
@@ -408,8 +404,12 @@ export function GroupedTurn({
             setTouched(true)
           }}
         >
+          {/* 历史轮：**按发生顺序**逐轮铺开（思考、工具、该轮正文依次排开） */}
           {prior.map((round) => (
             <div className="process-round" key={round.id}>
+              {round.reasoning.trim() !== '' ? (
+                <ThinkingBar reasoning={round.reasoning} streaming={false} workMode />
+              ) : null}
               {round.toolCalls.length > 0 ? <ToolList calls={round.toolCalls} variant="loop" streaming={streaming} /> : null}
               {(round.displayContent !== '' ? round.displayContent : round.content).trim() !== '' ? (
                 <div className="process-round__text">
@@ -418,14 +418,21 @@ export function GroupedTurn({
               ) : null}
             </div>
           ))}
-          {/* 本轮思考已经移到外面的思考栏（汇总显示），折叠栏里不再重复挂一份。
-              这里只保留本轮的思考**时机提示**：流式中且思考还没内容时先挂出空条，
-              让用户知道模型正在想（否则那段时间界面上什么都没有）。 */}
-          {final !== null && final.reasoning.trim() === '' && streaming && thinkingExpected ? (
-            <ThinkingBar reasoning="" streaming workMode />
-          ) : null}
-          {final !== null && final.toolCalls.length > 0 ? (
-            <ToolList calls={final.toolCalls} variant="loop" streaming={running} />
+          {/* 本轮（最终回答那一轮）：思考与工具同样按顺序接在历史轮之后；
+              它的**正文就是下面的最终回答**，所以这里不再重复渲染正文。 */}
+          {final !== null && (final.reasoning.trim() !== '' || final.toolCalls.length > 0) ? (
+            <div className="process-round" key={final.id}>
+              {final.reasoning.trim() !== '' ? (
+                <ThinkingBar
+                  reasoning={final.reasoning}
+                  streaming={streaming && !bodyStarted}
+                  workMode
+                />
+              ) : null}
+              {final.toolCalls.length > 0 ? (
+                <ToolList calls={final.toolCalls} variant="loop" streaming={running} />
+              ) : null}
+            </div>
           ) : null}
         </Disclosure>
       ) : null}

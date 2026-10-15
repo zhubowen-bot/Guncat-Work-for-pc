@@ -83,6 +83,7 @@ export function IconForKind({ kind, size = 15 }: { kind: ToolIconKind; size?: nu
 export function Disclosure({
   title,
   subtitle,
+  trailing,
   children,
   defaultOpen = false,
   leading,
@@ -91,6 +92,8 @@ export function Disclosure({
 }: {
   title: string
   subtitle?: string
+  /** 标题行末尾的补充内容（思考栏用它显示「最新一句思考」的跑马灯） */
+  trailing?: React.ReactNode
   children: React.ReactNode
   defaultOpen?: boolean
   leading?: React.ReactNode
@@ -121,6 +124,7 @@ export function Disclosure({
         {subtitle !== undefined && subtitle !== '' ? (
           <span className="disclosure__subtitle">{subtitle}</span>
         ) : null}
+        {trailing !== undefined ? <span className="disclosure__trailing">{trailing}</span> : null}
       </button>
       {open ? <div className="disclosure__body">{children}</div> : null}
     </div>
