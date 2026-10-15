@@ -52,6 +52,18 @@ process.on('exit', () => {
 const dir = path.join(root, '.smoke')
 fs.mkdirSync(dir, { recursive: true })
 
+/**
+ * 平台判定。
+ *
+ * 有一批行为是**只在 win32 上成立**的（窗口优先用 .ico、打包态默认开 Chromium 日志、
+ * 打包态自我重启带 --no-sandbox）。这类断言必须写成「两个平台都断言、但期望值不同」，
+ * 而不是「非 win32 就跳过」：
+ *   · 无条件断言 win32 的行为 → Linux/macOS 的 CI 上必然红（本文件踩过这个坑）；
+ *   · 直接跳过                   → 那些断言在非 win32 上永远不会失败，等于假防线。
+ * 所以下面统一按 IS_WIN 分支，两边各自都有明确的期望值。
+ */
+const IS_WIN = process.platform === 'win32'
+
 const entry = path.join(dir, 'startup-entry.ts')
 fs.writeFileSync(
   entry,
@@ -210,12 +222,15 @@ check(
   viewItems.filter((x) => typeof x === 'string').join(', ')
 )
 
-// 窗口图标：Windows 上优先多尺寸的 .ico（任务栏 / Alt+Tab / 系统菜单都要按尺寸取）
-const icoExists = fs.existsSync(path.join(root, 'resources', 'app-icon.ico'))
+// 窗口图标：Windows 上优先多尺寸的 .ico（任务栏 / Alt+Tab / 系统菜单都要按尺寸取，
+// 单张 PNG 靠系统缩放会糊）；其他平台回退 .png —— 期望值随平台变化（见 IS_WIN 的说明）。
+const iconPath = String(options.icon ?? '')
 check(
-  '窗口图标指向随包的应用图标（Win32 优先 .ico）',
-  icoExists ? String(options.icon ?? '').endsWith('app-icon.ico') : true,
-  String(options.icon ?? '(未设置)')
+  IS_WIN
+    ? '窗口图标指向随包的应用图标（Win32 优先 .ico）'
+    : '窗口图标指向随包的应用图标（非 Win32 用 .png）',
+  iconPath.endsWith(IS_WIN ? 'app-icon.ico' : 'app-icon.png'),
+  iconPath || '(未设置)'
 )
 check(
   '渲染进程的失败路径都有监听（否则出问题无从查起）',
@@ -612,7 +627,6 @@ check(
 // 这条路径必须自己把 --no-sandbox 放到真实命令行上。
 console.log('\n22. win32 打包态默认启动（自我重启带 --no-sandbox）')
 
-const IS_WIN = process.platform === 'win32'
 // 打包态的路径解析会用 process.resourcesPath，Node 里没有这个属性，补上
 process.resourcesPath = path.join(root, 'resources')
 
@@ -660,13 +674,28 @@ if (IS_WIN) {
     log2.includes('[BOOT_RELAUNCH_NO_SANDBOX]')
   )
 }
+// Chromium 日志只在 win32 打包态默认打开（shouldLogChromium 的平台判定）。
+// 非 win32 上就**不该**设 --log-file，日志里也不该出现这一行 —— 两个方向都要断言，
+// 否则「非 win32 跳过」会让这条防线在 CI 上永远绿（起因见 IS_WIN 的说明）。
+const logFileSwitch = String(stub2.__switches()['log-file'] ?? '')
 check(
-  '打包态默认开 Chromium 日志，并写成 --log-file=<userData>\\logs\\chromium.log',
-  stub2.__switches()['enable-logging'] !== undefined &&
-    String(stub2.__switches()['log-file'] ?? '').endsWith(path.join('logs', 'chromium.log')),
-  String(stub2.__switches()['log-file'] ?? '(未设置)')
+  IS_WIN
+    ? '打包态默认开 Chromium 日志，并写成 --log-file=<userData>\\logs\\chromium.log'
+    : '非 win32 打包态不开 Chromium 日志（平台判定生效，不设 --log-file）',
+  IS_WIN
+    ? stub2.__switches()['enable-logging'] !== undefined &&
+        logFileSwitch.endsWith(path.join('logs', 'chromium.log'))
+    : logFileSwitch === '',
+  logFileSwitch || '(未设置)'
 )
-check('打包态日志记了 Chromium 日志路径', /Chromium 日志=.*chromium\.log/.test(log2))
+// index.ts 里这行是**无条件写入**的（未开启时值为「（未开启）」），所以两个平台都断言它存在，
+// 只是期望的内容不同 —— 不能写成「非 win32 就该没有这一行」。
+check(
+  IS_WIN ? '打包态日志记了 Chromium 日志路径' : '非 win32 打包态日志注明 Chromium 日志未开启',
+  IS_WIN
+    ? /Chromium 日志=.*chromium\.log/.test(log2)
+    : /Chromium 日志=（未开启）/.test(log2)
+)
 check(
   '这一轮不是降级模式（窗口标题不该说「兼容模式」）',
   !String(stub2.__windows()[0]?.options?.title ?? '').includes('兼容模式'),

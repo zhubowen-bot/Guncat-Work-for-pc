@@ -97,6 +97,27 @@ release/Guncat Work-0.1.0/
 结果写进 `diag-log.txt`。也可以双击 `run-compat.cmd` 直接以兼容模式启动。
 完整的排查路径见 **[启动排障](docs/STARTUP-TROUBLESHOOTING.md)**。
 
+### 给用户：一个安装包，装完从开始菜单打开
+
+不想发文件夹、想要一个能直接发给别人的 `.exe`，用安装包：
+
+```bash
+npm run dist:setup   # 产出 release/Guncat-Work-<版本>-setup.exe（单文件，约 105 MB）
+```
+
+双击即装，默认装到 `%LOCALAPPDATA%\Programs\Guncat Work`（**不需要管理员权限**），
+装完出桌面 / 开始菜单快捷方式，并在「设置 → 应用 → 已安装的应用」里登记，
+自带卸载程序（可勾选是否连本地数据一起删）。
+
+界面是自绘的现代风格（无边框圆角窗 + 渐变），不是 Win32 向导。
+安装与卸载的界面各四页，可以离屏渲染成 PNG 直接看：
+
+```bash
+npm run dist:setup:ui   # → .tmp/installer-shots/*.png
+```
+
+实现说明、静默安装参数与工具链约束见 **[installer/README.md](installer/README.md)**。
+
 ### 给开发：改代码即时生效
 
 ```bash
@@ -156,13 +177,19 @@ background 与 foreground **都指向 `cat_avatar.png`**，所以它才是真正
 | 内核 | `npm run smoke:core` | **341 项**：智能体加载、45 个工具、37 项技能、沙箱工作区、`run_js` 沙箱、数据管道、持久化、三协议端点、**Office 工具链端到端**（生成→读回→算子编辑）、**技能系统工具**、**交互模式全链路**（解析 / `$绑定`重算 / 动作回传 / 状态尾标记 / 表单打包）、**PDF 解析**（文本 / 搜索 / 页面转图）、**SVG 栅格化**（预览 PNG / docx 与 pptx 引用）、**插件热加载**（清单 → 解析 → 注册进工具表）、**HTTP 读空闲超时**（长流式不被掐断 / 停滞连接被掐断），另含端侧增强 138 项、语音输入 12 项、聊天多轮与界面补助 20 项、运行时快照 10 项、`ask_user_question` 26 项 |
 | 渲染 | `npm run smoke:render` | **272 项**：用 `react-dom/server` 把一份覆盖主要组件的界面程序渲染成 HTML 并逐项断言（含工作模式与交互模式各自的编排方式、Markdown 的 LaTeX / 代码块 / mermaid 三条链路、工作区面板的上传入口与文件分类图标、输入区的附件入口与插话按钮、侧栏的引擎分组与工作区开关、工具行的 diff / 任务清单卡、任务统计卡与目标卡、产物汇总卡、表格提取面板） |
 | 契约 | `npm run smoke:ipc` | **247 项**：用 electron 替身把渲染进程会调用的**每个 IPC 通道**真实 invoke 一遍（注册完整性、设置往返、会话生命周期、事件推送、越界与目录穿越拒绝、护栏提示、**文件收件与工作区上传**、**导出 Word**、**语音转写配置与端点拼接**、**本地联网搜索配置与绑定**、**协议路径后缀开关往返**、**配置方案**（迁移 / 新建 / 切换 / 保存 / 删除保护）、**聊天附件**（真的把内容填进消息）、**定时提醒推进**、**推理强度透传**、**执行中插话**、**任务统计与目标**、**产物汇总**、**表格提取**与模型输出清洗） |
-| 启动 | `npm run smoke:startup` | **150 项**：用 electron 替身跑**真实入口** `src/main/index.ts`，断言单实例锁 → whenReady → 建窗口 → 注册 IPC 依次发生，且 **preload 路径与 index.html 都指向真实存在的文件**、数据目录已建、全程无异常；另有任务栏身份、菜单栏、窗口图标、定时提醒推进的拉起与打包脚本的图标写入断言 |
+| 启动 | `npm run smoke:startup` | **150 项**（Windows；其他平台 145 项，见下注）：用 electron 替身跑**真实入口** `src/main/index.ts`，断言单实例锁 → whenReady → 建窗口 → 注册 IPC 依次发生，且 **preload 路径与 index.html 都指向真实存在的文件**、数据目录已建、全程无异常；另有任务栏身份、菜单栏、窗口图标、定时提醒推进的拉起与打包脚本的图标写入断言 |
 | 字符 | `node scripts/check-emoji.mjs src/renderer` | 渲染层不得出现 emoji，也不得出现当图标用的符号（改用 SVG 组件） |
-| 全部 | `npm run smoke` | 上面四套冒烟 + 字符扫描（共约 1010 项断言） |
+| 全部 | `npm run smoke` | 上面四套冒烟 + 字符扫描（Windows 上共约 1010 项断言） |
 
 `npm run smoke` 把风险最高的移植内核拉到纯 Node 下按真实调用链跑一遍，
 并用 esbuild 施加与 `electron.vite.config.ts` **完全相同**的别名规则 ——
 验证的是构建产物真实依赖的那套解析规则，而不是另起一套近似配置。
+
+> **计数以 Windows 为准。** 有一批断言是 win32 专属的（窗口优先用 `.ico`、
+> 打包态默认开 Chromium 日志、打包态自我重启带 `--no-sandbox`），在 Linux / macOS 上会少 5 项 ——
+> CI 跑在 Linux 上，所以那里的启动套件是 **145 项**。
+> 这些断言是**按平台分支写的、两边各有明确期望值**，而不是「非 Windows 就跳过」：
+> 跳过的断言在没有 Windows 的 CI 上永远不会失败，等于假防线。
 
 渲染验证的意义：Electron 窗口在部分开发机上起不来，但「元素树 → React 组件树」这一段
 在 Node 里可以完整跑通（SSR 不执行 `useEffect`，因此不依赖 `ResizeObserver` / `window`），
