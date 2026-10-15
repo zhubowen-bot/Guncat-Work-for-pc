@@ -166,6 +166,20 @@ export class SessionManager {
     } catch {
       this.conversations = []
     }
+    // 自愈历史上被写坏的「虚拟智能体 + 聊天形态」会话：早期版本在冷启动时只设了智能体、
+    // 没设形态，于是建出了一批 agentId='interactive'/'work' 而 mode='chat' 的会话 ——
+    // 打开它们会走聊天分支、拿空提示词。以 agentId 为准修回来（虚拟智能体的 id 就是形态）。
+    for (const conv of this.conversations) {
+      const fixed: string =
+        conv.agentId === Constants.MODE_WORK
+          ? Constants.MODE_WORK
+          : conv.agentId === Constants.MODE_INTERACTIVE
+            ? Constants.MODE_INTERACTIVE
+            : ''
+      if (fixed !== '' && conv.mode !== fixed) {
+        conv.mode = fixed
+      }
+    }
     // 本地联网搜索配置同样在启动时绑定一次：渲染层虽然会在 init 里读一次设置，
     // 但那是一次 IPC 往返，理论上可以在它之前就跑起一轮工作 —— 那时工具会拿到默认配置。
     await this.bindLocalSearchConfig(ctx)
@@ -510,7 +524,19 @@ export class SessionManager {
     //
     // 历史事故：这里原先传的是 agent.name，而标题推导的守卫只认 ''/'新对话'，
     // 于是引擎名被当成标题焊死在会话上 —— 用户看到的正是「每一条会话都叫轻简模式」。
-    const conv: Conversation = Conversation.create(agentId, '', mode)
+    //
+    // 形态与智能体必须自洽：两个虚拟智能体（work / interactive）的 id **就是**形态，
+    // 它们的系统提示词由主进程按 mode 现拼（虚拟智能体自己没有 prompt）。
+    // 一旦渲染层传来矛盾组合（例如 agentId='interactive' + mode='chat'），会话会被建坏：
+    // 界面走聊天分支、请求走 chat:send、而聊天路径取的是智能体自己的 prompt（空）——
+    // 用户看到的就是「没有提示词、纯对话」。这里以 agentId 为准兜一道，坏数据进不来。
+    const normalizedMode: string =
+      agentId === Constants.MODE_WORK
+        ? Constants.MODE_WORK
+        : agentId === Constants.MODE_INTERACTIVE
+          ? Constants.MODE_INTERACTIVE
+          : mode
+    const conv: Conversation = Conversation.create(agentId, '', normalizedMode)
     this.conversations.push(conv)
     await this.persist()
     const dto: ConversationDto = SessionManager.toDto(conv)
@@ -1666,17 +1692,18 @@ export class SessionManager {
     if (oldEnd > 1) {
       let summary: string = ''
       try {
-        // 摘要请求复用真实请求的完整前缀（同一份历史 + 同一份工具面），只在末尾追加压缩指令：
+        // 摘要请求复用真实请求的完整前缀（同一份历史 + **同一份工具面**），只在末尾追加压缩指令：
         // 对模型侧 KV 缓存而言这是上一个请求的延续而不是冷启动，前缀部分按缓存命中计价。
-        // 工具面刻意不传（null）：端口主循环统一下发全量工具定义（见 runWorkTurnWithOverflowRetry），
-        // 这里必须与之保持一致，否则工具定义一变，这段前缀的缓存全部作废。
+        // 工具面必须与主循环逐字节一致（见 runWorkTurnWithOverflowRetry 的 toolDefsForMode），
+        // 否则工具定义一变，这段前缀的缓存全部作废。
         summary = await AgentLoopService.summarizeHistory(
           env.config,
           messages,
           env.request.thinkingEnabled,
           env.reasoningEffort,
           env.request.webSearchEnabled,
-          env.abort
+          env.abort,
+          AgentLoopService.toolDefsForMode(mode, env.request.webSearchEnabled)
         )
       } catch (e) {
         // 压缩失败（网络/中断/服务端拒绝）回退为整条裁剪，不把整个任务拖死
@@ -1778,7 +1805,16 @@ export class SessionManager {
         request.webSearchEnabled,
         callbacks,
         abort,
-        true
+        true,
+        Constants.WORK_LLM_RETRY_MAX,
+        // 工具面按模式裁剪（对齐原版 `toolDefsForMode(loopMode, webSearchEnabled)`）：
+        // 交互模式只下发 27 个白名单工具，工作模式返回 null（= 全量 44 个）。
+        //
+        // 这一条很关键：交互模式的系统提示词写着「默认一次回答直接给界面, 不调用任何工具；
+        // 一律不用 todo_write / goal_* / schedule_* / subagent / session_search / record_search」，
+        // 而此前主循环把**全量**工具面下发给了它 —— 提示词里明令禁止的工具就在工具表里摆着，
+        // 模型于是动不动就去读文件、写文件、建目标，交付物从「一份界面」退化成「一段对话」。
+        AgentLoopService.toolDefsForMode(mode, request.webSearchEnabled)
       )
     } catch (e) {
       const err: Error = e as Error

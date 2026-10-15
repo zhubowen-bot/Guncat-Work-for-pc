@@ -968,6 +968,32 @@ check(
   mod.isLoopMode('work') && mod.isLoopMode('interactive') && !mod.isLoopMode('chat')
 )
 
+// --- 会话形态判定（真实事故：冷启动只设智能体不设形态 → 交互模式变纯对话） ---
+check(
+  '虚拟智能体的 id 就是形态：agentId=interactive 配 mode=chat 时必须判成交互',
+  mod.resolveConversationMode('interactive', 'chat') === 'interactive' &&
+    mod.resolveConversationMode('work', 'chat') === 'work',
+  `${mod.resolveConversationMode('interactive', 'chat')} / ${mod.resolveConversationMode('work', 'chat')}`
+)
+check(
+  '真实智能体上仍按会话自己记的形态（工作/交互模式会话不算丢）',
+  mod.resolveConversationMode('guncat-3.1-flash', 'interactive') === 'interactive' &&
+    mod.resolveConversationMode('guncat-3.1-flash', 'work') === 'work' &&
+    mod.resolveConversationMode('guncat-3.1-flash', 'chat') === 'chat'
+)
+check(
+  '形态缺失/非法时回落到聊天（不猜）',
+  mod.resolveConversationMode('', '') === 'chat' &&
+    mod.resolveConversationMode('guncat-3.1-flash', 'nonsense') === 'chat'
+)
+check(
+  '虚拟智能体的 id 判定与模式映射一致（interactive/work 都不是真实智能体）',
+  mod.isVirtualAgentId('interactive') &&
+    mod.isVirtualAgentId('work') &&
+    !mod.isVirtualAgentId('guncat-3.1-flash') &&
+    mod.modeForAgentId('interactive') === 'interactive'
+)
+
 // --- 图片灯箱 + 正文图片可点（原版 ImageLightbox 此前整条链路缺失） ---
 console.log('\n29. 图片灯箱')
 const lightboxOpen = mod.renderLightbox(true)

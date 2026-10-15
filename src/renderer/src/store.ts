@@ -11,7 +11,8 @@ import {
   buildAgentList,
   engineIdOfConversation,
   isVirtualAgentId,
-  modeForAgentId
+  modeForAgentId,
+  resolveConversationMode
 } from './conversations'
 import type {
   AgentDto,
@@ -418,6 +419,12 @@ export const useStore = create<State>((set, get) => {
         agents,
         engines,
         activeAgentId: startAgentId,
+        // **形态必须跟着智能体一起设**。漏掉这一行的后果（真实踩过）：
+        // 冷启动后 activeAgentId 是交互模式智能体、而 mode 还停在初值 'chat'，
+        // 于是界面走聊天分支、发送走 chat:send —— 而聊天路径的系统提示词取自
+        // 智能体自己的 prompt，两个虚拟智能体根本没有 prompt，模型拿到的是一份
+        // **空提示词**，直接当裸 API 用（用户看到的正是「没有提示词、纯对话」）。
+        mode: resolveConversationMode(startAgentId, 'chat'),
         summaries,
         settings,
         // 深度思考与两个档位都从偏好里恢复（缺省值与原版一致：关 / high / low）
@@ -452,7 +459,12 @@ export const useStore = create<State>((set, get) => {
       const conv = await window.guncat.conversations.get(id)
       // 落盘「当前会话」（对齐原版 openConversation：只写不读，避免存档停在过期的会话 id 上）
       void window.guncat.settings.saveString('guncat_current_conv', id)
-      const mode = (conv?.mode as AgentMode) ?? 'chat'
+      // 形态以**会话的智能体**为准（`resolveConversationMode` 里写了为什么）：
+      // 这也顺手自愈了历史上被写坏的「交互模式智能体 + 聊天形态」会话。
+      const mode = resolveConversationMode(
+        conv === null ? '' : engineIdOfConversation(conv),
+        (conv?.mode as string) ?? ''
+      )
       set({
         activeId: id,
         active: conv,
@@ -485,7 +497,10 @@ export const useStore = create<State>((set, get) => {
         set({ activeId: null, active: null })
       }
       const agentId = get().activeAgentId
-      const conv = await window.guncat.conversations.create(agentId, get().mode)
+      // 形态由智能体推出，**不要**直接读 get().mode —— 两者一旦不同步（见 init 里的说明），
+      // 这里就会造出一条 agentId 与 mode 互相矛盾的会话，而且它会一直留在列表里。
+      const mode = resolveConversationMode(agentId, get().mode)
+      const conv = await window.guncat.conversations.create(agentId, mode)
       // 新建对话时按智能体重置深度思考（效率/轻简模式关、专家模式开）；
       // Agent Loop 形态则强制为开（此时界面上不显示该开关，档位才是开关）
       await get().applyAgentThinkingDefault()
@@ -649,7 +664,10 @@ export const useStore = create<State>((set, get) => {
         const conv = await get().createConversation()
         activeId = conv.id
       }
-      const mode = get().mode
+      // 形态以**当前智能体**为准，不直接信任 get().mode：两者一旦不同步，
+      // 交互模式会走 chat:send，而聊天路径的提示词来自智能体自己的 prompt ——
+      // 虚拟智能体没有 prompt，模型会拿到一份空提示词（用户报障的原形）。
+      const mode = resolveConversationMode(get().activeAgentId, get().mode)
       // 思考参数按形态算：工作模式思考恒开（界面上不显示该开关）、交互模式的
       // 「关闭(off)」档位同时把思考关掉并把下发强度退回 'low'。见 requestThinking。
       const thinking = requestThinking(

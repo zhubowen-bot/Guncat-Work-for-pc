@@ -43,7 +43,7 @@ import {
   IconWork
 } from '@renderer/icons'
 import { AgentItem, ConvItem, Sidebar } from '@renderer/components/Sidebar'
-import { GroupedTurn, WorkTurn } from '@renderer/components/Timeline'
+import { GroupedTurn, Timeline, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
 import { safeUrlTransform } from '@renderer/components/Markdown'
 import { Composer } from '@renderer/components/Composer'
@@ -66,7 +66,7 @@ import {
 import { LightboxView } from '@renderer/components/ImageLightbox'
 import { TableOcrPanel } from '@renderer/components/TableOcrDialog'
 import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
-import { marqueeText } from '@renderer/components/MessageView'
+import { AssistantBody, marqueeText } from '@renderer/components/MessageView'
 import type { MessageDto, PickedAttachmentDto } from '@ipc/contract'
 
 /** 导出文件名推导 —— 纯函数，可直接断言 */
@@ -104,6 +104,18 @@ export {
   requestThinking,
   workEffortFromPrefs
 } from '@renderer/store'
+
+/**
+ * 「会话该按哪个形态打开」的判定（`resolveConversationMode`）。
+ * 这条纯函数是被一次真实事故逼出来的：冷启动只设了智能体、没设形态，
+ * 于是出现「交互模式智能体 + 聊天形态」—— 界面走聊天分支、
+ * 请求走 chat:send、聊天路径又取智能体自己的 prompt（虚拟智能体没有 prompt），
+ * 用户看到的是「没有提示词、纯对话」。所以这里逐个组合钉住。
+ */
+export {
+  isVirtualAgentId,
+  resolveConversationMode
+} from '@renderer/conversations'
 
 /** 回合归组与工具行展示的纯函数（对应原版 buildWorkTimeline / WorkStepFormat） */
 export {
@@ -834,4 +846,78 @@ export function renderComposed(): string {
     onSend: () => {}
   })
   return renderToStaticMarkup(createElement('div', null, text, block))
+}
+
+/**
+ * 排查用：把一段模型回答**按交互模式真实的渲染路径**（useBody → AssistantBody）渲染出来，
+ * 用于回答「模型给的是界面程序，界面块到底有没有被认出来」。
+ */
+export function renderAssistantBody(content: string): string {
+  return renderToStaticMarkup(
+    createElement(AssistantBody, {
+      message: {
+        id: 'probe',
+        role: 'assistant',
+        content,
+        displayContent: content,
+        reasoning: '',
+        createdAt: 0,
+        attachments: [],
+        toolCalls: [],
+        tokenSpeed: -1,
+        cacheHitRate: -1
+      } as never,
+      interactive: true
+    })
+  )
+}
+
+/** 排查用：`GuncatUiParts.build` 对一段内容的判定结果（hasUi / textOnly / 程序文本） */
+export function inspectUiParts(content: string): unknown {
+  const parts = GuncatUiParts.build(content, true)
+  return {
+    hasUi: parts.hasUi,
+    textOnly: parts.textOnly.slice(0, 80),
+    segments: parts.segments.length,
+    kinds: parts.segments.map((s) => s.type)
+  }
+}
+
+/** 排查用：按**交互模式**渲染一整条时间线（用户报障时用它看看到底渲染出了什么） */
+export function renderInteractiveTimeline(program: string): string {
+  const messages = [
+    {
+      id: 'u1',
+      role: 'user',
+      content: '给我做一个销售看板',
+      displayContent: '给我做一个销售看板',
+      reasoning: '',
+      createdAt: 0,
+      attachments: [],
+      toolCalls: [],
+      tokenSpeed: -1,
+      cacheHitRate: -1
+    },
+    {
+      id: 'a1',
+      role: 'assistant',
+      content: program,
+      displayContent: program,
+      reasoning: '',
+      createdAt: 1,
+      attachments: [],
+      toolCalls: [],
+      tokenSpeed: -1,
+      cacheHitRate: -1
+    }
+  ] as never
+  return renderToStaticMarkup(
+    createElement(Timeline, {
+      messages,
+      mode: 'interactive',
+      running: false,
+      lastAssistantId: 'a1',
+      onEditToInput: () => {}
+    })
+  )
 }

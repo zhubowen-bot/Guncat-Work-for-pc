@@ -236,6 +236,37 @@ check('改名事件已推送', events.some((e) => e.type === 'conversation:title
 const listAfter = await inv('conversations:load')
 check('会话出现在列表中', listAfter.length === 1 && listAfter[0].title === '改名后的对话')
 
+// --- 形态与智能体必须自洽（真实事故：冷启动只设智能体不设形态） ---
+//
+// 两个虚拟智能体（work / interactive）的 id **就是**形态，它们的系统提示词由主进程按
+// mode 现拼（虚拟智能体自己没有 prompt）。渲染层一旦传来矛盾组合，会话会被建坏：
+// 界面走聊天分支、请求走 chat:send、聊天路径又取智能体自己的 prompt（空）——
+// 用户看到的是「没有提示词、纯对话」。主进程这道兜底以 agentId 为准。
+{
+  const mismatch = await inv('conversations:create', 'interactive', 'chat')
+  check(
+    'agentId=interactive 配 mode=chat → 建出来的会话是交互形态（不是聊天）',
+    mismatch.mode === 'interactive',
+    `mode=${mismatch.mode}`
+  )
+  const mismatch2 = await inv('conversations:create', 'work', 'chat')
+  check(
+    'agentId=work 配 mode=chat → 建出来的会话是工作形态',
+    mismatch2.mode === 'work',
+    `mode=${mismatch2.mode}`
+  )
+  const realAgentConv = await inv('conversations:create', agents[0].id, 'chat')
+  check(
+    '真实智能体照旧按传入的形态建会话（不被兜底改写成 loop 形态）',
+    realAgentConv.mode === 'chat',
+    `mode=${realAgentConv.mode}`
+  )
+  check(
+    '自愈：读回来的会话形态与智能体一致',
+    (await inv('conversation:get', mismatch.id)).mode === 'interactive'
+  )
+}
+
 // --- 缺配置时的护栏：不能静默失败 ---
 events.length = 0
 await inv('chat:send', {

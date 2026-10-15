@@ -95,6 +95,30 @@ export function modeForAgentId(agentId: string): AgentMode {
   return 'chat'
 }
 
+/**
+ * 会话该按哪个形态打开 —— **智能体是唯一真相来源**。
+ *
+ * 为什么需要这么一条：形态与会话的 agentId 是两个字段，一旦哪一侧写错，
+ * 就会出现「交互模式智能体 + 聊天模式」这种组合。它的后果非常难看出来：
+ *   · 界面走聊天分支（纯气泡、连空态提示语都是聊天那一段）；
+ *   · 发送走 `chat:send`，而聊天路径的系统提示词取自**智能体自己的 prompt** ——
+ *     两个虚拟智能体（work / interactive）根本没有 prompt（它们的提示词是主进程
+ *     按 mode 现拼的），于是模型拿到的是一份**空提示词**，直接当裸 API 用。
+ * 所以这里以 agentId 为准：虚拟智能体的 id 本身就是形态，真实智能体才是「聊天形态」。
+ *
+ * `convMode` 只在智能体是真实智能体时参与决定（会话自己记的形态仍然算数，
+ * 例如真实智能体上开着的工作模式会话）。
+ */
+export function resolveConversationMode(agentId: string, convMode: string): AgentMode {
+  if (isVirtualAgentId(agentId)) {
+    return modeForAgentId(agentId)
+  }
+  if (convMode === 'work' || convMode === 'interactive' || convMode === 'chat') {
+    return convMode
+  }
+  return 'chat'
+}
+
 export function agentById(agents: AgentDto[], id: string): AgentDto | undefined {
   return agents.find((a) => a.id === id)
 }
