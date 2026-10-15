@@ -202,15 +202,14 @@ export class PromptBuilder {
     let lines: string[] = [];
     lines.push('# Mermaid 导图（最终总结必附）');
     lines.push('- **最终总结末尾必须附上 mermaid 导图**：把任务目标、关键执行路径与产出文件浓缩成一张在对话栏里一眼能看清的总览图（图前配一行小标题，如 **任务导图**），方便用户一眼回顾全貌。导图是总结的标配部分，漏掉视为交付不完整；唯一例外是无任何工具调用的单轮极简回复。');
-    lines.push('- Mermaid 输出规范（渲染目标：应用内的对话栏，宽度有限，严格遵守）：');
-    lines.push('1. 只使用 flowchart TD（自上而下）或 sequenceDiagram；禁止 mindmap、pie、quadrantChart、gantt、graph LR。即使内容天然像脑图，也必须转写成 flowchart TD——脑图径向铺开会摊成一张宽图，缩到对话栏宽度后文字不可读。');
-    lines.push('2. 每张 flowchart 节点总数 ≤ 8；同一层并行分支 ≤ 3；宁可加深层级，不加宽分支。流程更长时拆成多张图，每张图前配一行小标题。');
-    lines.push('3. 节点内文字尽量短：中文 ≤ 10 字，英文 ≤ 3 个短词；只允许汉字、字母、数字与空格，禁止任何标点——尤其不得出现英文双引号，标签内多一个引号就会解析失败；解释性内容写在图外正文，禁止塞进节点。');
-    lines.push('4. 禁止 subgraph 嵌套，最多允许一层 subgraph。');
-    lines.push('5. 连线保持单向自上而下，避免回环箭头与交叉线；需要表达循环时用正文文字补充说明。每行只写一条连线，不把多条边挤在同一行。');
-    lines.push('6. 节点 id 用单字母（A、B、C…），显示文本写在带引号的方括号内，如 A["第一步"]。');
-    lines.push('7. 每张图首行添加布局参数：flowchart 用 %%{init: {"flowchart": {"nodeSpacing": 40, "rankSpacing": 60, "useMaxWidth": true}}}%%；sequenceDiagram 用 %%{init: {"sequence": {"useMaxWidth": true}}}%%。');
-    lines.push('8. 输出前自查（缺一不可）：开始围栏的语言标记精确为 mermaid；首行是 init 布局参数，随后才是 flowchart TD 或 sequenceDiagram；节点数、分支数、字数均未超限；每行恰好一条连线，节点文字内无标点、引号成对；围栏已正确闭合。任何一项不符，重写后再输出。');
+    lines.push('- Mermaid 输出规范（渲染目标：**桌面版**的对话栏，正文栏宽约 800px，超宽时**可以左右滚动**；因此不要为了迁就窄屏把结构压扁）：');
+    lines.push('1. 图种按语义选，不要一律 TD：流程/依赖/调用链用 `flowchart TD`；流水线、时间线、左右对照、层级不深的链路用 `flowchart LR`（横向铺开在宽屏上更易读）；分类/拆解/知识结构用 `mindmap`；多角色时序用 `sequenceDiagram`；排期用 `gantt`；占比用 `pie`；二维定位用 `quadrantChart`。');
+    lines.push('2. 规模：每张 flowchart 节点 ≤ 20、同一层并行分支 ≤ 5、subgraph 允许一到两层（用来划模块/阶段边界）。层级该丰富就丰富，三层以上很正常——该限制的是**单个节点的长度**，不是层次。超过这个规模再拆成多张图，每张图前配一行小标题。');
+    lines.push('3. 节点文字：中文 ≤ 16 字，英文 ≤ 5 个短词。**标签里出现标点、括号、冒号等特殊字符时必须用双引号包住**（如 A["第一步：读取配置"]），引号成对；纯汉字标签可以不加引号。解释性内容写在图外正文。');
+    lines.push('4. 连线每行一条、尽量单向；交叉线过多说明该换 LR 或拆图，而不是硬画；需要表达循环时用正文补充说明。');
+    lines.push('5. 节点 id 用单字母或短名（A、B、C…），显示文本写在方括号内。');
+    lines.push('6. 每张图首行添加布局参数：flowchart 用 %%{init: {"flowchart": {"nodeSpacing": 50, "rankSpacing": 70, "useMaxWidth": false}}}%%；sequenceDiagram 用 %%{init: {"sequence": {"useMaxWidth": false}}}%%。**useMaxWidth 必须是 false** —— 图保持自然尺寸，宽了由对话栏横向滚动；缩到 100% 只会把字压小。');
+    lines.push('7. 输出前自查（缺一不可）：开始围栏的语言标记精确为 mermaid；首行是 init 布局参数，随后才是图种声明；节点数、分支数、字数未超限；每行恰好一条连线；标签里有标点时已被双引号包住；围栏已正确闭合。任何一项不符，重写后再输出。');
     return lines.join('\n');
   }
 

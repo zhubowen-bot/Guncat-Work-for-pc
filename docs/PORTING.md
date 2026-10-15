@@ -263,6 +263,8 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 | `core/service/WebFetchService.ts` | `User-Agent` 从 `Mozilla/5.0 (HarmonyOS) GuncatWork/6.1` 改成桌面 UA | 同上 |
 | `core/common/GuncatUiLibrary.ts` | 组件提示文案「横向卡片轮播(手机上比网格更好读)」改为「在窄栏里比网格更好读」；「横向条形图(手机竖屏最易读)」改为「排名类数据在窄栏里最易读」 | 交互模式的组件选择说明，同样是平台措辞 |
 | `resources/skills/{docx,xlsx,ppt}/SKILL.md`、`ppt/reference/design-guide.md` | **已恢复**：整节「默认假设门」改回原版的「前置提问门」（5 项问题表、`options` 建议、跳过条件都照原版） | 与上面的 ask_user_question 恢复配套：技能要求「新建前必须问」，工具与卡片都就位了才成立 |
+| `core/common/PromptBuilder.ts`、`core/service/AgentLoopService.ts` | 「Mermaid 导图」一节从**手机竖屏口径**改写为**桌面口径**：图种按语义选（新增 `flowchart LR` / `mindmap` / `gantt` / `pie` / `quadrantChart` 可用）、节点 ≤ 8 → ≤ 20、同层分支 ≤ 3 → ≤ 5、subgraph 允许一到两层、标签 ≤ 10 字 → ≤ 16 字且「含标点时用双引号包住」、布局参数 `useMaxWidth` 由 `true` 改为 `false`；自检清单一并更新 | 原规范是为**手机窄屏**写的（"宁可加深层级，不加宽分支"、禁止 LR 与 mindmap、"缩到屏宽后文字不可读"）。桌面端对话栏宽约 800px 且**可以横向滚动**，再按窄屏压扁结构就是白白牺牲表达力 |
+| `resources/Guncat {3.0-Flash,3.0-Pro,3.1-Flash}_prompt_{ZH_CN,EN}.md` | 同上口径的六个智能体提示词版本（`## 7.0/8.0 回答开头 Mermaid 结构图`、3.1 的 `## Mermaid 输出规范`，以及顶部摘要行与交付自检行） | 这几份是**随包资源**，会被整体覆盖；不记进本表，同步上游时手机口径会悄悄回来 |
 
 > 除上表外，`src/core/` 下**没有**对上游逻辑做过任何语义修改。
 > 同步上游时请按本表逐条重新施加。**`ask_user_question` 那几条现在是「不要删」而不是「要删」**：

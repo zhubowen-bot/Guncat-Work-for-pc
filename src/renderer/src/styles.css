@@ -1520,6 +1520,9 @@ select {
 
 /* ===== Mermaid ===== */
 
+/* Mermaid 图（桌面端）：图保持**自然尺寸**，宽了由这里横向滚动，
+   而不是缩到看不清（手机端的做法是 useMaxWidth 压到屏宽，桌面端不需要这么委屈）。
+   max-width: 100% 会让宽图被浏览器二次缩放，所以这里显式取消。 */
 .mermaid-block__canvas {
   margin: 10px 0;
   padding: 10px;
@@ -1527,12 +1530,23 @@ select {
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   overflow-x: auto;
+  overflow-y: hidden;
   text-align: center;
 }
 
 .mermaid-block__canvas svg {
-  max-width: 100%;
+  max-width: none;
   height: auto;
+}
+
+/* 横向滚动条做细一点，避免宽图下面挂一条又粗又丑的滚动条 */
+.mermaid-block__canvas::-webkit-scrollbar {
+  height: 8px;
+}
+
+.mermaid-block__canvas::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
 }
 
 .mermaid-block--pending {
