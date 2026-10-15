@@ -25,6 +25,7 @@ export { resolveTranscriptionUrl, loadAsrConfig, transcribeAudio } from '@main/a
 export { __invoke, __channels, __events, __calls, __setOpenDialog, __setMessageBox, __reset } from 'electron'
 export { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 export { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
+export { ContextBudget } from '@core/common/ContextBudget'
 export { sanitizeTableHtml } from '@main/sanitizeHtml'
 `
 )
@@ -1446,6 +1447,407 @@ check(
 )
 artifactServer.closeAllConnections?.()
 artifactServer.close()
+
+// --- 上下文预算管理（Agent Loop 三级压缩，这是原版有、端口整块缺失的能力） ---
+//
+// 事故形状：源码里 WORK_PRUNE_* / WORK_COMPACT_* 常量定义了但**零调用点**，runWork 的
+// messages 数组只增不减 —— 长任务跑到后面必然撞上下文上限（400/413/超长报错），
+// 早期巨大的工具结果还一直占着预算，用户看到的是任务莫名失败。
+// 三级策略（修剪工具结果 → 前缀复用摘要压缩 → 从最旧处整条丢弃）已实现成纯函数，
+// 先在这里逐级断言，再用一个假模型服务做端到端验证。
+const CB = mod.ContextBudget
+
+// 纯函数只看 role/content/toolCalls，用普通对象就够（core 不认识 LoopMessage）
+const cbSys = (t) => ({ role: 'system', content: t, toolCalls: [] })
+const cbUsr = (t) => ({ role: 'user', content: t, toolCalls: [] })
+const cbAsst = (t, calls) => ({ role: 'assistant', content: t, toolCalls: calls ?? [] })
+const cbCall = (argsJson, result) => ({ argsJson, result })
+const CB_HEAD = { system: (c) => cbSys(c), user: (c) => cbUsr(c) }
+
+// 第一级：只修剪「早期」区间里超长的工具结果，短的原样保留
+const longResult = 'A'.repeat(5000) + '中段原文' + 'B'.repeat(5000)
+const budgetMsgs = [
+  cbSys('系统提示词'),
+  cbUsr('任务'),
+  cbAsst('早轮', [cbCall('{"path":"大文件"}', longResult), cbCall('{}', '短结果')])
+]
+check('修剪：超长结果确实被修剪（返回 true）', CB.pruneOldToolResults(budgetMsgs, 1, 3) === true)
+check(
+  '修剪：中段换成带省略字数与重新获取方式的提示',
+  budgetMsgs[2].toolCalls[0].result.includes('早期工具结果已修剪, 省略 ') &&
+    budgetMsgs[2].toolCalls[0].result.includes('read_file/search_files/parse_document 重新获取') &&
+    !budgetMsgs[2].toolCalls[0].result.includes('中段原文'),
+  budgetMsgs[2].toolCalls[0].result.slice(1195, 1290)
+)
+check(
+  '修剪：原文只保留头 1200 + 尾 400（对齐 WORK_PRUNE_KEEP_HEAD/TAIL）',
+  budgetMsgs[2].toolCalls[0].result.startsWith('A'.repeat(1200)) &&
+    budgetMsgs[2].toolCalls[0].result.endsWith('B'.repeat(400)) &&
+    budgetMsgs[2].toolCalls[0].result.length < longResult.length
+)
+check('修剪：短结果原样不动（只动超长的）', budgetMsgs[2].toolCalls[1].result === '短结果')
+check(
+  '修剪：system 与 user 消息不在处理范围内（区间只扫 assistant）',
+  budgetMsgs[0].content === '系统提示词' && budgetMsgs[1].content === '任务'
+)
+check('修剪：已修剪过的结果不会反复修剪（长度已低于阈值，返回 false）',
+  CB.pruneOldToolResults(budgetMsgs, 1, 3) === false)
+
+// 预算判据：字符估算 / usage 锚定
+check('估算：无实测数据时按 2 字符/token 的保守值', CB.estimateTokens(1000, 0, 0) === 500)
+check('估算：有实测比例时按实测比例', CB.estimateTokens(1000, 800, 4000) === 200)
+check('阈值：= 上下文窗口 * 占比', CB.threshold() === 1000000 * 0.85, String(CB.threshold()))
+check(
+  '超预算：上一请求真实 usage 达阈值即算超预算（历史只会继续增长）',
+  CB.overBudget([cbSys('s'), cbUsr('u')], { tokens: CB.threshold() + 1, chars: 10 }) === true
+)
+check(
+  '超预算：无锚定值时按估算比对（短历史不算超预算）',
+  CB.overBudget([cbSys('s'), cbUsr('u')], { tokens: 0, chars: 0 }) === false
+)
+check(
+  '超预算：无锚定值时按估算比对（超长历史算超预算）',
+  CB.overBudget([cbSys('s'), cbAsst('', [cbCall('{}', 'z'.repeat(1800000))])], { tokens: 0, chars: 0 }) ===
+    true
+)
+
+// 第二级：摘要压缩后的数组结构
+const shortMsgs = [cbSys('系统提示词'), cbUsr('任务')]
+for (let i = 0; i < 6; i++) {
+  shortMsgs.push(cbAsst('第' + i + '轮', [cbCall('{}', 'r' + i)]))
+}
+check(
+  '压缩边界：短历史不给旧历史压缩机会（oldEnd 恒为 1，区间为空）',
+  CB.summaryEndIndex(shortMsgs.length) === 1,
+  `共 ${shortMsgs.length} 条, oldEnd=${CB.summaryEndIndex(shortMsgs.length)}`
+)
+const longMsgs = [cbSys('系统提示词'), cbUsr('任务')]
+for (let i = 0; i < 20; i++) {
+  longMsgs.push(cbAsst('第' + i + '轮', [cbCall('{}', 'r' + i)]))
+}
+const oldEnd = CB.summaryEndIndex(longMsgs.length)
+check(
+  '压缩边界：尾部保留最近 12 条原样，其余进摘要',
+  oldEnd === longMsgs.length - 12 && oldEnd === 10,
+  `共 ${longMsgs.length} 条, oldEnd=${oldEnd}`
+)
+const rebuiltMsgs = CB.rebuildWithSummary(longMsgs, oldEnd, '状态摘要正文', '按模式重建的系统提示词', CB_HEAD)
+check(
+  '摘要重建：结构是 [system, user(状态摘要), ...保留的尾部]',
+  rebuiltMsgs.length === 2 + (longMsgs.length - oldEnd) &&
+    rebuiltMsgs[0].role === 'system' &&
+    rebuiltMsgs[0].content === '按模式重建的系统提示词' &&
+    rebuiltMsgs[1].role === 'user',
+  `${rebuiltMsgs.length} 条: ${rebuiltMsgs.map((m) => m.role).slice(0, 3).join(',')}...`
+)
+check(
+  '摘要重建：摘要以「【上下文压缩】…」的用户消息形式进入历史，并写明汇总条数',
+  rebuiltMsgs[1].content.includes('【上下文压缩】') &&
+    rebuiltMsgs[1].content.includes('以下为此前 9 条执行历史的状态摘要') &&
+    rebuiltMsgs[1].content.endsWith('状态摘要正文')
+)
+check(
+  '摘要重建：尾部还是原来那批消息对象（UI 时间线共享同一批记录）',
+  rebuiltMsgs[2] === longMsgs[oldEnd] && rebuiltMsgs[rebuiltMsgs.length - 1] === longMsgs[longMsgs.length - 1]
+)
+check('摘要重建：早期历史整体消失（不是叠加在保留尾部之前）',
+  !rebuiltMsgs.some((m) => m.content === '第0轮'))
+check(
+  '摘要重建：摘要超长会被截断到 WORK_SUMMARY_MAX_CHARS',
+  CB.truncateSummary('x'.repeat(5000)).length === 2400 + 1
+)
+
+// 第三级：整条丢弃只从索引 1 开始
+const dropMsgs = [cbSys('系统提示词'), cbUsr('历史0'), cbUsr('历史1'), cbUsr('历史2'), cbUsr('历史3'), cbUsr('历史4'), cbAsst('最后一条', [])]
+const hotAnchor = { tokens: CB.threshold() * 2, chars: 10 }
+const droppedCount = CB.dropOldestUntilUnderBudget(dropMsgs, hotAnchor)
+check(
+  '整条丢弃：只从索引 1 开始丢，system 消息必须保住',
+  dropMsgs[0].content === '系统提示词' && dropMsgs.length === 2 && droppedCount === 5,
+  `剩 ${dropMsgs.length} 条, 丢 ${droppedCount} 条`
+)
+check('整条丢弃：至少留住最近一条消息（循环条件 length > 2）',
+  dropMsgs[dropMsgs.length - 1].content === '最后一条')
+
+// --- 上下文预算管理的端到端：发出去的请求体里真的看不到被修剪掉的中段 ---
+//
+// 只断言纯函数还不够 —— 真正要证的是**请求体变小了**：早期那条巨大的工具结果在后续轮次的
+// 历史里必须已经变成头尾节选 + 省略提示。用一个假模型服务把历史堆到「压缩边界能覆盖到那条
+// 早期工具结果」，再抓请求体逐个断言。
+//
+// 假服务的编排（两个场景共用）：
+//   第 1 轮：吐 8 个 read_file 调用（读 8 份约 1.4 万字符的大文件 → 工具结果合计约 9.6 万字符）；
+//   第 2~13 轮：各吐一个读小文件的调用。消息数要堆到 15 条才有意义 ——
+//              WORK_COMPACT_KEEP_MESSAGES=12 时 oldEnd = 消息数 - 12，消息数不足 15 条时
+//              修剪区间 [1, oldEnd) 里根本没有 assistant 消息，什么也修剪不到；
+//   第 13 轮：附上真实 usage（prompt_tokens 超过阈值）→ 下一轮必然判定超预算；
+//   第 14 轮：收尾（不再调工具）。
+// summaryResult 传空白串时模拟「摘要请求拿不到有效摘要」的回退路径；
+// overflowRound 指定一轮改回 400「上下文超限」错误，用来验证强制压缩后重试的路径；
+// usageRound 指定哪一轮附上真实 usage（0 表示始终不带，即全靠错误驱动的强制压缩）。
+const PRUNE_BIG_COUNT = 8
+const PRUNE_ROUNDS_BEFORE_FINAL = 13
+
+function makeBudgetServer(summaryResult, overflowRound = 0, usageRound = PRUNE_ROUNDS_BEFORE_FINAL) {
+  const bodies = []
+  let toolRounds = 0
+  const server = http.createServer((req, res) => {
+    let raw = ''
+    req.on('data', (chunk) => {
+      raw += chunk.toString('utf8')
+    })
+    req.on('end', () => {
+      bodies.push(raw)
+      const isSummary = raw.includes('【上下文压缩指令】')
+      const isTitle = raw.includes('会话标题生成器')
+      if (!isSummary && !isTitle) {
+        toolRounds++
+        if (overflowRound !== 0 && toolRounds === overflowRound) {
+          // 服务端明确报上下文超限：调用方必须先压缩历史再重试（原版 runStepWithOverflowRetry）
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end('{"error":{"message":"This model\\u0027s maximum context length is exceeded"}}')
+          return
+        }
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      const send = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n')
+      const done = () => {
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }
+      // 上下文压缩请求（复用完整前缀 + 末尾追加压缩指令）
+      if (isSummary) {
+        send({ choices: [{ delta: { content: summaryResult } }] })
+        done()
+        return
+      }
+      // 会话标题生成是独立的旁路请求，不参与工具轮次编排
+      if (isTitle) {
+        send({ choices: [{ delta: { content: '上下文预算' } }] })
+        done()
+        return
+      }
+      if (toolRounds === 1) {
+        const calls = []
+        for (let i = 0; i < PRUNE_BIG_COUNT; i++) {
+          calls.push({
+            index: i,
+            id: 'call_prune_' + i,
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: 'big' + i + '.txt' }) }
+          })
+        }
+        send({ choices: [{ delta: { tool_calls: calls } }] })
+      } else if (toolRounds <= PRUNE_ROUNDS_BEFORE_FINAL) {
+        send({
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call_small_' + toolRounds,
+                    type: 'function',
+                    function: { name: 'read_file', arguments: JSON.stringify({ path: 'small.txt' }) }
+                  }
+                ]
+              }
+            }
+          ]
+        })
+      } else {
+        send({ choices: [{ delta: { content: '任务完成' } }] })
+      }
+      if (usageRound !== 0 && toolRounds === usageRound) {
+        // 真实 usage 锚定：此时历史（含 8 份大文件）已远超阈值，下一轮必须触发预算管理
+        send({ usage: { prompt_tokens: 900000, completion_tokens: 20 } })
+      }
+      done()
+    })
+  })
+  return {
+    server,
+    // 循环请求（排除压缩请求与标题请求）与压缩请求分开看，断言才有区分度
+    loopBodies: () =>
+      bodies.filter((b) => !b.includes('【上下文压缩指令】') && !b.includes('会话标题生成器')),
+    summaryBodies: () => bodies.filter((b) => b.includes('【上下文压缩指令】'))
+  }
+}
+
+// 大文件：第 1 行是「头部保留标记」（会被保留在节选开头），第 101 行是只可能出现在中段的
+// 原文标记（按头 1200 + 尾 400 字符修剪后，它必然落在被省略的中段里）
+function seedBudgetWorkspace(convId) {
+  const root = session.workspaceRoot(convId)
+  fs.mkdirSync(root, { recursive: true })
+  const lines = (i) => {
+    const out = []
+    for (let n = 0; n < 400; n++) {
+      if (n === 0) {
+        out.push('头部保留标记_' + i)
+      } else if (n === 100) {
+        out.push('中段原文标记_' + i + '_这段只有在没被修剪掉时才看得到')
+      } else {
+        out.push('第' + n + '行 ' + 'x'.repeat(30))
+      }
+    }
+    return out.join('\n')
+  }
+  for (let i = 0; i < PRUNE_BIG_COUNT; i++) {
+    fs.writeFileSync(path.join(root, 'big' + i + '.txt'), lines(i), 'utf8')
+  }
+  fs.writeFileSync(path.join(root, 'small.txt'), '小文件\n', 'utf8')
+}
+
+async function runBudgetScenario(summaryResult, options = {}) {
+  const harness = makeBudgetServer(
+    summaryResult,
+    options.overflowRound ?? 0,
+    options.usageRound ?? PRUNE_ROUNDS_BEFORE_FINAL
+  )
+  await new Promise((resolve) => harness.server.listen(0, '127.0.0.1', () => resolve()))
+  const port = harness.server.address().port
+  await inv('settings:saveApiConfig', {
+    provider: 'openai-completions',
+    baseUrl: 'http://127.0.0.1:' + String(port),
+    apiKey: 'sk-prune-test',
+    model: 'prune-model',
+    temperature: 0,
+    topP: 0,
+    maxTokens: 0,
+    extraParams: '',
+    autoSuffix: true
+  })
+  const conv = await inv('conversations:create', agents[0].id, 'work')
+  seedBudgetWorkspace(conv.id)
+  await inv('work:run', {
+    conversationId: conv.id,
+    text: '把 8 份大文件都读一遍',
+    mode: 'work',
+    thinkingEnabled: false,
+    webSearchEnabled: false
+  })
+  const loopBodies = harness.loopBodies()
+  const summaryBodies = harness.summaryBodies()
+  const dto = await inv('conversation:get', conv.id)
+  const last = (dto?.messages ?? []).filter((m) => m.role === 'assistant').pop()
+  harness.server.closeAllConnections?.()
+  harness.server.close()
+  return { loopBodies, summaryBodies, content: String(last?.content ?? '') }
+}
+
+const parseBodyJson = (raw) => {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+// 场景 A：摘要拿不到结果（空白）→ 只剩第一级修剪，修剪后的历史必须留在后续请求体里
+const sceneA = await runBudgetScenario(' ')
+const loopA = sceneA.loopBodies
+const finalA = loopA[loopA.length - 1] ?? ''
+check(
+  '端到端前提：早一轮请求里确实带着未修剪的完整大结果（后面几条断言的对照）',
+  loopA.length === 14 && String(loopA[1] ?? '').includes('中段原文标记_0'),
+  `共 ${loopA.length} 轮循环请求, 压缩请求 ${sceneA.summaryBodies.length} 次`
+)
+check(
+  '端到端：修剪后发出去的请求体里不再有中段原文（真的修剪了，不是只改了内存里的注释）',
+  finalA !== '' && !finalA.includes('中段原文标记_0') && !finalA.includes('中段原文标记_7'),
+  finalA.includes('中段原文标记_0') ? '中段仍在请求体里' : '中段已消失'
+)
+check(
+  '端到端：头尾节选留在历史里（模型仍看得到开头与结尾，不会因为修剪而一无所知）',
+  finalA.includes('头部保留标记_0') && finalA.includes('头部保留标记_7')
+)
+check(
+  '端到端：中段替换提示进了模型看到的历史（模型知道自己看到的是节选）',
+  finalA.includes('早期工具结果已修剪, 省略 ') &&
+    finalA.includes('需要原文时用 read_file/search_files/parse_document 重新获取')
+)
+check(
+  '端到端：顺序是「先零成本修剪，再花模型调用做摘要」（摘要请求里的历史已经是修剪过的）',
+  sceneA.summaryBodies.length === 1 &&
+    sceneA.summaryBodies[0].includes('早期工具结果已修剪, 省略 ') &&
+    !sceneA.summaryBodies[0].includes('中段原文标记_0')
+)
+const finalAJson = parseBodyJson(finalA)
+check(
+  '端到端：摘要不可用时不重建历史（回退路径保留原结构，第 1 条仍是任务消息）',
+  finalAJson !== null && !String(finalAJson.messages[1].content).startsWith('【上下文压缩】'),
+  finalAJson === null ? '请求体不是合法 JSON' : String(finalAJson.messages[1].content).slice(0, 30)
+)
+check(
+  '端到端：用户看得见「已自动修剪」标注（notes 真的进了本轮正文）',
+  sceneA.content.includes('（已自动修剪早期过长的工具结果以释放上下文）'),
+  sceneA.content.slice(0, 60)
+)
+check(
+  '端到端：没有发生的级别不写标注（没压缩就不写「已自动压缩/已自动裁剪」）',
+  !sceneA.content.includes('已自动压缩早期历史') && !sceneA.content.includes('已自动裁剪早期历史')
+)
+
+// 场景 B：摘要可用 → 早期历史被状态摘要取代，重建后的请求体结构必须正确
+const sceneB = await runBudgetScenario('状态摘要: 已读完 8 份大文件, 结论是……')
+const loopB = sceneB.loopBodies
+const finalB = loopB[loopB.length - 1] ?? ''
+const finalBJson = parseBodyJson(finalB)
+check(
+  '端到端：早期历史确实被压成了状态摘要（【上下文压缩】用户消息）',
+  finalB.includes('【上下文压缩】') && finalB.includes('状态摘要: 已读完 8 份大文件')
+)
+check(
+  '端到端：重建后的请求体结构是 [system, 摘要, ...保留的尾部]（system 必须还在第 0 条）',
+  finalBJson !== null &&
+    finalBJson.messages[0].role === 'system' &&
+    String(finalBJson.messages[1].content).startsWith('【上下文压缩】') &&
+    !finalBJson.messages.slice(2).some((m) => m.role === 'system'),
+  finalBJson === null ? '请求体不是合法 JSON' : finalBJson.messages.map((m) => m.role).join(',')
+)
+check(
+  '端到端：摘要重建后中段原文同样不复存在（早期历史整段被汇总）',
+  !finalB.includes('中段原文标记_0') && !finalB.includes('中段原文标记_7')
+)
+check(
+  '端到端：用户同时看得见「已自动修剪」与「已自动压缩: N 条」两条标注',
+  sceneB.content.includes('（已自动修剪早期过长的工具结果以释放上下文）') &&
+    sceneB.content.includes('（已自动压缩早期历史: 2 条已汇总为状态摘要）'),
+  sceneB.content.slice(0, 80)
+)
+check(
+  '端到端：模型正文仍然完整（标注是加在正文前面，不是替代正文）',
+  sceneB.content.includes('任务完成')
+)
+
+// 场景 C：服务端直接报上下文超限（400）→ 必须强制压缩历史后重试一次，任务不能因此报废。
+// 这条路径与「按需压缩」不同：请求已经发出去了，只能先把历史改小再重试，否则重试必然再失败。
+const sceneC = await runBudgetScenario('状态摘要: 溢出后压缩出的摘要', {
+  overflowRound: 14,
+  usageRound: 0
+})
+const loopC = sceneC.loopBodies
+const overflowedC = loopC[13] ?? ''
+const retryC = loopC[14] ?? ''
+check(
+  '端到端（溢出强制压缩）：400 那一轮的请求体里还是未修剪的原文（前提成立）',
+  loopC.length === 15 && overflowedC.includes('中段原文标记_0'),
+  `共 ${loopC.length} 轮循环请求`
+)
+check(
+  '端到端（溢出强制压缩）：重试的请求体已经过压缩（中段消失、摘要就位）',
+  retryC !== '' &&
+    !retryC.includes('中段原文标记_0') &&
+    retryC.includes('【上下文压缩】') &&
+    retryC.includes('状态摘要: 溢出后压缩出的摘要'),
+  retryC.includes('中段原文标记_0') ? '中段仍在重试请求里' : '重试请求已压缩'
+)
+check(
+  '端到端（溢出强制压缩）：任务在强制压缩后继续跑完，不会带着 400 直接失败',
+  sceneC.content.includes('任务完成') &&
+    sceneC.content.includes('（已自动修剪早期过长的工具结果以释放上下文）'),
+  sceneC.content.slice(0, 80)
+)
 
 effortServer.closeAllConnections?.()
 effortServer.close()

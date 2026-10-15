@@ -15,7 +15,13 @@ import { FileService, type PickedFile } from '@core/service/FileService'
 import { DocxBuilder } from '@core/export/DocxBuilder'
 import { AgentLoader } from '@core/service/AgentLoader'
 import { ChatService } from '@core/service/ChatService'
-import { AgentLoopService, LoopMessage, LoopTurnResult, LoopTurnCallbacks } from '@core/service/AgentLoopService'
+import {
+  AgentLoopService,
+  LoopMessage,
+  LoopTurnResult,
+  LoopTurnCallbacks,
+  LoopError
+} from '@core/service/AgentLoopService'
 import { WorkToolRunner } from '@core/service/WorkToolRunner'
 import { WorkFileService } from '@core/service/WorkFileService'
 import { SubagentService } from '@core/service/SubagentService'
@@ -30,6 +36,9 @@ import { ToolCallRecord } from '@core/model/ToolCallRecord'
 import { StreamCallbacks, AbortSignal } from '@core/common/Types'
 import { Constants } from '@core/common/Constants'
 import { LoopDecisions } from '@core/common/LoopDecisions'
+import { ContextBudget } from '@core/common/ContextBudget'
+import type { BudgetAnchor } from '@core/common/ContextBudget'
+import type { BudgetHeadFactory } from '@core/common/ContextBudget'
 import { generateMessageId } from '@core/common/Utils'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { GuncatUiRuntime, GuncatUiTrailer } from '@core/common/GuncatUiRuntime'
@@ -94,6 +103,27 @@ interface AttachmentParseContext {
   mm: MultimodalConfig
   api: ApiConfig | null
   sig: string
+}
+
+/**
+ * 上下文预算管理要用到的「本轮环境」（原本在原版里是 ViewModel 的实例字段）。
+ * 单独收成一个对象，是为了让 compactWorkHistoryIfNeeded 只依赖显式参数，
+ * 便于阅读「它到底动了哪些状态」。
+ */
+interface WorkCompactionEnv {
+  config: ApiConfig
+  request: WorkRunRequest
+  reasoningEffort: string
+  abort: AbortSignal
+}
+
+/**
+ * 摘要压缩后重建消息数组时的头部构造工厂。
+ * core/common 不认识 LoopMessage（不让 common 反向依赖 service），所以由主进程侧注入。
+ */
+const LOOP_HEAD_FACTORY: BudgetHeadFactory<LoopMessage> = {
+  system: (content: string): LoopMessage => LoopMessage.system(content),
+  user: (content: string): LoopMessage => LoopMessage.user(content)
 }
 
 export class SessionManager {
@@ -1007,9 +1037,16 @@ export class SessionManager {
     const reasoningEffort: string = SessionManager.resolveEffort(request)
     const maxSteps: number = Constants.WORK_MAX_STEPS
 
+    // 上下文预算的 usage 锚定值（原版 lastWorkPromptTokens/lastWorkPromptChars）：
+    // 只在本次任务运行内有意义 —— 换了模型或工具面，旧的「字符→token」比例就不适用了，
+    // 所以它是 runWork 的局部状态而不是 SessionManager 的字段（多会话并发也不会串味）。
+    const usageAnchor: BudgetAnchor = { tokens: 0, chars: 0 }
+
     handle.busy = true
     handle.abort = new AbortSignal()
     this.beginRunStats(conv.id)
+    // 压缩环境要在 handle.abort 换成新实例之后再建，否则压缩请求会挂到上一次运行的中断信号上
+    const compactionEnv: WorkCompactionEnv = { config, request, reasoningEffort, abort: handle.abort }
 
     let assistantMsg: Message | null = null
     let streamed: string = ''
@@ -1041,8 +1078,22 @@ export class SessionManager {
         })
         this.emit({ type: 'turn:started', conversationId: conv.id, messageId: assistantMsg.id })
 
+        // ===== 上下文预算管理（原版 1981 / 2613：每一轮请求之前）=====
+        // 三级顺序不可换：先做零成本的工具结果修剪，修剪后已不超预算就不再花模型调用；
+        // 仍超预算才做前缀复用式摘要压缩，最后才是从最旧处整条丢弃。
+        const compactNote: string = await this.compactWorkHistoryIfNeeded(
+          messages,
+          false,
+          mode,
+          usageAnchor,
+          compactionEnv
+        )
+
         const targetMsg: Message = assistantMsg
-        streamed = ''
+        // 压缩标注放在正文开头，模型的流式增量接在它后面。
+        // 必须从 streamed 起头：下面每个 token 都会用 patchMessage 整体覆盖 content，
+        // 标注若只写进 msg.content 会被第一个 token 冲掉，用户就不知道上下文被动过。
+        streamed = compactNote
         const callbacks: LoopTurnCallbacks = new LoopTurnCallbacks()
         callbacks.onToken = (text: string): void => {
           streamed += text
@@ -1058,16 +1109,34 @@ export class SessionManager {
           this.patchMessage(conv.id, targetMsg.id, { tokenSpeed: speed, cacheHitRate: hit })
         }
 
-        const turn: LoopTurnResult = await AgentLoopService.runTurnWithRetry(
+        // 记录本次请求的字符量，与 usage 里的真实 prompt tokens 配对，
+        // 推导「本任务实测的字符→token 比例」（原版 requestChars）
+        const requestChars: number = ContextBudget.messagesChars(messages)
+        const turn: LoopTurnResult = await this.runWorkTurnWithOverflowRetry(
           config,
           messages,
-          request.thinkingEnabled,
+          request,
           reasoningEffort,
-          request.webSearchEnabled,
           callbacks,
           handle.abort,
-          true
+          mode,
+          usageAnchor,
+          compactionEnv,
+          (forcedNote: string): void => {
+            // 服务端报了上下文超限、强制压缩成功：标注写进正文，并清掉上一次尝试
+            // 已流出的部分工具行（那些参数只生成了一半，重试后不该留在时间线上）
+            streamed = forcedNote
+            targetMsg.toolCalls = []
+            this.patchMessage(conv.id, targetMsg.id, {
+              content: streamed,
+              displayContent: streamed
+            })
+          }
         )
+        if (turn.promptTokens > 0) {
+          usageAnchor.tokens = turn.promptTokens
+          usageAnchor.chars = requestChars
+        }
 
         targetMsg.reasoning = turn.reasoning
         targetMsg.tokenSpeed = turn.tokenSpeed
@@ -1230,6 +1299,151 @@ export class SessionManager {
           this.maybeGenerateTitle(conv, SessionManager.lastUserText(conv), finalAnswer)
         }
       }
+    }
+  }
+
+  /**
+   * 上下文预算管理（移植原版 ChatViewModel.compactWorkHistoryIfNeeded, 3021-3081）。
+   *
+   * 三级策略，代价递增，顺序不可换：
+   *   1. 修剪早期过长的工具结果（无模型参与、零成本；原文可用工具按需重新取回）；
+   *   2. 前缀复用式摘要压缩（花一次模型调用，把 [1, oldEnd) 压成状态摘要后重建消息数组）；
+   *   3. 仍超预算就从最旧处整条丢弃（兜底，损失最大）。
+   *
+   * force=true 用于「服务端已经明确报上下文超限」的场景：此时跳过「修剪后是否够小」的
+   * 提前返回与「超预算」判据，一定要把历史改小，否则重试必然再失败。
+   *
+   * 返回给用户看的标注文本（由调用方写进本轮正文）；没做任何事时返回空串。
+   */
+  private async compactWorkHistoryIfNeeded(
+    messages: LoopMessage[],
+    force: boolean,
+    mode: string,
+    anchor: BudgetAnchor,
+    env: WorkCompactionEnv
+  ): Promise<string> {
+    if (!force && !ContextBudget.overBudget(messages, anchor)) {
+      return ''
+    }
+    let notes: string = ''
+    // 压缩边界：尾部最近 WORK_COMPACT_KEEP_MESSAGES 条原样保留（最近轮次对后续执行最关键），
+    // 只处理它之前的历史；索引 0 是系统提示词，永不参与。
+    const oldEnd: number = ContextBudget.summaryEndIndex(messages.length)
+    // 第一级：修剪早期过长的工具结果
+    if (oldEnd > 1 && ContextBudget.pruneOldToolResults(messages, 1, oldEnd)) {
+      notes += ContextBudget.PRUNE_NOTE
+    }
+    // 零成本的第一级已经够用时就不再花钱调模型（force 时跳过：服务端已经报了超限）
+    if (!force && !ContextBudget.overBudget(messages, anchor)) {
+      return notes
+    }
+    // 第二级：前缀复用式摘要压缩
+    let compacted: boolean = false
+    if (oldEnd > 1) {
+      let summary: string = ''
+      try {
+        // 摘要请求复用真实请求的完整前缀（同一份历史 + 同一份工具面），只在末尾追加压缩指令：
+        // 对模型侧 KV 缓存而言这是上一个请求的延续而不是冷启动，前缀部分按缓存命中计价。
+        // 工具面刻意不传（null）：端口主循环统一下发全量工具定义（见 runWorkTurnWithOverflowRetry），
+        // 这里必须与之保持一致，否则工具定义一变，这段前缀的缓存全部作废。
+        summary = await AgentLoopService.summarizeHistory(
+          env.config,
+          messages,
+          env.request.thinkingEnabled,
+          env.reasoningEffort,
+          env.request.webSearchEnabled,
+          env.abort
+        )
+      } catch (e) {
+        // 压缩失败（网络/中断/服务端拒绝）回退为整条裁剪，不把整个任务拖死
+        summary = ''
+      }
+      if (!env.abort.aborted && summary.trim() !== '') {
+        const rebuilt: LoopMessage[] = ContextBudget.rebuildWithSummary(
+          messages,
+          oldEnd,
+          ContextBudget.truncateSummary(summary.trim()),
+          AgentLoopService.buildWorkSystemPromptFor(mode),
+          LOOP_HEAD_FACTORY
+        )
+        // 就地替换（而不是把 messages 重新赋值）：messages 被 callbacks 与外层闭包共享，
+        // 换掉引用会让压缩结果对后续轮次不可见
+        messages.splice(0, messages.length)
+        for (const m of rebuilt) {
+          messages.push(m)
+        }
+        compacted = true
+        notes += ContextBudget.summaryNote(oldEnd - 1)
+      }
+    }
+    // 第三级：压缩后（或压缩失败时）仍超预算 → 从最旧处整条丢弃
+    if (ContextBudget.dropOldestUntilUnderBudget(messages, anchor) > 0) {
+      compacted = true
+    }
+    // 标注不重复：已经写了「摘要压缩」就不再补一条「整条裁剪」
+    if (compacted && notes.indexOf(ContextBudget.SUMMARY_NOTE_KEY) < 0) {
+      notes += ContextBudget.TRIM_NOTE
+    }
+    // usage 锚定值已失效（历史被改写），下一请求重新测量
+    anchor.tokens = 0
+    anchor.chars = 0
+    return notes
+  }
+
+  /**
+   * 单轮模型请求（带「上下文溢出后强制压缩并重试一次」）。
+   *
+   * 移植自原版 runStepWithOverflowRetry（2941-2973）：服务端明确报上下文超限（400/413/超长）
+   * 时，按需压缩已经来不及了 —— 历史必须先被改小，重试才有意义。这里强制走一遍三级压缩
+   * （force=true 不做「修剪后是否够小」的提前返回），压缩确实改动了历史才重试，否则照常抛出。
+   * 其它错误（鉴权/参数/网络）不归本方法管，原样上抛给外层。
+   */
+  private async runWorkTurnWithOverflowRetry(
+    config: ApiConfig,
+    messages: LoopMessage[],
+    request: WorkRunRequest,
+    reasoningEffort: string,
+    callbacks: LoopTurnCallbacks,
+    abort: AbortSignal,
+    mode: string,
+    anchor: BudgetAnchor,
+    env: WorkCompactionEnv,
+    onForcedNote: (note: string) => void
+  ): Promise<LoopTurnResult> {
+    try {
+      return await AgentLoopService.runTurnWithRetry(
+        config,
+        messages,
+        request.thinkingEnabled,
+        reasoningEffort,
+        request.webSearchEnabled,
+        callbacks,
+        abort,
+        true
+      )
+    } catch (e) {
+      const err: Error = e as Error
+      const overflow: boolean = err instanceof LoopError && (err as LoopError).isContextOverflow()
+      // 本轮尚未压缩过（原版同样传 false）：压缩一次即重试一次，不做无休止重试
+      if (!LoopDecisions.shouldForceCompactOnOverflow(abort.aborted, overflow, false)) {
+        throw err
+      }
+      const forcedNote: string = await this.compactWorkHistoryIfNeeded(messages, true, mode, anchor, env)
+      if (forcedNote === '') {
+        // 压缩没改动任何东西（例如历史已只剩系统提示词）→ 重试也是白费，交回原错误
+        throw err
+      }
+      onForcedNote(forcedNote)
+      return await AgentLoopService.runTurnWithRetry(
+        config,
+        messages,
+        request.thinkingEnabled,
+        reasoningEffort,
+        request.webSearchEnabled,
+        callbacks,
+        abort,
+        true
+      )
     }
   }
 
