@@ -127,6 +127,35 @@ select {
   grid-template-columns: auto minmax(0, 1fr) 286px;
 }
 
+/* 直接用浏览器打开 dev server（5173）时的说明页：见 main.tsx 里的桥检测。
+   它不是应用界面，只是一页「你走错门了 + 该怎么走」的提示。 */
+.bridge-missing {
+  max-width: 720px;
+  margin: 12vh auto 0;
+  padding: 0 24px;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.bridge-missing h1 {
+  font-size: 20px;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.bridge-missing p {
+  margin-bottom: 12px;
+}
+
+.bridge-missing code {
+  font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  color: var(--accent);
+  background: var(--bg-sunken);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
 /* 图标按钮：所有不再用 emoji 的图标入口都走这一个类 */
 .icon-btn {
   display: inline-flex;
