@@ -21,7 +21,7 @@ import type { PluginManifestResult } from '../src/core/common/PluginManifestLoad
 import { filesDir, cacheDir, tempDir } from '../src/core/platform/appPaths'
 import { StorageManager } from '../src/core/data/StorageManager'
 import { ChatService, resolveEndpointUrl } from '../src/core/service/ChatService'
-import { AgentLoopService } from '../src/core/service/AgentLoopService'
+import { AgentLoopService, LoopMessage, ToolImageAttachment } from '../src/core/service/AgentLoopService'
 import { ApiConfig } from '../src/core/model/ApiConfig'
 import { Conversation } from '../src/core/model/Conversation'
 import { Message } from '../src/core/model/Message'
@@ -766,6 +766,73 @@ async function main(): Promise<void> {
     '预览宽度按 width 参数、高度按 viewBox 等比',
     previewBytes.readUInt32BE(16) === 512 && previewBytes.readUInt32BE(20) === 256,
     `${previewBytes.readUInt32BE(16)}x${previewBytes.readUInt32BE(20)}`
+  )
+
+  // ===== 18b. view_image：真图必须带 dataUrl，假图必须报错 =====
+  //
+  // 用户报障：有效 PNG 只得到一句固定文案、模型收不到任何像素；而 131 字节纯文本
+  // 改名 .png 也照样“成功”。根因有两层，这里分别钉住：
+  //   1) 工具侧不再“扩展名对了就成功”，必须按字节探测/解码出真实图片；
+  //   2) 循环侧必须把 imageDataUrl 作为下一条 user 多模态消息追加进历史。
+  section('18b. view_image 内容校验与视觉注入')
+  const viewValid = await callTool('view_image', { path: 'art/badge_preview.png' })
+  check('view_image 对真实 PNG 成功', viewValid.ok, viewValid.output.slice(0, 160))
+  check(
+    'view_image 返回了真实图片 dataUrl（而不是只有成功文案）',
+    viewValid.imageDataUrl.startsWith('data:image/png;base64,') && viewValid.imageDataUrl.length > 1000,
+    `${viewValid.imageDataUrl.length} 字符`
+  )
+  check(
+    '成功文案包含真实尺寸（来自解码结果）',
+    viewValid.output.includes('512×256'),
+    viewValid.output.slice(0, 160)
+  )
+
+  // 伪装的“图片”：纯文本改名 .png，必须在工具层被拒绝
+  fs.writeFileSync(path.join(wsRoot, 'art/fake_image.png'), 'this is plain text, not a png\n', 'utf8')
+  const viewFake = await callTool('view_image', { path: 'art/fake_image.png' })
+  check('view_image 拒绝纯文本伪装的 .png', !viewFake.ok, viewFake.output.slice(0, 160))
+  check('伪装文件不会返回 dataUrl', viewFake.imageDataUrl === '')
+  check(
+    '伪装文件报错说明原因（不是静默成功）',
+    viewFake.output.includes('不是有效的图片'),
+    viewFake.output.slice(0, 160)
+  )
+
+  // 只有 PNG 魔数/文件头的半截假图也必须失败（缺 IDAT/IEND）
+  fs.writeFileSync(
+    path.join(wsRoot, 'art/truncated.png'),
+    Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0])
+    ])
+  )
+  const viewTruncated = await callTool('view_image', { path: 'art/truncated.png' })
+  check('view_image 拒绝只有文件头的截断 PNG', !viewTruncated.ok, viewTruncated.output.slice(0, 160))
+
+  // 循环侧注入：模拟工具执行完后的历史，确认图片进入 LoopMessage 且与工具结果相邻
+  const injectionMessages: LoopMessage[] = [
+    LoopMessage.system('system'),
+    LoopMessage.assistant('', [])
+  ]
+  const attachment: ToolImageAttachment = new ToolImageAttachment()
+  attachment.toolName = 'view_image'
+  attachment.argsJson = '{"path":"art/badge_preview.png"}'
+  attachment.imageDataUrl = viewValid.imageDataUrl
+  attachment.note = viewValid.output
+  const injected = AgentLoopService.appendToolImageMessages(injectionMessages, [attachment])
+  check('循环把工具图片追加为一条 user 消息', injected === 1 && injectionMessages.length === 3)
+  check(
+    '注入消息带图片 dataUrl 且说明里保留真实路径',
+    injectionMessages[2].role === 'user' &&
+      injectionMessages[2].imageDataUrl === viewValid.imageDataUrl &&
+      injectionMessages[2].content.includes('art/badge_preview.png'),
+    injectionMessages[2].content.slice(0, 100)
+  )
+  check(
+    '没有图片时不动历史（不破坏前缀缓存）',
+    AgentLoopService.appendToolImageMessages(injectionMessages, []) === 0 &&
+      injectionMessages.length === 3
   )
 
   // pptx 直接引用 .svg：走 imageResolver 的自动栅格化

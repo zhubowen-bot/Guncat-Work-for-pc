@@ -3,7 +3,8 @@
 // 一个受限步数的完整 Agent Loop, 结束后把最终报告作为工具结果交还父任务。
 // 通过 hook 注入 WorkFileService(规避循环导入): ChatViewModel.init 时调用 SubagentService.init()。
 import { common } from '@kit.AbilityKit';
-import { AgentLoopService, LoopMessage, LoopTurnCallbacks, LoopTurnResult } from './AgentLoopService';
+import { AgentLoopService, LoopMessage, LoopTurnCallbacks, LoopTurnResult,
+  ToolImageAttachment } from './AgentLoopService';
 import { WorkFileService, ToolExecResult } from './WorkFileService';
 import { SpillStore } from './SpillStore';
 import { ToolCallRecord } from '../model/ToolCallRecord';
@@ -207,6 +208,9 @@ export class SubagentService {
         // 执行工具(全部顺序执行; 子代理过程不进入 UI 时间线)
         // fromTurn 携带思考文本与签名: Anthropic 思考模式下下一轮请求需回传 thinking 块
         let loopMsg: LoopMessage = LoopMessage.fromTurn(turn);
+        // 子代理调用 view_image 时同样要把图片接进自己的视觉上下文，否则子代理也会
+        // 只拿到一句“图片已加载”，最终报告只能凭空编造图片内容。
+        let imageAttachments: ToolImageAttachment[] = [];
         for (let i: number = 0; i < calls.length; i++) {
           if (abortSignal.aborted) {
             calls[i].result = '(子代理被中断, 无结果)';
@@ -224,8 +228,17 @@ export class SubagentService {
           calls[i].schemaError = exec.schemaError;
           calls[i].result = SubagentService.capResult(context, convId, exec.output,
             calls[i].name, execStart);
+          if (exec.imageDataUrl !== '') {
+            let attachment: ToolImageAttachment = new ToolImageAttachment();
+            attachment.toolName = calls[i].name;
+            attachment.argsJson = calls[i].argsJson;
+            attachment.imageDataUrl = exec.imageDataUrl;
+            attachment.note = exec.output;
+            imageAttachments.push(attachment);
+          }
         }
         messages.push(loopMsg);
+        AgentLoopService.appendToolImageMessages(messages, imageAttachments);
       }
     } catch (e) {
       let err: Error = e as Error;

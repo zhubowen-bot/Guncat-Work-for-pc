@@ -14,6 +14,8 @@ import { PdfTextExtractor } from './PdfTextExtractor';
 import { WorkSkillService } from './WorkSkillService';
 import { HarnessTools } from './HarnessTools';
 import { arrayBufferToBase64 } from '../common/Utils';
+import { ImageProbe, ImageProbeResult } from '../common/ImageProbe';
+import { isNativeDecoderAvailable, decodeImageSize } from '@kit.ImageKit';
 import { ToolRegistry } from '../common/ToolRegistry';
 import { Constants } from '../common/Constants';
 import { LocalWebSearch, LocalSearchOutcome, LOCAL_SEARCH_TOOL_DESC_WORK, LOCAL_SEARCH_TOOL_DESC_WORK_FALLBACK,
@@ -580,7 +582,7 @@ export class WorkFileService {
     }
     if (name === 'view_image') {
       let rel: string = WorkFileService.strArg(args, 'path', '');
-      return WorkFileService.toolViewImage(context, convId, rel);
+      return await WorkFileService.toolViewImage(context, convId, rel);
     }
     if (name === 'todo_write') {
       // 直接传原始参数 JSON: todos 可能是数组或内嵌 JSON 字符串, strArg 无法取数组
@@ -685,8 +687,14 @@ export class WorkFileService {
   }
 
   // view_image: 读取工作区图片并编码为 dataUrl(由循环注入下一条多模态消息)
-  private static toolViewImage(context: common.UIAbilityContext, convId: string,
-    rel: string): ToolExecResult {
+  //
+  // 这里刻意不再“扩展名对了就宣布成功”：
+  //   1. 先按字节内容探测真实格式/尺寸（ImageProbe，纯 TS，无头环境也能跑）；
+  //   2. 能拿到 Electron 解码器时，PNG/JPEG 再真正解码一次，0×0 / 解码异常一律报错；
+  //   3. 只有三步都通过才返回 imageDataUrl —— 成功文案从此代表“真图已就绪”。
+  // 否则一个纯文本改名为 .png 也会“成功”，模型拿不到像素却以为看到了图（静默失败）。
+  private static async toolViewImage(context: common.UIAbilityContext, convId: string,
+    rel: string): Promise<ToolExecResult> {
     if (rel === '') {
       return WorkFileService.fail('缺少参数 path');
     }
@@ -702,18 +710,9 @@ export class WorkFileService {
       return WorkFileService.fail('路径是目录而非文件: ' + rel);
     }
     let lower: string = rel.toLowerCase();
-    let mime: string = '';
-    if (lower.endsWith('.png')) {
-      mime = 'image/png';
-    } else if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
-      mime = 'image/jpeg';
-    } else if (lower.endsWith('.webp')) {
-      mime = 'image/webp';
-    } else if (lower.endsWith('.gif')) {
-      mime = 'image/gif';
-    } else if (lower.endsWith('.bmp')) {
-      mime = 'image/bmp';
-    } else {
+    // 扩展名白名单只是第一道门；真正的格式与有效性由下面的 ImageProbe 按字节判断
+    if (!lower.endsWith('.png') && !lower.endsWith('.jpg') && !lower.endsWith('.jpeg') &&
+      !lower.endsWith('.webp') && !lower.endsWith('.gif') && !lower.endsWith('.bmp')) {
       return WorkFileService.fail('view_image 仅支持图片文件(png/jpg/jpeg/webp/gif/bmp): ' + rel);
     }
     let stat: fileIo.Stat = fileIo.statSync(abs);
@@ -721,10 +720,38 @@ export class WorkFileService {
       return WorkFileService.fail('图片超过 ' +
         WorkFileService.formatSize(Constants.WORK_VIEW_IMAGE_MAX_BYTES) + ' 上限, 请先压缩');
     }
-    let buffer: ArrayBuffer = WorkFileService.readBytesPublic(abs, Constants.WORK_VIEW_IMAGE_MAX_BYTES);
+    let buffer: ArrayBuffer;
+    try {
+      buffer = WorkFileService.readBytesPublic(abs, Constants.WORK_VIEW_IMAGE_MAX_BYTES);
+    } catch (e) {
+      let msg: string = e instanceof Error ? (e as Error).message : String(e);
+      return WorkFileService.fail('读取图片失败: ' + msg);
+    }
+    let bytes: Uint8Array = new Uint8Array(buffer);
+    let probe: ImageProbeResult = ImageProbe.probe(bytes);
+    if (!probe.ok) {
+      return WorkFileService.fail('不是有效的图片(' + probe.error + '): ' + rel);
+    }
+    let width: number = probe.width;
+    let height: number = probe.height;
+    // 平台解码器可用时，PNG/JPEG 必须真的解出非空像素；仅靠容器结构无法排除
+    // “分块齐全但像素数据全坏”的文件，这一步把这类坏图也挡在“成功”之外。
+    if ((probe.format === 'png' || probe.format === 'jpeg') && isNativeDecoderAvailable()) {
+      let decoded = decodeImageSize(bytes);
+      if (decoded === null) {
+        return WorkFileService.fail('图片解码失败(内容损坏或不是真正的 ' +
+          probe.format.toUpperCase() + '): ' + rel);
+      }
+      width = decoded.width;
+      height = decoded.height;
+    }
+    // 实际格式以字节内容为准，不信任扩展名（见上面的 ImageProbe）
+    let mime: string = probe.mime;
     let r: ToolExecResult = new ToolExecResult();
     r.ok = true;
-    r.output = '图片已加载并作为下一条消息发送给你, 请结合当前任务分析图中内容。';
+    r.output = '图片已加载: ' + rel + ' (' + width.toString() + '×' + height.toString() +
+      ', ' + mime + ', ' + WorkFileService.formatSize(stat.size) +
+      ')。图像内容会作为下一条多模态消息送达，请直接分析图中元素。';
     r.imageDataUrl = 'data:' + mime + ';base64,' + arrayBufferToBase64(buffer);
     return r;
   }
@@ -1490,7 +1517,7 @@ export class WorkFileService {
         'page_count', WorkFileService.strProp('本次渲染页数, 默认 10, 最大 50')),
       ['path']));
     defs.push(WorkFileService.makeTool('view_image',
-      '查看工作区中的图片, 图片会作为多模态消息发送给你的视觉能力。调用前明确你要从图中提取什么(全部文字/表格数据/布局/图表含义), 并说明输出格式。',
+      '查看工作区中的图片, 图片会作为多模态消息发送给你的视觉能力。调用前明确你要从图中提取什么(全部文字/表格数据/布局/图表含义), 并说明输出格式。文件不存在、扩展名不符或内容不是有效图片都会返回 ERROR(不会静默成功)。',
       WorkFileService.props1('path', WorkFileService.strProp('图片文件相对路径(png/jpg/jpeg/webp/gif/bmp)')),
       ['path']));
     defs.push(WorkFileService.makeTool('todo_write',

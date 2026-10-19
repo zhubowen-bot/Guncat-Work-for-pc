@@ -218,3 +218,43 @@ export namespace image {
     return new PixelMap(nativeImage().createFromBuffer(buf))
   }
 }
+
+// 平台解码器是否可用：纯 Node（无头冒烟）里 require('electron') 只拿到一个路径字符串，
+// 没有 nativeImage。调用方据此决定“跳过二次解码”还是“把解码失败当作坏图”。
+let nativeDecoderAvailable: boolean | null = null
+
+export function isNativeDecoderAvailable(): boolean {
+  if (nativeDecoderAvailable === null) {
+    try {
+      const api = nativeImage()
+      nativeDecoderAvailable = api !== null && api !== undefined &&
+        typeof api.createFromBuffer === 'function'
+    } catch {
+      nativeDecoderAvailable = false
+    }
+  }
+  return nativeDecoderAvailable
+}
+
+// 真正的像素解码（只用于 PNG/JPEG 这类 nativeImage 必然支持的格式）。
+// 返回 null 表示解码失败或得到 0×0 的空图；平台不可用时请先看 isNativeDecoderAvailable()。
+export function decodeImageSize(data: Buffer | Uint8Array | ArrayBuffer): image.Size | null {
+  if (!isNativeDecoderAvailable()) {
+    return null
+  }
+  try {
+    const buf: Buffer = Buffer.isBuffer(data)
+      ? data
+      : data instanceof Uint8Array
+        ? Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+        : Buffer.from(data)
+    const img: NativeImage = nativeImage().createFromBuffer(buf)
+    const size: image.Size = img.getSize()
+    if (size.width > 0 && size.height > 0) {
+      return size
+    }
+    return null
+  } catch {
+    return null
+  }
+}

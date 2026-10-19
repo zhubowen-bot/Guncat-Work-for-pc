@@ -126,8 +126,62 @@ export class LoopTurnCallbacks {
     (_attempt: number, _reason: string): void => {};
 }
 
+// 工具产出的图片附件（当前只有 view_image 会设置 imageDataUrl）。
+// 图片不能塞进 tool/function_call_output/tool_result：那三种协议的工具结果都是纯文本，
+// 所以必须作为紧随其后的**独立 user 多模态消息**追加到历史里（见 appendToolImageMessages）。
+export class ToolImageAttachment {
+  toolName: string = '';
+  argsJson: string = '';
+  imageDataUrl: string = '';
+  // 工具输出的摘要（通常已含路径与尺寸），拼进图片消息的说明文字
+  note: string = '';
+}
+
 // 流式工具调用累积器: 三种协议统一汇入(共享实现见 ToolCallStream.ts)
 export class AgentLoopService {
+  /**
+   * 把工具产出的图片接在工具结果之后，作为 user 多模态消息追加进循环历史。
+   *
+   * 为什么必须单独做这一步：工具执行结果最终只把文本写进 ToolCallRecord.result，
+   * 而三种协议的工具结果通道都只能带文本。此前 view_image 返回的 imageDataUrl
+   * 在这一步被直接丢弃，模型只看到“图片已加载”这句话，视觉通道从未收到像素 ——
+   * 表现为工具“成功”但完全描述不出图片内容（静默失败）。
+   *
+   * 返回实际追加的消息数；没有图片时不动历史（避免破坏前缀缓存）。
+   */
+  static appendToolImageMessages(messages: LoopMessage[],
+    attachments: ToolImageAttachment[]): number {
+    let count: number = 0;
+    for (let i: number = 0; i < attachments.length; i++) {
+      let a: ToolImageAttachment = attachments[i];
+      if (a.imageDataUrl === '' || a.imageDataUrl.indexOf(';base64,') < 0) {
+        continue;
+      }
+      let path: string = '';
+      try {
+        let parsed: Object = JSON.parse(a.argsJson === '' ? '{}' : a.argsJson);
+        if (typeof parsed === 'object' && parsed !== null && !(parsed instanceof Array)) {
+          let v: Object = (parsed as Record<string, Object>)['path'];
+          if (typeof v === 'string') {
+            path = v as string;
+          }
+        }
+      } catch (e) {
+        // 参数解析失败不影响图片送达，只是说明文字里少一个路径
+      }
+      let caption: string = '【视觉输入】工具 ' + a.toolName +
+        (path !== '' ? ' 读取了工作区图片: ' + path : ' 返回了一张图片') + '。';
+      if (a.note !== '') {
+        caption += '\n' + a.note;
+      }
+      caption += '\n这是图片的真实像素内容（不是文字描述）。请直接分析图中元素、文字、布局与数据。';
+      messages.push(LoopMessage.userImage(caption, a.imageDataUrl));
+      count++;
+    }
+    return count;
+  }
+
+
   // 活跃请求注册表: 支持多实例并发请求(主循环 + 子代理/聊天模式可能同时存在),
   // abort() 统一中断所有活跃请求, 避免单一静态引用在并发时打错目标。
   private static activeRequests: http.HttpRequest[] = [];
@@ -1367,7 +1421,7 @@ export class AgentLoopService {
     lines.push('- search_files(query, path?, glob?)：在文本文件与 Office 文档（.docx/.xlsx/.pptx 自动抽取文字层）中大小写不敏感子串搜索，返回"文件:行号: 内容"，最多 50 处匹配。glob 可选按文件名过滤（* 与 ?，多个模式逗号分隔，如 "*.md"）——素材搜索（找图片/表格文件）时先加 glob 缩小范围。适合在大量内容（含长 Word/Excel/PPT）中定位关键信息；定位后用 read_file 传 offset 精读该段。');
     lines.push('- search_pdf(path, query)：在 PDF 文字层搜索关键词（大小写不敏感），返回"页码: 上下文摘录"，最多 50 处。搜索 PDF 内容必须用它（search_files 读不了 PDF）；命中后用 parse_document 传 page=N 精读对应页。');
     lines.push('- pdf_to_images(path, page?, page_count?)：把 PDF 页面渲染成图片存入工作区 pdf_images/<文件名>/ 目录（每页一个 p001.jpg），返回文件列表。扫描件/纯图片 PDF 的专用入口——parse_document 提示是扫描件或读不出文字时，用它转图后逐张 view_image 查看；需要更多页按提示传 page 继续下一批。');
-    lines.push('- view_image(path)：把工作区图片（png/jpg/jpeg/webp/gif/bmp，不超过 8MB）送入你的多模态视觉，图片会作为你的下一条消息出现。调用前明确提取目标（全部文字/表格数据/布局/图表含义）与输出结构。');
+    lines.push('- view_image(path)：把工作区图片（png/jpg/jpeg/webp/gif/bmp，不超过 8MB）送入你的多模态视觉，图片会作为你的下一条消息出现。调用前明确提取目标（全部文字/表格数据/布局/图表含义）与输出结构。文件不存在、内容不是有效图片时会返回 ERROR，不存在静默成功。');
     lines.push('**联网搜索记录**');
     lines.push('- record_search(query, summary, sources?)：把一次联网搜索的记录保存到工作区 .searches.md。**关键**：联网搜索由服务端执行，不会在对话历史中留下任何工具调用记录——你每次借助联网搜索获得信息后，必须立即调用本工具，传入搜索关键词、关键结论摘要与主要来源 URL（多个用换行分隔），否则后续轮次（包括你自己）都无法追溯这次搜索、还会重复搜索。任务收口前可 read_file 通读 .searches.md 汇总所有来源。');
     lines.push('- web_fetch(url, max_chars?)：抓取网页/接口原文（GET，≤2MB；HTML 自动剥离为可读文本，JSON/文本原样返回）。服务端搜索给出的来源、公开文档、API 数据都用它读原文——看到来源 URL 后主动 fetch 核对，不要只凭搜索摘要下结论。不可达或非 2xx 会明确报错；要把文件本体存进工作区用 download_file。');

@@ -20,7 +20,8 @@ import {
   LoopMessage,
   LoopTurnResult,
   LoopTurnCallbacks,
-  LoopError
+  LoopError,
+  ToolImageAttachment
 } from '@core/service/AgentLoopService'
 import { WorkToolRunner } from '@core/service/WorkToolRunner'
 import { ToolExecResult, WorkFileService } from '@core/service/WorkFileService'
@@ -1504,6 +1505,10 @@ export class SessionManager {
           }
 
           // 串行执行工具（与鸿蒙侧默认行为一致：同一轮的调用按序执行，结果回填到同一批记录）
+          // 工具产出的图片不能塞进 tool 结果（协议只收文本），先收集，执行完统一追加为
+          // 紧随工具结果之后的 user 多模态消息。此前这里直接丢弃 imageDataUrl，导致
+          // view_image 显示“成功”但模型从未收到像素（静默失败）。
+          const imageAttachments: ToolImageAttachment[] = []
           for (const call of turn.toolCalls) {
             if (handle.abort.aborted) {
               break
@@ -1537,6 +1542,14 @@ export class SessionManager {
             if (outcome.meta !== '') {
               call.meta = outcome.meta
             }
+            if (outcome.imageDataUrl !== '') {
+              const attachment: ToolImageAttachment = new ToolImageAttachment()
+              attachment.toolName = call.name
+              attachment.argsJson = call.argsJson
+              attachment.imageDataUrl = outcome.imageDataUrl
+              attachment.note = outcome.output
+              imageAttachments.push(attachment)
+            }
             this.emit({
               type: 'tool:finished',
               conversationId: conv.id,
@@ -1546,6 +1559,10 @@ export class SessionManager {
             // 工作区可能已被工具改写
             this.emit({ type: 'workspace:changed', conversationId: conv.id })
           }
+
+          // 图片必须放在工具结果之后、下一轮请求之前：三种协议的构建器会把这条
+          // user 消息编码成 image_url / input_image / base64 image 块。
+          AgentLoopService.appendToolImageMessages(messages, imageAttachments)
 
           this.patchMessage(conv.id, targetMsg.id, { content: streamed })
           await this.persist()
