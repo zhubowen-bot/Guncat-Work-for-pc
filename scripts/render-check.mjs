@@ -685,13 +685,28 @@ check(
   permRows.rows[0].value === 'ask-risk' && permRows.rows[0].label.includes('危险')
 )
 check(
-  '「自动批准」那一档把话说清楚：毁灭性操作仍然会被拒（不能让人以为开了就什么都跑得动）',
+  '「完全权限」那一档把话说清楚：毁灭性操作仍然会被拒（不能让人以为开了就什么都跑得动）',
+  (() => {
+    // 这一句原本钉在 'auto' 上。auto 改成「模型先审一轮」之后，真正不询问、
+    // 由智能体自己跑的是 'full-access' —— 会误导人的是那一档，警告就必须跟着搬过去。
+    const open = permRows.rows.find((r) => r.value === 'full-access')
+    return (
+      open !== undefined &&
+      open.label.includes('完全权限') &&
+      open.hint.includes('毁灭') &&
+      open.hint.includes('拒绝')
+    )
+  })()
+)
+check(
+  '「自动审批」说的是模型审阅而不是全自动：判危险仍然弹卡请人批',
   (() => {
     const auto = permRows.rows.find((r) => r.value === 'auto')
     return (
       auto !== undefined &&
-      auto.hint.includes('毁灭') &&
-      (auto.label.includes('自动') || auto.hint.includes('批准'))
+      auto.hint.includes('审阅') &&
+      auto.hint.includes('弹卡') &&
+      !auto.hint.includes('全部自动')
     )
   })()
 )
