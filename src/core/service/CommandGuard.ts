@@ -736,6 +736,11 @@ export class CommandGuard {
   ]
   private static readonly POSITIONAL_RISKY: Rule[] = [
     { re: /(?:^|[\\/])cp(?:\.exe)?$/, why: '覆盖写文件（cp 默认不提示）' },
+    // robocopy 与 cp 同一档：覆盖是它的**默认行为**，不需要任何开关，而且它为脚本设计、
+    // 永不像 copy/move 那样问「Overwrite?」——没有 TTY 时那两个会挂住，它直接把目标目录里的
+    // 同名文件换掉（实测零参数 robocopy 源 目标 全程无卡，目标从 53B 变 33B）。
+    // 按命令位判而不是按开关判：补登记 /MIR 那类开关堵不住默认行为。
+    { re: /(?:^|[\\/])robocopy(?:\.exe)?$/, why: '复制到指定目录（默认静默覆盖同名文件，且不会询问）' },
     { re: /(?:^|[\\/])install(?:\.exe)?$/, why: '安装/覆盖到指定路径' },
     { re: /(?:^|[\\/])truncate(?:\.exe)?$/, why: '清空文件内容' },
     { re: /(?:^|[\\/])ln(?:\.exe)?$/, why: '创建链接（可把读写引到工作区之外）' },

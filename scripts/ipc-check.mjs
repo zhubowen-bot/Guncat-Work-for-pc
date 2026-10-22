@@ -3545,7 +3545,10 @@ const SYS_ADMIN_RISKY = [
   'ren _shelltest\\f.txt f2.txt', 'rename a.txt b.txt', 'type nul > _shelltest\\g.txt',
   'copy nul _shelltest\\l.txt', 'copy /y a.txt b.txt', 'xcopy /y src dist',
   'replace a.txt b.txt', 'mklink _shelltest\\link.txt a.txt', 'attrib +h a.txt',
-  'robocopy src dst /MOVE', 'powershell New-Item -ItemType SymbolicLink t l'
+  // robocopy 的覆盖是**默认行为**，一个开关都不需要（实测零参数就把目标同名文件换掉了），
+  // 所以按「命令位是不是 robocopy」判，登记开关堵不住它；/MOVE、/MIR 另有更重的理由。
+  'robocopy src dst', 'robocopy src dst /E', 'robocopy src dst /MOVE',
+  'powershell New-Item -ItemType SymbolicLink t l'
 ]
 check(
   '系统管理命令族与「不喊 del 的破坏」进危险名单（改名/空设备覆盖/静默复制/属性/链接/关联）',
@@ -3555,12 +3558,12 @@ check(
 check(
   '新增规则不打扰日常写法（format 这个词本身不能硬禁、nul 当输出目标无害、不带 /y 的复制照旧）',
   ['npm run format', 'git log --format=%h -3', 'echo hello > nul', 'command > nul 2>&1',
-    'copy a.txt b.txt', 'xcopy src dist', 'attrib a.txt', 'robocopy src dist /E',
+    'copy a.txt b.txt', 'xcopy src dist', 'attrib a.txt', 'dir robocopy\\dst', 'echo robocopy src dst',
     'node read.js notes.md', 'cat notes.md', 'type data.json'].every(
     (c) => !CommandGuard.assess(c, cmdRoot).forbidden && !CommandGuard.assess(c, cmdRoot).risky
   ),
   ['npm run format', 'git log --format=%h -3', 'echo hello > nul', 'command > nul 2>&1',
-    'copy a.txt b.txt', 'xcopy src dist', 'attrib a.txt', 'robocopy src dist /E',
+    'copy a.txt b.txt', 'xcopy src dist', 'attrib a.txt', 'dir robocopy\\dst', 'echo robocopy src dst',
     'node read.js notes.md', 'cat notes.md', 'type data.json']
     .filter((c) => CommandGuard.assess(c, cmdRoot).forbidden ||
       CommandGuard.assess(c, cmdRoot).risky).join(' | ')
@@ -3626,7 +3629,7 @@ check(
 const R6_RISKY = [
   'move /y probes\\s1.txt trunc.txt', 'xcopy -y a.txt b\\a.txt', 'copy /y a.txt b.txt',
   'tar -xf backup.tar', 'tar -xzf snap.tgz -C out', 'unzip -o pack.zip', '7z x -y pack.7z',
-  'expand extras.cab',
+  'expand extras.cab', 'robocopy src dst', 'robocopy src dst /E',
   'git -c core.fsmonitor="echo x > f.txt" status', 'git --config-env=core.editor=EDITOR status',
   'git config core.fsmonitor "echo injected"', 'git config --replace-all core.pager "less"',
   'npm --script-shell sh run build', 'tar --use-compress-program=evil -cf a.tar probes',
@@ -3883,6 +3886,7 @@ for (const hole of [
   ['move /y probe-src.txt probe-dst.txt', '移动/改名'],
   ['xcopy -y probe-src.txt probe-dst.txt', '覆盖已存在'],
   ['tar -xf probe-backup.tar', '解包归档'],
+  ['robocopy probe-src probe-dst', '默认静默覆盖'],
   ['git -c core.fsmonitor="echo probe" status', 'git 配置注入'],
   ['wevtutil cl Application', '事件日志']
 ]) {
