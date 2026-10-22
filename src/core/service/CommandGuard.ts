@@ -80,7 +80,9 @@ export class CommandGuard {
 
   private static readonly RISKY: Rule[] = [
     { re: /\b(?:rm|del|erase|rd|rmdir\d?|deltree|shred|unlink)\b/i, why: '删除文件/目录' },
-    { re: /\b(?:mv|move)\b\s+[-\w."']/i, why: '移动/改名文件' },
+    // 「动词后面跟的是什么」不能只认 `-` 开头：Windows 的开关是 `/y`、`/s`，
+    // 按 `-` 登记就等于「同一个命令换个符号写法就免检」（实测 move /y 全程无卡，静默改名覆盖）。
+    { re: /\b(?:mv|move)\b\s+[-\/\w."']/i, why: '移动/改名文件' },
     { re: /Remove-Item|Clear-Content|Clear-RecycleBin|Remove-ItemProperty|Remove-PSItem/i, why: 'PowerShell 删除' },
     // 覆盖写（不是新建）会让原内容不可恢复，与 del/mv 同一档；New-Item 这种「凭空建一个」不算。
     { re: /\b(?:Set-Content|Out-File|Add-Content)\b/i, why: 'PowerShell 覆盖写文件' },
@@ -91,6 +93,17 @@ export class CommandGuard {
     { re: /\[(?:IO|System\.IO)\.(?:File|Directory|FileStream|Compression|Path)\]::|\[Scriptblock\]::Create|\bAdd-Type\b|\bNew-Object\b|\[Reflection\./i,
       why: '用 .NET/反射 API 读写文件或执行代码（危险动作不写在关键词里）' },
     { re: /\b(?:git|svn)\b[^\n|;]*(?:clean|reset\s+--hard|checkout|restore|filter-branch|push|rebase|ci|commit)/i, why: '版本库改写或对外推送' },
+    // git 会把 `-c` 的配置值交给 sh 执行：`git -c core.fsmonitor="echo x > f" status` 实测真的写出了
+    // 文件，而 `git status` 本身被判为安全——被拦住的两个变体只是因为载荷里恰好有 cmd/rm 这些词，
+    // 说明拦的是关键词，不是「把程序名塞进配置」这个动作本身。同类注入面：--config-env、
+    // npm --script-shell、tar --use-compress-program、git --exec-path/--ssh。
+    { re: /\bgit\b[^\n|;]*\s-c\s+\S+=|\bgit\b[^\n|;]*\s--config(?:-env)?[=\s]/i,
+      why: 'git 配置注入（-c / --config-env 的值会被 git 交给 shell 执行）' },
+    // 只认「写进去一个值」的形态：`git config --get core.editor` 是读，不该打扰（键名后面没有值就不算写）。
+    { re: /\bgit\b\s+config\b[^\n]*(?:fsmonitor|pager|editor|sshCommand|gitProxy|helper|hooksPath|alias\.)\s+\S/i,
+      why: '写入会被 git 执行的配置项（之后任何一条普通 git 命令都会跑它）' },
+    { re: /--(?:script-shell|use-compress-program|upload-pack|exec-path|editor|pager|signing-key)(?:[=\s]|$)/i,
+      why: '把要运行的程序写进参数（命令行本身看不出真正跑的是什么）' },
     { re: /\b(?:setx|reg|schtasks|crontab|systemctl|service)\b/i, why: '改系统配置/计划任务/服务' },
     // sc 是服务控制命令的正式名字，net stop 有规则而它没有（实测：sc stop 静默执行）。
     // 只认「动词在后面」的调用形态，避免把 sc 这个词从路径或文件名里捞出来。
@@ -107,18 +120,30 @@ export class CommandGuard {
     { re: /\brobocopy\b[^\n]*(?:\/MIR|\/PURGE|\/MOV)/i, why: '镜像同步（会删目标目录的差异文件）' },
     // 破坏文件不一定要说「del」。改名、拿空设备覆盖、静默复制过去，效果与删一次同样不可恢复
     // （实测 ren/type nul >/copy nul/copy /y/replace 全程无卡）。
-    { re: /(?:^|[\s;&|(/])(?:ren|rename)(?:\.exe)?\s+[-\w."']/i, why: '移动/改名文件' },
+    { re: /(?:^|[\s;&|(/])(?:ren|rename)(?:\.exe)?\s+[-\/\w."']/i, why: '移动/改名文件' },
     { re: /\b(?:type|more)\s+nul\s*>/i, why: '用空设备覆盖写文件（原内容不可恢复）' },
     { re: /\bcopy\s+nul\b/i, why: '清空或覆盖已存在的文件' },
-    { re: /\b(?:copy|xcopy)\b[^\n]*\/y\b/i, why: '覆盖已存在的文件（静默不提示）' },
+    // 静默覆盖开关认全四种写法：cmd 那一侧是 /y，工具链那一侧是 -y / --force / --overwrite
+    // （实测 xcopy /y 拦住、xcopy -y 放行，同一语义两个结果）。
+    { re: /\b(?:copy|xcopy)\b[^\n]*(?:\/y\b|-y\b|--force\b|--overwrite\b)/i, why: '覆盖已存在的文件（静默不提示）' },
     { re: /(?:^|[\s;&|])replace\s+\S/i, why: '替换文件（覆盖目标同名文件）' },
     { re: /\bmklink\b|SymbolicLink|HardLink|Junction/i, why: '创建链接（可把读写引到工作区之外）' },
     // POSIX 那一侧的「参数即能力」：find 自带删除器与执行器，动词表对它完全无感。
     // cp/truncate/ln/chattr 走命令位判定（见 POSITIONAL_RISKY），因为它们同时是很常见的参数内容。
     { re: /\bfind\b[^\n]*(?:-delete|-exec(?:dir)?|-ok(?:dir)?)/i, why: 'find 自带删除器/执行器（-delete、-exec）' },
+    // 解包归档不叫「覆盖」，但它就是把一批同名文件换成归档里的那份（实测 tar -xf 全程无卡，
+    // 目标文件从 74 B 变回 21 B）。建档（-c）与列表（-t / unzip -l）不在这一档。
+    { re: /\b(?:tar|bsdtar|gtar)\b[^\n]*(?:\s-[a-zA-Z]*x[a-zA-Z]*\b|--extract\b|--overwrite\b)/i,
+      why: '解包归档（同名文件被静默覆盖成归档里的版本）' },
+    { re: /\bunzip\b(?!\s+(?:-[a-z]*l|-Z)\b)|\b7z(?:r|a|z)?\s+[xe]\b|\bwinrar\b|\bexpand\b[^\n]*\.cab\b/i,
+      why: '解包归档（同名文件被静默覆盖成归档里的版本）' },
     { re: /\battrib\s+[-+][rhasld]/i, why: '改文件属性（隐藏/系统/只读）' },
     // 卷影、备份、文件系统底层管理：读帮助文档不算破坏，但这些命令的其它动词全是系统级的。
     { re: /\b(?:vssadmin|wbadmin|fsutil)\b/i, why: '卷影副本/系统备份/文件系统底层管理' },
+    // 事件日志清掉就没有现场了，属于「删掉就没了」那一类（实测 wevtutil cl 一路走到程序内部才因为
+    // 通道名不存在而失败）。只认破坏性的动词：gl/el/epl 这类读与导出照旧不打扰。
+    { re: /\bwevtutil\b[^\n]*(?:\scl\b|--clear-log|clear-log|\sset-log\b|\sset-config\b|delete-log)/i,
+      why: '清空或改写 Windows 事件日志（审计现场不可恢复）' },
     // cipher /W 是擦空闲空间（硬禁）；/E 加密、/R 与 /X 导出 EFS 恢复密钥 —— 后者等于把
     // 「解密这台机器上所有受保护文件」的钥匙写到一个文件里（实测 cipher /x 静默执行）。
     { re: /\bcipher\s+\/(?:e|r|x)/i, why: '加密文件或导出 EFS 恢复密钥（凭据外泄）' },

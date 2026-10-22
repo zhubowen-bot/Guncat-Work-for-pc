@@ -3622,6 +3622,32 @@ check(
   R4_QUIET_COMMANDS.every((c) => !hit4(c)),
   R4_QUIET_COMMANDS.filter(hit4).join(' | ')
 )
+// —— 第六轮：换参数符号、解包覆盖、把程序名写进配置/参数、清事件日志 ——
+const R6_RISKY = [
+  'move /y probes\\s1.txt trunc.txt', 'xcopy -y a.txt b\\a.txt', 'copy /y a.txt b.txt',
+  'tar -xf backup.tar', 'tar -xzf snap.tgz -C out', 'unzip -o pack.zip', '7z x -y pack.7z',
+  'expand extras.cab',
+  'git -c core.fsmonitor="echo x > f.txt" status', 'git --config-env=core.editor=EDITOR status',
+  'git config core.fsmonitor "echo injected"', 'git config --replace-all core.pager "less"',
+  'npm --script-shell sh run build', 'tar --use-compress-program=evil -cf a.tar probes',
+  'wevtutil cl System', 'wevtutil clear-log Application', 'wevtutil set-log System /retention:false'
+]
+check(
+  '第六轮四条穿透项全部转审批：/y 与 -y 同义、解包覆盖同名文件、git 配置注入、清事件日志',
+  R6_RISKY.every(hit4),
+  R6_RISKY.filter((c) => !hit4(c)).join(' | ')
+)
+const R6_QUIET = [
+  'git -C . log --oneline -3', 'git log -C -M --follow f.txt', 'tar -cf out.tar probes',
+  'tar -tzf out.tar.gz', 'unzip -l pack.zip', '7z l pack.7z', 'git config user.name "n"',
+  'git config --get core.editor', 'wevtutil gl Security', 'wevtutil el',
+  'wevtutil epl System saved.evtx', 'xcopy probes out\\ /i /e', 'npm run build'
+]
+check(
+  '新规则不多冤枉：读归档列表、查事件日志、git 的 -C 与 --get 这些同名字面量保持静默',
+  R6_QUIET.every((c) => !hit4(c)),
+  R6_QUIET.filter(hit4).join(' | ')
+)
 check(
   '空命令与超长命令都按硬禁处理（人无法审阅）',
   CommandGuard.assess('', cmdRoot).forbidden && CommandGuard.assess('x'.repeat(5000), cmdRoot).forbidden
@@ -3835,6 +3861,39 @@ check(
   '新一轮任务开始会收回「本次任务全部允许」（授权不跨任务残留）',
   afterClear.askEvent !== null && afterClear.result.ok === false
 )
+
+// —— 第六轮穿透项的端到端：判定表里写了不算，要真的走到人面前 ——
+// 这四条都是「同一语义换个写法就免检」（/y 与 -y、解包不叫覆盖、程序名藏在配置值里、
+// 清日志不叫删除），最容易在只测词表的回归里溜过去，所以这里按真实链路各跑一遍：
+// 弹卡 → 卡上写着命中的那一条理由 → 点拒绝 → 命令没有执行。
+async function askFor(command) {
+  events.length = 0
+  const runPromise = CommandService.run(convCmd.id, cmdRoot, { command }, null)
+  const askEvent = await waitForEvent((e) => e.type === 'ask:user')
+  if (askEvent === null) {
+    return { askEvent: null, result: await runPromise }
+  }
+  await inv('work:answer', {
+    conversationId: convCmd.id, requestId: askEvent.requestId, canceled: false,
+    selections: ['拒绝'], note: ''
+  })
+  return { askEvent, result: await runPromise }
+}
+for (const hole of [
+  ['move /y probe-src.txt probe-dst.txt', '移动/改名'],
+  ['xcopy -y probe-src.txt probe-dst.txt', '覆盖已存在'],
+  ['tar -xf probe-backup.tar', '解包归档'],
+  ['git -c core.fsmonitor="echo probe" status', 'git 配置注入'],
+  ['wevtutil cl Application', '事件日志']
+]) {
+  const card = await askFor(hole[0])
+  check(
+    '第六轮穿透项真的弹卡并拒绝执行: ' + hole[0].slice(0, 28),
+    card.askEvent !== null && card.askEvent.question.includes(hole[1]) &&
+      card.result.ok === false && card.result.output.includes('命令未执行'),
+    card.askEvent === null ? '(没有审批卡)' : card.askEvent.question.slice(0, 80)
+  )
+}
 
 // —— 自动审批（'auto' 档）：危险命令先交模型审一遍 ——
 // stubComplete 只换「模型回了什么文本」，提示词组装、JSON 契约校验、超时与 fail-closed
