@@ -835,7 +835,7 @@ function rootLabel(info: WorkspaceInfoDto): string {
  * 命令审批档位（取值与 core 的 CommandGuard.PERMISSIONS 一致）。
  *
  * 这一行存在的理由：智能体现在能在本机跑命令了，「跑到哪一步要先问你」必须由用户说了算，
- * 而不是由模型决定。三档改的只是**要不要弹审批卡**；格式化磁盘、关机这类毁灭性操作
+ * 而不是由模型决定。四档改的只是**危险命令由谁裁决**；格式化磁盘、关机这类毁灭性操作
  * 在任何档位下都会被直接拒绝，连批准的机会都没有。
  */
 export const COMMAND_PERMISSIONS: { value: string; label: string; hint: string }[] = [
@@ -851,8 +851,13 @@ export const COMMAND_PERMISSIONS: { value: string; label: string; hint: string }
   },
   {
     value: 'auto',
-    label: '自动批准',
-    hint: '命令不再逐个批准。毁灭性操作（格式化磁盘、关机等）在任何档位下都会被直接拒绝'
+    label: '自动审批',
+    hint: '危险命令先交给模型审阅一轮：它判定安全的直接执行（结果里写明是自动审阅放行），判危险的仍然弹卡请你批准；审阅失败一律按危险处理'
+  },
+  {
+    value: 'full-access',
+    label: '完全权限',
+    hint: '危险命令不审阅也不询问，由智能体自行执行。毁灭性操作（格式化磁盘、关机等）在任何档位下都会被直接拒绝'
   }
 ]
 

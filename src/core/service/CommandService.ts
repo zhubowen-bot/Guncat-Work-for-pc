@@ -10,14 +10,18 @@
 //   3. CommandGuard 硬禁表命中的命令**直接拒绝**, 不给审批入口;
 //   4. 命令引用到的工作区脚本读进来过同一套判定(脚本同审) —— 否则「把破坏搬进 .bat/.ps1」
 //      就是一条免检门, 命令行本身干净得不能再干净;
-//   5. 危险命令按会话档位走 AskUserBridge 人工批准, 超时/跳过/没点选项一律按**拒绝**处理
-//      (fail-closed: 没人应答就等于不许);
+//   5. 危险命令按会话档位找一个判官:
+//      'ask'/'ask-risk' 直接弹人工审批卡; 'auto' 先请模型审阅(它放行才静默执行, 拦下或
+//      没出结论一律退回人工卡 —— 审阅器只能让用户少被打扰一次, 不可能多放行一条命令);
+//      'full-access'(完全权限, 就是老 'auto' 的实际语义)不审也不问, 但上面 1~4 条照跑。
+//      人工卡超时/跳过/没点选项一律按**拒绝**处理(fail-closed: 没人应答就等于不许);
 //   6. 超时或被停止会杀掉整棵进程树, 不留孤儿进程;
 //   7. 输出有缓冲上限 + 头尾截断, 超长全文落 .spill/ ——「截断不丢失」。
 import { fileIo } from '@kit.CoreFileKit';
 import { Constants } from '../common/Constants';
 import { AbortSignal } from '../common/Types';
 import { CommandGuard, GuardVerdict } from './CommandGuard';
+import { ApprovalReviewService, ReviewOutcome } from './ApprovalReviewService';
 import { AskUserBridge, AskAnswer } from './AskUserBridge';
 import { SpillStore } from './SpillStore';
 import { ToolExecResult, WorkFileService } from './WorkFileService';
@@ -41,6 +45,8 @@ class Approval {
   why: string = '';
   /** 用户在审批卡上补充的话(可空, 要让它看见) */
   note: string = '';
+  /** 'auto' 档由模型审阅放行时的说明 —— 与「用户批准时的补充要求」是两种话, 分开记 */
+  reviewLine: string = '';
 }
 
 // 一个后台任务
@@ -163,12 +169,28 @@ export class CommandService {
       return CommandService.fail('该命令被安全策略拒绝(' + scriptForbidden +
         ')。这类操作不可逆, 本应用不会代为执行 —— 请把要做什么说清楚, 交给用户自己在终端里完成');
     }
-    // 3. 审批(档位 + 本次任务的授权)
+    // 3. 审批(档位决定判官是谁: 人 / 先看模型再找人 / 完全权限不问)
     let permission: string = CommandService.permissionFor(convId);
     let note: string = '';
+    let reviewLine: string = '';
     if (CommandService.grants[convId] !== true &&
       CommandGuard.needsApproval(verdict, permission)) {
-      let approval: Approval = await CommandService.askApproval(convId, command, cwdRel, verdict);
+      let review: ReviewOutcome | null = null;
+      let approval: Approval;
+      if (CommandGuard.usesModelReview(permission)) {
+        // 'auto' 档: 先请模型看一眼。只有它明确判 low/medium 且放行才免打扰;
+        // 判 high、自相矛盾、请求失败、超时、没配模型 —— 全都还是下面那张人工卡。
+        review = await ApprovalReviewService.review(convId, command, cwdRel, root,
+          verdict.reasons, abortSignal);
+      }
+      if (review !== null && review.allowed) {
+        approval = new Approval();
+        approval.allowed = true;
+        approval.reviewLine = '自动审阅已放行(' + review.risk + ')' +
+          (review.reason === '' ? '' : ': ' + review.reason);
+      } else {
+        approval = await CommandService.askApproval(convId, command, cwdRel, verdict, review);
+      }
       if (!approval.allowed) {
         return CommandService.denyResult(command, approval.why, approval.note);
       }
@@ -176,6 +198,7 @@ export class CommandService {
         CommandService.grants[convId] = true;
       }
       note = approval.note;
+      reviewLine = approval.reviewLine;
     }
     // 4. 超时(命令自己的超时必须先于工具层的兜底超时触发, 否则进程没人收)
     let timeoutMs: number = CommandService.intArg(args, 'timeout_ms',
@@ -196,10 +219,10 @@ export class CommandService {
       return CommandService.fail('命令启动失败: ' + startError.error);
     }
     if (background) {
-      return CommandService.registerJob(convId, command, cwdRel, task, verdict, note);
+      return CommandService.registerJob(convId, command, cwdRel, task, verdict, note, reviewLine);
     }
     let outcome: ShellOutcome = await task.wait(timeoutMs, abortSignal);
-    return CommandService.renderForeground(root, cwdRel, outcome, verdict, note);
+    return CommandService.renderForeground(root, cwdRel, outcome, verdict, note, reviewLine);
   }
 
   // ===== job_list / job_output / job_kill =====
@@ -295,7 +318,7 @@ export class CommandService {
   }
 
   private static registerJob(convId: string, command: string, cwdRel: string,
-    task: ShellTask, verdict: GuardVerdict, note: string): ToolExecResult {
+    task: ShellTask, verdict: GuardVerdict, note: string, reviewLine: string): ToolExecResult {
     CommandService.reapAll();
     CommandService.pruneFinished();
     if (CommandService.jobs.length >= Constants.WORK_CMD_MAX_JOBS) {
@@ -316,7 +339,7 @@ export class CommandService {
       (cwdRel === '' ? '工作区根' : cwdRel) + '\n' +
       '它在后台继续跑, 本轮不用等它。之后用 job_output(' + job.id +
       ') 读新增输出(每次只返回上次读过之后的部分), job_list 看状态, job_kill 结束它。' +
-      CommandService.riskLine(verdict, note));
+      CommandService.riskLine(verdict, note, reviewLine));
     return r;
   }
 
@@ -465,12 +488,22 @@ export class CommandService {
   // ===== 审批 =====
 
   private static async askApproval(convId: string, command: string, cwdRel: string,
-    verdict: GuardVerdict): Promise<Approval> {
+    verdict: GuardVerdict, review: ReviewOutcome | null): Promise<Approval> {
     let lines: string[] = [];
     lines.push('智能体请求执行一条命令, 需要你批准。');
     lines.push('工作目录: ' + (cwdRel === '' ? '工作区根' : cwdRel));
     if (verdict.reasons.length > 0) {
       lines.push('风险: ' + verdict.reasons.join('、'));
+    }
+    // 'auto' 档会走到这张卡上只有两种可能: 模型判了该拦, 或模型没能给出结论。
+    // 两种都如实写在卡上 —— 用户看到的是「机器先看过、它的结论是什么」, 不是凭空多出来的一张卡。
+    let reviewLine: string = '';
+    if (review !== null) {
+      reviewLine = review.failed !== '' ?
+        '自动审阅未能定论(' + review.failed + '), 请你决定' :
+        '自动审阅判定 ' + review.risk + ' 风险' +
+        (review.reason === '' ? '' : '(' + review.reason + ')') + ', 仍请你决定';
+      lines.push(reviewLine);
     }
     lines.push('命令:');
     lines.push(command.trim());
@@ -479,6 +512,7 @@ export class CommandService {
       [APPROVE_ONCE, APPROVE_ALL, APPROVE_DENY], false,
       Constants.WORK_ASK_WAIT_TIMEOUT_MS, convId);
     let approval: Approval = new Approval();
+    approval.reviewLine = reviewLine;
     if (answer === null) {
       approval.why = '未获得批准(超时或已跳过, 按拒绝处理)';
       return approval;
@@ -509,7 +543,7 @@ export class CommandService {
   // ===== 结果渲染 =====
 
   private static renderForeground(root: string, cwdRel: string, outcome: ShellOutcome,
-    verdict: GuardVerdict, note: string): ToolExecResult {
+    verdict: GuardVerdict, note: string, reviewLine: string): ToolExecResult {
     let r: ToolExecResult = new ToolExecResult();
     let header: string = '[run_command] 退出码 ' + outcome.exitCode.toString() + ' · 用时 ' +
       (Math.round(outcome.durationMs / 100) / 10).toString() + 's · 目录 ' +
@@ -536,17 +570,21 @@ export class CommandService {
     }
     r.ok = outcome.exitCode === 0 && !r.timeout && !r.cancelled;
     let tail: string = notes.length > 0 ? '\n注意: ' + notes.join('; ') : '';
-    r.output = header + CommandService.riskLine(verdict, note) + tail + '\n\n' + body;
+    r.output = header + CommandService.riskLine(verdict, note, reviewLine) + tail + '\n\n' + body;
     if (!r.ok) {
       r.output = 'ERROR: ' + r.output;
     }
     return r;
   }
 
-  private static riskLine(verdict: GuardVerdict, note: string): string {
+  private static riskLine(verdict: GuardVerdict, note: string, reviewLine: string): string {
     let text: string = '';
     if (verdict.risky) {
       text += '\n(已批准的危险项: ' + verdict.reasons.join('、') + ')';
+    }
+    if (reviewLine !== '') {
+      // 谁放行的要写清: 模型放行没有经过用户的手, 事后回看得能分辨出这两条路
+      text += '\n(' + reviewLine + ')';
     }
     if (note !== '') {
       text += '\n(用户批准时的补充要求: ' + note + ')';

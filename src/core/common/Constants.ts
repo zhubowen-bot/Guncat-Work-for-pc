@@ -254,8 +254,16 @@ export class Constants {
   // 外层先判超时会把 ERROR 送回模型, 可审批卡/提问卡还挂在界面上, 用户随后点的答案
   // 落进一次已经返回的调用里(静默丢弃), 命令进程也还在后台跑。所以护栏必须盖满
   // 「等待上限 + 真正的执行上限 + 余量」。
-  static readonly WORK_CMD_TOOL_GUARD_TIMEOUT_MS: number = 660000;  // 300000 审批 + 300000 命令 + 60000 余量
+  static readonly WORK_CMD_TOOL_GUARD_TIMEOUT_MS: number = 680000;  // 20000 模型审阅 + 300000 审批 + 300000 命令 + 60000 余量
   static readonly WORK_ASK_TOOL_GUARD_TIMEOUT_MS: number = 360000;  // 300000 等待 + 60000 余量
+  // ===== 'auto'（自动审批）档的模型审阅，见 service/ApprovalReviewService =====
+  // 审阅请求的等待上限(毫秒)。超时与一切失败同样处理: 退回人工审批卡 —— 审阅器最多只能
+  // 少打扰用户一次, 不能因为「模型没回话」就把一条危险命令当成批准过了。
+  static readonly WORK_APPROVAL_REVIEW_TIMEOUT_MS: number = 20000;
+  // 审阅结论只有一句风险判定, 给小上限即可(审阅请求不带工具、不带思考)
+  static readonly WORK_APPROVAL_REVIEW_MAX_TOKENS: number = 400;
+  // 喂给审阅器的用户原话总长度上限(字符): 只给意图, 不给助手正文与工具结果
+  static readonly WORK_APPROVAL_REVIEW_INTENT_CHARS: number = 1500;
   // 工作区项目指令(AGENTS.md 等)注入总量上限(字符)。指令文件每轮都随快照进上下文,
   // 不设上限时一份被误写成日志/数据dump 的 AGENTS.md 会把整个上下文窗口吃光。
   static readonly WORK_INSTRUCTIONS_MAX_CHARS: number = 12000;

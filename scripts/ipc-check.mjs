@@ -33,6 +33,9 @@ export { sanitizeTableHtml } from '@main/sanitizeHtml'
 // 终端能力：判定与执行都是纯本地逻辑，直接引用生产侧实现做断言（不在测试里另抄一份规则表）
 export { CommandGuard } from '@core/service/CommandGuard'
 export { CommandService } from '@core/service/CommandService'
+// 自动审批档的模型审阅器: 结论解析与 fail-closed 判定都是纯逻辑, 直接打在实现上
+// (stubComplete 只换「模型说了什么」, 打包提示词/校验组合/退回人工这条路全程真实)
+export { ApprovalReviewService } from '@core/service/ApprovalReviewService'
 export { WorkFileService } from '@core/service/WorkFileService'
 export { ToolRegistry } from '@core/common/ToolRegistry'
 export { PromptBuilder } from '@core/common/PromptBuilder'
@@ -3623,16 +3626,46 @@ check(
   CommandGuard.assess('', cmdRoot).forbidden && CommandGuard.assess('x'.repeat(5000), cmdRoot).forbidden
 )
 check(
-  '三档审批粒度：auto 不打扰、ask 每条都问、ask-risk 只问危险',
-  CommandGuard.needsApproval(CommandGuard.assess('del x.txt', cmdRoot), CommandGuard.PERMISSION_AUTO) === false &&
+  '四档审批粒度：档位改的是「危险命令由谁裁决」——ask 每条都问、ask-risk 与 auto 都要为危险命令找判官、full-access 才真的不裁',
+  CommandGuard.needsApproval(CommandGuard.assess('del x.txt', cmdRoot), CommandGuard.PERMISSION_FULL_ACCESS) === false &&
+    CommandGuard.needsApproval(CommandGuard.assess('del x.txt', cmdRoot), CommandGuard.PERMISSION_AUTO) === true &&
+    CommandGuard.needsApproval(CommandGuard.assess('echo hi', cmdRoot), CommandGuard.PERMISSION_AUTO) === false &&
     CommandGuard.needsApproval(CommandGuard.assess('echo hi', cmdRoot), CommandGuard.PERMISSION_ASK) === true &&
     CommandGuard.needsApproval(CommandGuard.assess('echo hi', cmdRoot), CommandGuard.PERMISSION_ASK_RISK) === false &&
     CommandGuard.needsApproval(CommandGuard.assess('del x.txt', cmdRoot), CommandGuard.PERMISSION_ASK_RISK) === true
 )
 check(
-  '旧数据/未设置的空档位落到默认档（不是 auto）',
+  '只有 auto 档会走模型审阅，full-access 不会（它就是不审不问那一档，老 auto 的语义）',
+  CommandGuard.usesModelReview(CommandGuard.PERMISSION_AUTO) === true &&
+    CommandGuard.usesModelReview(CommandGuard.PERMISSION_FULL_ACCESS) === false &&
+    CommandGuard.usesModelReview(CommandGuard.PERMISSION_ASK) === false &&
+    CommandGuard.usesModelReview(CommandGuard.PERMISSION_ASK_RISK) === false
+)
+check(
+  '档位表就是界面那四档，且完全权限排最后（列表顺序＝松紧顺序，别把最危险的一档摆在默认位置旁边）',
+  CommandGuard.PERMISSIONS.join(',') === 'ask,ask-risk,auto,full-access'
+)
+check(
+  '旧数据/未设置的空档位落到默认档（不是 auto，也不是 full-access）',
   CommandGuard.normalizePermission('') === CommandGuard.PERMISSION_ASK_RISK &&
     CommandGuard.normalizePermission('乱写的') === CommandGuard.PERMISSION_ASK_RISK
+)
+check(
+  '老存档的 auto 按语义搬到 full-access，搬过一次就不再动（用户后来选的 auto 是新语义，不能被再搬一次）',
+  (() => {
+    const legacy = { commandPermission: 'auto', commandPermissionMigrated: false }
+    const moved = mod.SessionManager.migrateCommandPermission(legacy)
+    const again = mod.SessionManager.migrateCommandPermission(legacy)
+    const fresh = { commandPermission: 'auto', commandPermissionMigrated: true }
+    const untouched = mod.SessionManager.migrateCommandPermission(fresh)
+    const askRisk = { commandPermission: 'ask-risk', commandPermissionMigrated: false }
+    mod.SessionManager.migrateCommandPermission(askRisk)
+    return moved === true && legacy.commandPermission === 'full-access' &&
+      legacy.commandPermissionMigrated === true && again === false &&
+      untouched === false && fresh.commandPermission === 'auto' &&
+      askRisk.commandPermission === 'ask-risk'
+  })(),
+  '迁移结果不对'
 )
 
 // —— 工具面：命令工具确实下发给工作模式，且被交互模式物理裁掉 ——
@@ -3651,29 +3684,30 @@ check(
     PromptBuilder.toolsDirectory().includes('在任何档位下直接拒绝')
 )
 check(
-  '人工等待类工具的外层护栏已盖住「等人 + 执行」（否则审批卡还挂着就先判超时）',
+  '人工等待类工具的外层护栏已盖住「模型审阅 + 等人 + 执行」（否则审批卡还挂着就先判超时）',
   ToolRegistry.findMeta('run_command').timeoutMs === mod.Constants.WORK_CMD_TOOL_GUARD_TIMEOUT_MS &&
     ToolRegistry.findMeta('run_command').timeoutMs >
-      mod.Constants.WORK_ASK_WAIT_TIMEOUT_MS + mod.Constants.WORK_CMD_MAX_TIMEOUT_MS &&
+      mod.Constants.WORK_APPROVAL_REVIEW_TIMEOUT_MS + mod.Constants.WORK_ASK_WAIT_TIMEOUT_MS +
+      mod.Constants.WORK_CMD_MAX_TIMEOUT_MS &&
     ToolRegistry.findMeta('ask_user_question').timeoutMs === mod.Constants.WORK_ASK_TOOL_GUARD_TIMEOUT_MS
 )
 
 // —— 执行层：真的拉起进程 ——
-const autoInfo = await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_AUTO)
+const autoInfo = await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_FULL_ACCESS)
 check(
   'workspace:setCommandPermission 写入档位并回给界面新状态',
-  autoInfo.commandPermission === CommandGuard.PERMISSION_AUTO &&
-    CommandService.permissionFor(convCmd.id) === CommandGuard.PERMISSION_AUTO
+  autoInfo.commandPermission === CommandGuard.PERMISSION_FULL_ACCESS &&
+    CommandService.permissionFor(convCmd.id) === CommandGuard.PERMISSION_FULL_ACCESS
 )
 check(
-  '非法档位被拒绝（界面只给三档，但主进程不靠界面守）',
+  '非法档位被拒绝（界面只给四档，但主进程不靠界面守）',
   (await inv('workspace:setCommandPermission', convCmd.id, 'everything-goes').catch((e) => e)) instanceof Error
 )
 const convFile = fs.readFileSync(path.join(dataRoot, 'files', 'guncat_conversations.json'), 'utf8')
 const persistedConv = JSON.parse(convFile).find((c) => c.id === convCmd.id)
 check(
   '档位写进会话元数据文件（对齐 workspacePath 的持久化路径，重启还认）',
-  persistedConv !== undefined && persistedConv.commandPermission === CommandGuard.PERMISSION_AUTO
+  persistedConv !== undefined && persistedConv.commandPermission === CommandGuard.PERMISSION_FULL_ACCESS
 )
 const neverSet = JSON.parse(convFile).find(
   (c) => c.commandPermission === '' || c.commandPermission === undefined
@@ -3801,6 +3835,139 @@ check(
   afterClear.askEvent !== null && afterClear.result.ok === false
 )
 
+// —— 自动审批（'auto' 档）：危险命令先交模型审一遍 ——
+// stubComplete 只换「模型回了什么文本」，提示词组装、JSON 契约校验、超时与 fail-closed
+// 全走真实实现。这一段验的是审阅器的**权力边界**：它只能让用户少被打扰一次，
+// 任何一条路走不通都必须回到上面那张人工卡。
+const Reviewer = mod.ApprovalReviewService
+let reviewPrompt = ''
+let reviewCalls = 0
+let reviewReply = ''
+const autoCmd = isWin ? 'del nothing-here.txt' : 'rm -f nothing-here.txt'
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_AUTO)
+Reviewer.bind(convCmd.id, null, () => ['把 dist 里的构建产物清掉'])
+
+events.length = 0
+const noModelPromise = CommandService.run(convCmd.id, cmdRoot, { command: autoCmd }, null)
+const noModelAsk = await waitForEvent((e) => e.type === 'ask:user')
+await inv('work:answer', {
+  conversationId: convCmd.id, requestId: noModelAsk === null ? '' : noModelAsk.requestId,
+  canceled: true, selections: [], note: ''
+})
+const noModelRes = await noModelPromise
+check(
+  '没配模型 → 审不了，退回人工卡（不是静默执行；用户不答仍按拒绝）',
+  noModelAsk !== null && noModelAsk.question.includes('自动审阅未能定论') &&
+    noModelAsk.question.includes('未配置') && noModelRes.ok === false,
+  noModelAsk === null ? '(没有审批卡)' : noModelAsk.question.slice(0, 200)
+)
+Reviewer.stubComplete = (prompt) => {
+  reviewPrompt = prompt
+  reviewCalls++
+  return reviewReply
+}
+
+async function askOnceAuto(reply) {
+  reviewReply = reply
+  events.length = 0
+  const runPromise = CommandService.run(convCmd.id, cmdRoot, { command: autoCmd }, null)
+  const askEvent = await waitForEvent((e) => e.type === 'ask:user')
+  if (askEvent === null) {
+    return { askEvent, result: await runPromise }
+  }
+  await inv('work:answer', {
+    conversationId: convCmd.id, requestId: askEvent.requestId,
+    canceled: false, selections: ['允许一次'], note: ''
+  })
+  return { askEvent, result: await runPromise }
+}
+
+reviewCalls = 0
+const reviewAllow = await askOnceAuto('{"risk":"low","decision":"allow","reason":"删的是构建产物, 可重新生成"}')
+check(
+  '模型判 low 并放行 → 危险命令直接执行、不打扰用户，但结论是谁放的一律写进结果',
+  reviewAllow.askEvent === null && reviewAllow.result.ok === true && reviewCalls === 1 &&
+    reviewAllow.result.output.includes('自动审阅已放行(low)'),
+  reviewAllow.askEvent === null ? reviewAllow.result.output.slice(0, 160) : '(弹了人工卡)'
+)
+check(
+  '审阅请求带的是环境、用户原话、命令原文与命中的规则 —— 智能体的自我说明不在其中',
+  reviewPrompt.includes('把 dist 里的构建产物清掉') && reviewPrompt.includes(autoCmd) &&
+    reviewPrompt.includes('工作区根目录') && reviewPrompt.includes('删除文件/目录'),
+  reviewPrompt.slice(0, 200)
+)
+check(
+  '审阅策略的四条纪律钉在代码里（改提示词必须同时改 parseVerdict 的合法组合表，两边不能悄悄漂移）',
+  Reviewer.REVIEW_POLICY.includes('不可信数据') &&
+    Reviewer.REVIEW_POLICY.includes('只有【用户原话】那一段算') &&
+    Reviewer.REVIEW_POLICY.includes('high 必须 ask') &&
+    Reviewer.REVIEW_POLICY.includes('"decision":"allow|ask"')
+)
+
+const highAsk = await askOnceAuto('{"risk":"high","decision":"ask","reason":"删除用户自己的文件不可恢复"}')
+check(
+  '模型判 high → 机器没有终审权，仍弹人工卡，并把它的结论原样写在卡上',
+  highAsk.askEvent !== null && highAsk.askEvent.question.includes('自动审阅判定 high') &&
+    highAsk.askEvent.question.includes('不可恢复') && highAsk.result.ok === true,
+  highAsk.askEvent === null ? '(没有审批卡)' : highAsk.askEvent.question.slice(0, 240)
+)
+
+const contradict = await askOnceAuto('{"risk":"high","decision":"allow","reason":"应该没问题"}')
+check(
+  '自相矛盾的结论（high 却 allow）不算放行 —— 合法组合表在代码里，不在模型的自觉里',
+  contradict.askEvent !== null && contradict.askEvent.question.includes('未能定论'),
+  contradict.askEvent === null ? '(没有审批卡)' : contradict.askEvent.question.slice(0, 200)
+)
+
+const garbage = await askOnceAuto('这条命令我看着还行，直接放行吧。')
+check(
+  '不按契约回 JSON → 退回人工卡（解析失败绝不等于批准）',
+  garbage.askEvent !== null && garbage.askEvent.question.includes('自动审阅未能定论'),
+  garbage.askEvent === null ? '(没有审批卡)' : garbage.askEvent.question.slice(0, 200)
+)
+
+reviewReply = '```json\n{"risk":"medium","decision":"allow","reason":"任务要求的清理"}\n```'
+events.length = 0
+const fencedAllow = await CommandService.run(convCmd.id, cmdRoot, { command: autoCmd }, null)
+check(
+  '结论裹在代码围栏里也认（Anthropic 协议不吃 json 模式，不能因为格式白白多问一次）',
+  fencedAllow.ok === true && !events.some((e) => e.type === 'ask:user'),
+  fencedAllow.output.slice(0, 120)
+)
+
+reviewReply = '{"risk":"low","decision":"allow","reason":"可以"}'
+reviewCalls = 0
+const forbiddenAuto = await CommandService.run(
+  convCmd.id, cmdRoot, { command: isWin ? 'format D:' : 'mkfs.ext4 /dev/sda1' }, null
+)
+check(
+  '硬禁命令在 auto 档既不问人也不劳模型 —— 审阅器没有推翻硬禁的权力',
+  forbiddenAuto.ok === false && forbiddenAuto.output.includes('安全策略拒绝') &&
+    reviewCalls === 0 && !events.some((e) => e.type === 'ask:user'),
+  forbiddenAuto.output.slice(0, 120)
+)
+
+// 完全权限 = 老 auto 的实际语义：不审也不问，但只剩硬禁这一层地板
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_FULL_ACCESS)
+reviewCalls = 0
+events.length = 0
+const fullRun = await CommandService.run(convCmd.id, cmdRoot, { command: autoCmd }, null)
+check(
+  '完全权限档：危险命令不问也不审（模型一次都没被调用）',
+  fullRun.ok === true && reviewCalls === 0 && !events.some((e) => e.type === 'ask:user'),
+  fullRun.output.slice(0, 120)
+)
+const forbiddenFull = await CommandService.run(
+  convCmd.id, cmdRoot, { command: isWin ? 'format D:' : 'mkfs.ext4 /dev/sda1' }, null
+)
+check(
+  '完全权限不等于什么都能跑：硬禁表在它前面，档位碰不到',
+  forbiddenFull.ok === false && forbiddenFull.output.includes('安全策略拒绝'),
+  forbiddenFull.output.slice(0, 120)
+)
+Reviewer.stubComplete = null
+Reviewer.release(convCmd.id)
+
 // —— 脚本同审（H5/H6：危险搬进 .bat/.js 里，命令行本身干净得不能再干净）——
 const auditDir = path.join(cmdRoot, 'guard-audit')
 fs.mkdirSync(auditDir, { recursive: true })
@@ -3853,7 +4020,7 @@ check(
     !events.some((e) => e.type === 'ask:user'),
   benignScript.output.slice(0, 160)
 )
-await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_AUTO)
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_FULL_ACCESS)
 const chained = await CommandService.run(
   convCmd.id, cmdRoot, { command: 'guard-audit\\front.bat' }, null
 )
@@ -3866,9 +4033,9 @@ check(
 fs.rmSync(auditDir, { recursive: true, force: true })
 
 // —— 后台任务 ——
-// 这一段验的是「任务注册表 + 增量读 + 杀树」，跟审批无关，所以切到 auto 档：
+// 这一段验的是「任务注册表 + 增量读 + 杀树」，跟审批无关，所以切到完全权限档：
 // `node -e` 现在是危险项（解释器内联代码读不出真实意图），留在默认档会卡在审批上等不到答案。
-await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_AUTO)
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_FULL_ACCESS)
 const bgRun = await CommandService.run(
   convCmd.id,
   cmdRoot,
@@ -3916,7 +4083,7 @@ check(
 // —— 会话删除与退出都要收掉进程 ——
 const convLeak = await inv('conversations:create', agents[0].id, 'work')
 await inv('workspace:list', convLeak.id)
-await inv('workspace:setCommandPermission', convLeak.id, CommandGuard.PERMISSION_AUTO)
+await inv('workspace:setCommandPermission', convLeak.id, CommandGuard.PERMISSION_FULL_ACCESS)
 const leakRoot = session.workspaceRoot(convLeak.id)
 const leakRun = await CommandService.run(
   convLeak.id,

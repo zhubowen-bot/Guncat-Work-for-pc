@@ -12,9 +12,14 @@ export class Conversation {
   mode: string = 'chat';
   // 自定义工作区绝对路径; 空串 = 默认沙箱目录(filesDir/workspaces/<id>)
   workspacePath: string = '';
-  // run_command 的审批档位: 'ask' 每条都问 | 'ask-risk' 危险才问(默认) | 'auto' 全自动(硬禁仍生效)
+  // run_command 的审批档位: 'ask' 每条都问 | 'ask-risk' 危险才问(默认) |
+  // 'auto' 自动审批(危险命令先过模型) | 'full-access' 完全权限(不审不问, 硬禁仍生效)
   // 空串 = 未设置, 按默认档处理(与 workspacePath 一样要过 JSON 往返, 否则重启就丢)
   commandPermission: string = '';
+  // 'auto' 在老版本里的含义是「危险命令也不问人」(= 现在的 'full-access')。老存档里的 auto
+  // 必须按语义搬到 full-access 才能保住原来的行为, 但不能每次都搬 —— 用户后来亲手选的 'auto'
+  // 是新的「模型审阅」档。这个一次性标记就是用来分得清「老数据」与「新选择」的。
+  commandPermissionMigrated: boolean = false;
 
   static create(agentId: string, title: string, mode: string): Conversation {
     let conv: Conversation = new Conversation();
@@ -22,6 +27,7 @@ export class Conversation {
     conv.agentId = agentId;
     conv.title = title;
     conv.mode = mode;
+    conv.commandPermissionMigrated = true;
     conv.createdAt = new Date().getTime();
     return conv;
   }
@@ -35,6 +41,8 @@ export class Conversation {
     conv.mode = (json['mode'] as string) ?? 'chat';
     conv.workspacePath = (json['workspacePath'] as string) ?? '';
     conv.commandPermission = (json['commandPermission'] as string) ?? '';
+    // 缺这个键 = 这份存档早于档位语义调整, 交给 SessionManager 的一次性迁移处理
+    conv.commandPermissionMigrated = (json['commandPermissionMigrated'] as boolean) ?? false;
     let raw: Object = json['messages'];
     if (raw !== undefined) {
       let rawMessages: Object[] = raw as Object[];
@@ -60,7 +68,8 @@ export class Conversation {
       'createdAt': this.createdAt,
       'mode': this.mode,
       'workspacePath': this.workspacePath,
-      'commandPermission': this.commandPermission
+      'commandPermission': this.commandPermission,
+      'commandPermissionMigrated': this.commandPermissionMigrated
     };
   }
 }

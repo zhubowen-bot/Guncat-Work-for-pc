@@ -41,11 +41,17 @@ interface Rule {
 
 export class CommandGuard {
   // 审批粒度档位（会话元数据 commandPermission 的取值；空串按默认档处理）
-  static readonly PERMISSION_ASK: string = 'ask'          // 每条命令都要批准
-  static readonly PERMISSION_ASK_RISK: string = 'ask-risk' // 默认: 只有危险命令要批准
-  static readonly PERMISSION_AUTO: string = 'auto'        // 全自动（硬禁表仍然生效）
+  //
+  // 档位改的是**由谁来判断**，而不是**要不要判断**：ask-risk 交给关键词表 + 人，auto 多一道模型审阅，
+  // 只有 full-access 是真的把判断整个关掉。老版本里 'auto' 的含义是「危险命令也不问人」，
+  // 那是完全权限而不是自动审批，语义已经搬到 'full-access'（见 SessionManager 的一次性迁移）。
+  static readonly PERMISSION_ASK: string = 'ask'          // 每条命令都要人批准
+  static readonly PERMISSION_ASK_RISK: string = 'ask-risk' // 默认: 危险命令要人批准
+  static readonly PERMISSION_AUTO: string = 'auto'        // 自动审批: 危险命令先过模型, 拦下了才找人
+  static readonly PERMISSION_FULL_ACCESS: string = 'full-access' // 完全权限: 不审不问, 只剩硬禁兜底
   static readonly PERMISSIONS: string[] = [
-    CommandGuard.PERMISSION_ASK, CommandGuard.PERMISSION_ASK_RISK, CommandGuard.PERMISSION_AUTO
+    CommandGuard.PERMISSION_ASK, CommandGuard.PERMISSION_ASK_RISK,
+    CommandGuard.PERMISSION_AUTO, CommandGuard.PERMISSION_FULL_ACCESS
   ]
 
   private static readonly FORBIDDEN: Rule[] = [
@@ -409,15 +415,25 @@ export class CommandGuard {
     return fresh
   }
 
-  /** 命中危险特征就需要批准；'auto' 档一律放行，'ask' 档一律要批准 */
+  /**
+   * 这条命令需不需要一个**裁决**。谁裁由档位决定：
+   *   ask / ask-risk → 人；auto → 模型先审（审不过再找人，见 ApprovalReviewService）；
+   *   full-access → 没有裁决这一步（硬禁表在更前面，与档位无关）。
+   * 注意 auto 与 ask-risk 在这里同值 —— 两者都要为危险命令找一个判官，差别在判官是谁。
+   */
   static needsApproval(verdict: GuardVerdict, permission: string): boolean {
-    if (permission === CommandGuard.PERMISSION_AUTO) {
+    if (permission === CommandGuard.PERMISSION_FULL_ACCESS) {
       return false
     }
     if (permission === CommandGuard.PERMISSION_ASK) {
       return true
     }
     return verdict.risky
+  }
+
+  /** 危险命令是否先交给模型审阅（只有 'auto' 档走这条路） */
+  static usesModelReview(permission: string): boolean {
+    return permission === CommandGuard.PERMISSION_AUTO
   }
 
   /** 会话档位取值（旧数据/未设置都是空串 → 默认档「危险需批准」） */

@@ -27,6 +27,7 @@ import {
 import { WorkToolRunner } from '@core/service/WorkToolRunner'
 import { ToolExecResult, WorkFileService } from '@core/service/WorkFileService'
 import { SubagentService } from '@core/service/SubagentService'
+import { ApprovalReviewService } from '@core/service/ApprovalReviewService'
 import { Conversation } from '@core/model/Conversation'
 import { Message } from '@core/model/Message'
 import { Attachment } from '@core/model/Attachment'
@@ -213,6 +214,19 @@ export class SessionManager {
       if (fixed !== '' && conv.mode !== fixed) {
         conv.mode = fixed
       }
+    }
+    // 一次性档位迁移：老版本里 'auto' 的含义是「危险命令也不问人」，那其实是**完全权限**而不是
+    // 自动审批；新版本把那个语义改名为 'full-access'，'auto' 让给「模型先审、拦下才找人」。
+    // 存过 auto 的老会话按**语义**落到 full-access —— 行为一点没变，新语义不会悄悄接管老会话，
+    // 想要模型审阅得由用户在面板里自己选。（判定见 migrateCommandPermission）
+    let permMigrated: number = 0
+    for (const conv of this.conversations) {
+      if (SessionManager.migrateCommandPermission(conv)) {
+        permMigrated++
+      }
+    }
+    if (permMigrated > 0) {
+      await this.persist()
     }
     // 会话级 core 状态回填：workspacePath 注册进 core 的路径咽喉点（之后所有工具/面板/导出
     // 都按它取根目录，目录已失效的跳过注册），commandPermission 注册进命令审批档位表。
@@ -601,6 +615,7 @@ export class SessionManager {
     // 会话没了，它拉起的后台命令也没有归属了 —— 连同进程树一起收掉，
     // 审批档位与「本次任务全部允许」的授权也一并清掉（id 不会复用，但别把注册表留成垃圾）。
     CommandService.releaseConversation(id)
+    ApprovalReviewService.release(id)
     try {
       WorkFileService.deleteWorkspace(this.ctx(), id)
     } catch {
@@ -1373,6 +1388,16 @@ export class SessionManager {
       LoopMessage.user(this.expandMentions(conv.id, taskText))
     ]
 
+    // 'auto' 档的模型审阅器：绑当前配置 + 一个「用户原话」的活引用（含任务中途的插话）。
+    // 只取 role==='user' 且不带图片的消息 —— 智能体自己的正文、思考与工具结果一律不进审阅上下文，
+    // 否则它可以在请求命令之前先写一句「用户已授权」把审阅器说服，审批就退化成自我批准。
+    // 没有绑定 = 没有审阅器，危险命令直接走人工卡（fail-closed）。
+    ApprovalReviewService.bind(conv.id, config, (): string[] =>
+      messages
+        .filter((m: LoopMessage): boolean => m.role === 'user' && m.imageDataUrl === '' && m.content !== '')
+        .map((m: LoopMessage): string => m.content)
+    )
+
     const mode: string = request.mode === 'interactive' ? 'interactive' : 'work'
     const reasoningEffort: string = SessionManager.resolveEffort(request)
     const maxSteps: number = Constants.WORK_MAX_STEPS
@@ -2093,9 +2118,28 @@ export class SessionManager {
   }
 
   /**
-   * 设置本会话的命令审批档位。非法值不写（界面只给三档，走不到非法分支，但模型/旧数据可能给）。
-   * 硬禁表不受这个开关影响 —— 'auto' 的含义只是「危险命令也不弹审批卡」，
-   * 而不是「什么都能跑」，见 CommandGuard。
+   * 档位语义迁移（每个会话只走一次，靠 commandPermissionMigrated 标记）。
+   * 老存档里没有 'full-access' 这个取值，所以它的 'auto' 一定是旧语义「危险命令也不问人」，
+   * 按语义改名成 'full-access'；已经被标过 migrated 的会话不动 —— 用户后来亲手选的 'auto'
+   * 是新语义（模型先审），再搬一次就把人家的选择改掉了。
+   */
+  static migrateCommandPermission(conv: Conversation): boolean {
+    if (conv.commandPermissionMigrated) {
+      return false
+    }
+    conv.commandPermissionMigrated = true
+    if (conv.commandPermission !== CommandGuard.PERMISSION_AUTO) {
+      return false
+    }
+    conv.commandPermission = CommandGuard.PERMISSION_FULL_ACCESS
+    return true
+  }
+
+  /**
+   * 设置本会话的命令审批档位。非法值不写（界面只给四档，走不到非法分支，但模型/旧数据可能给）。
+   * 硬禁表不受这个开关影响 —— 四档改的只是「危险命令由谁裁决」：
+   * 'ask'/'ask-risk' 由人、'auto' 先由模型审（拦下才找人）、'full-access' 完全不裁。
+   * 见 CommandGuard 与 ApprovalReviewService。
    */
   async setCommandPermission(conversationId: string, permission: string): Promise<WorkspaceInfoDto> {
     const conv: Conversation = this.mustFind(conversationId)
