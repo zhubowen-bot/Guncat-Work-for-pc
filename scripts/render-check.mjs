@@ -647,6 +647,29 @@ check('空工作区里也有一个显眼的上传入口', wsHtml.includes('works
 check('空态把「怎么加文件」说清楚（不再是只有拖拽这条隐形路径）', decode(wsHtml).includes('拖进窗口'))
 check('导出 zip / 打开文件夹 / 刷新 三个入口都还在', wsHtml.includes('打包导出为 zip'))
 
+// 命令审批档位行：面板能把「跑命令要问不问」交给用户，前提是那几档主进程都认
+const permRows = mod.commandPermissionRows()
+check(
+  '界面上的审批档位与 core 的档位表一一对应（不漂出一个主进程不认的选项）',
+  permRows.rows.length === permRows.guardPermissions.length &&
+    permRows.guardPermissions.every((v) => permRows.rows.some((r) => r.value === v))
+)
+check(
+  '默认档是「危险命令需批准」，且排在第一个（新用户开箱不会是全自助）',
+  permRows.rows[0].value === 'ask-risk' && permRows.rows[0].label.includes('危险')
+)
+check(
+  '「自动批准」那一档把话说清楚：毁灭性操作仍然会被拒（不能让人以为开了就什么都跑得动）',
+  (() => {
+    const auto = permRows.rows.find((r) => r.value === 'auto')
+    return (
+      auto !== undefined &&
+      auto.hint.includes('毁灭') &&
+      (auto.label.includes('自动') || auto.hint.includes('批准'))
+    )
+  })()
+)
+
 const wsIcons = mod.renderWorkspaceFileIcons()
 const iconOf = (name) => wsIcons[name]
 check('图片 / PDF / 压缩包 / 源码 / 视频 / 音频各用各的图标', (() => {

@@ -30,6 +30,12 @@ export { Constants } from '@core/common/Constants'
 // 运行时快照断言要直接引用生产侧的识别前缀，避免测试里再抄一份字面量导致两边悄悄漂移
 export { AgentLoopService } from '@core/service/AgentLoopService'
 export { sanitizeTableHtml } from '@main/sanitizeHtml'
+// 终端能力：判定与执行都是纯本地逻辑，直接引用生产侧实现做断言（不在测试里另抄一份规则表）
+export { CommandGuard } from '@core/service/CommandGuard'
+export { CommandService } from '@core/service/CommandService'
+export { WorkFileService } from '@core/service/WorkFileService'
+export { ToolRegistry } from '@core/common/ToolRegistry'
+export { PromptBuilder } from '@core/common/PromptBuilder'
 `
 )
 
@@ -129,6 +135,7 @@ const required = [
   'workspace:info',
   'workspace:pickDirectory',
   'workspace:setCustom',
+  'workspace:setCommandPermission',
   'workspace:delete',
   'workspace:clear',
   'workspace:openInFolder',
@@ -3278,6 +3285,328 @@ ask3.server.close()
 
 console.log(`\nask_user_question 验证：通过 ${passed - passedBeforeAsk} 项`)
 
+// ============================================================================
+// 21. 终端能力 run_command：安全边界（硬禁不给审批入口 / 审批 fail-closed / 越界拒绝 / 后台任务）
+//
+// 这一节验证的是「敢不敢把跑命令这件事交给模型」的全部前提，所以每条断言都在问同一件事：
+// **越界的路径是不是真的走不通、没人批准时是不是真的不执行**。
+// 判定层（CommandGuard）是纯逻辑，直接拿生产实现断言，测试里不另抄一份规则表。
+// ============================================================================
+
+console.log('\n21. 终端能力 run_command 与安全边界')
+
+const isWin = process.platform === 'win32'
+const { CommandGuard, CommandService, ToolRegistry, PromptBuilder, WorkFileService } = mod
+
+const convCmd = await inv('conversations:create', agents[0].id, 'work')
+await inv('workspace:list', convCmd.id)
+const cmdRoot = session.workspaceRoot(convCmd.id)
+
+// —— 判定层：硬禁 / 危险 / 无害三类命令，以及三档审批粒度 ——
+const FORBIDDEN_CMDS = [
+  ['format C:', '格式化磁盘'],
+  ['diskpart', '磁盘分区'],
+  ['shutdown /s /t 0', '关机'],
+  ['rm -rf /', '删根目录'],
+  [':(){ :|:& };:', 'fork 炸弹'],
+  ['dd if=/dev/zero of=/dev/sda bs=1M', '写裸设备'],
+  ['bcdedit /deletevalue {current}', '改引导']
+]
+check(
+  '毁灭性命令全部判为硬禁（不给审批入口）',
+  FORBIDDEN_CMDS.every(([c]) => CommandGuard.assess(c, cmdRoot).forbidden),
+  FORBIDDEN_CMDS.filter(([c]) => !CommandGuard.assess(c, cmdRoot).forbidden).map(([c]) => c).join(' | ')
+)
+const RISKY_CMDS = isWin
+  ? ['del report.txt', 'git push origin main', 'curl -O https://x.example/y.zip', 'npm install -g typescript', 'taskkill /im node.exe /f']
+  : ['rm -f report.txt', 'git push origin main', 'curl -O https://x.example/y.zip', 'npm install -g typescript', 'kill -9 1234']
+check(
+  '常见但有外溢的命令判为危险（默认档要批准）',
+  RISKY_CMDS.every((c) => CommandGuard.assess(c, cmdRoot).risky),
+  RISKY_CMDS.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
+check(
+  '无害命令判为既非硬禁也非危险（默认档不打扰用户）',
+  ['node -p 1+1', 'python --version', 'dir', 'ls -l'].every(
+    (c) => !CommandGuard.assess(c, cmdRoot).forbidden && !CommandGuard.assess(c, cmdRoot).risky
+  )
+)
+check(
+  '工作区之内的绝对路径不算越界',
+  !CommandGuard.assess(`node ${cmdRoot.replace(/[\\/]+$/, '')}/build.js`, cmdRoot).risky
+)
+check(
+  '工作区之外的绝对路径判为危险',
+  CommandGuard.assess(isWin ? 'node C:\\Windows\\system.ini' : 'node /etc/hosts', cmdRoot).risky
+)
+check(
+  '空命令与超长命令都按硬禁处理（人无法审阅）',
+  CommandGuard.assess('', cmdRoot).forbidden && CommandGuard.assess('x'.repeat(5000), cmdRoot).forbidden
+)
+check(
+  '三档审批粒度：auto 不打扰、ask 每条都问、ask-risk 只问危险',
+  CommandGuard.needsApproval(CommandGuard.assess('del x.txt', cmdRoot), CommandGuard.PERMISSION_AUTO) === false &&
+    CommandGuard.needsApproval(CommandGuard.assess('node -p 1+1', cmdRoot), CommandGuard.PERMISSION_ASK) === true &&
+    CommandGuard.needsApproval(CommandGuard.assess('node -p 1+1', cmdRoot), CommandGuard.PERMISSION_ASK_RISK) === false &&
+    CommandGuard.needsApproval(CommandGuard.assess('del x.txt', cmdRoot), CommandGuard.PERMISSION_ASK_RISK) === true
+)
+check(
+  '旧数据/未设置的空档位落到默认档（不是 auto）',
+  CommandGuard.normalizePermission('') === CommandGuard.PERMISSION_ASK_RISK &&
+    CommandGuard.normalizePermission('乱写的') === CommandGuard.PERMISSION_ASK_RISK
+)
+
+// —— 工具面：命令工具确实下发给工作模式，且被交互模式物理裁掉 ——
+WorkFileService.toolRegistrySynced()
+check(
+  '四个命令工具都进了注册中心',
+  ['run_command', 'job_list', 'job_output', 'job_kill'].every((n) => ToolRegistry.has(n))
+)
+check(
+  '交互模式拿不到命令工具（白名单物理裁剪，不是靠提示词劝）',
+  !ToolRegistry.interactiveAllows('run_command') && !ToolRegistry.interactiveAllows('job_kill')
+)
+check(
+  '工具目录里写了 run_command 及其边界（模型才看得见约束）',
+  PromptBuilder.toolsDirectory().includes('run_command(command') &&
+    PromptBuilder.toolsDirectory().includes('在任何档位下直接拒绝')
+)
+check(
+  '人工等待类工具的外层护栏已盖住「等人 + 执行」（否则审批卡还挂着就先判超时）',
+  ToolRegistry.findMeta('run_command').timeoutMs === mod.Constants.WORK_CMD_TOOL_GUARD_TIMEOUT_MS &&
+    ToolRegistry.findMeta('run_command').timeoutMs >
+      mod.Constants.WORK_ASK_WAIT_TIMEOUT_MS + mod.Constants.WORK_CMD_MAX_TIMEOUT_MS &&
+    ToolRegistry.findMeta('ask_user_question').timeoutMs === mod.Constants.WORK_ASK_TOOL_GUARD_TIMEOUT_MS
+)
+
+// —— 执行层：真的拉起进程 ——
+const autoInfo = await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_AUTO)
+check(
+  'workspace:setCommandPermission 写入档位并回给界面新状态',
+  autoInfo.commandPermission === CommandGuard.PERMISSION_AUTO &&
+    CommandService.permissionFor(convCmd.id) === CommandGuard.PERMISSION_AUTO
+)
+check(
+  '非法档位被拒绝（界面只给三档，但主进程不靠界面守）',
+  (await inv('workspace:setCommandPermission', convCmd.id, 'everything-goes').catch((e) => e)) instanceof Error
+)
+const convFile = fs.readFileSync(path.join(dataRoot, 'files', 'guncat_conversations.json'), 'utf8')
+const persistedConv = JSON.parse(convFile).find((c) => c.id === convCmd.id)
+check(
+  '档位写进会话元数据文件（对齐 workspacePath 的持久化路径，重启还认）',
+  persistedConv !== undefined && persistedConv.commandPermission === CommandGuard.PERMISSION_AUTO
+)
+const neverSet = JSON.parse(convFile).find(
+  (c) => c.commandPermission === '' || c.commandPermission === undefined
+)
+check(
+  '没设置过的会话落到默认档（旧数据不会悄悄变成 auto）',
+  neverSet !== undefined && CommandService.permissionFor(neverSet.id) === CommandGuard.PERMISSION_ASK_RISK
+)
+
+const echoResult = await CommandService.run(convCmd.id, cmdRoot, { command: 'node -p 1+1' }, null)
+check(
+  '无害命令在 auto 档直接执行并拿到输出（退出码 0、stdout 回来了）',
+  echoResult.ok === true && echoResult.output.includes('退出码 0') && echoResult.output.includes('2'),
+  echoResult.output.slice(0, 120)
+)
+
+const forbiddenRun = await CommandService.run(
+  convCmd.id, cmdRoot, { command: isWin ? 'format D:' : 'mkfs.ext4 /dev/sda1' }, null
+)
+events.length = 0
+check(
+  '硬禁命令被直接拒绝，且**没有**弹出审批卡（点了允许也不该跑的操作）',
+  forbiddenRun.ok === false &&
+    forbiddenRun.output.includes('安全策略拒绝') &&
+    !events.some((e) => e.type === 'ask:user')
+)
+
+const escapeRun = await CommandService.run(
+  convCmd.id, cmdRoot, { command: 'node -p 1+1', cwd: '../../../Windows' }, null
+)
+check(
+  'cwd 越出工作区被拒绝（命令不会在别人目录里跑起来）',
+  escapeRun.ok === false && escapeRun.output.includes('cwd')
+)
+
+process.env.GUNCAT_FAKE_API_KEY = 'sk-should-never-leak'
+const envRun = await CommandService.run(convCmd.id, cmdRoot, { command: isWin ? 'set' : 'env' }, null)
+check(
+  '子进程环境按白名单净化：主进程里的密钥没有透传（PATH 在、伪造 Key 不在）',
+  envRun.output.includes('sk-should-never-leak') === false && /path[=]/i.test(envRun.output),
+  envRun.output.slice(0, 80)
+)
+delete process.env.GUNCAT_FAKE_API_KEY
+
+const slowCmd = 'node -e "setTimeout(function(){},20000)"'
+const timedRun = await CommandService.run(convCmd.id, cmdRoot, { command: slowCmd, timeout_ms: 500 }, null)
+check(
+  '超时先于外层护栏触发，并如实标注进程树已被终止',
+  timedRun.ok === false && timedRun.timeout === true && timedRun.output.includes('进程树已被终止'),
+  timedRun.output.slice(0, 120)
+)
+
+// —— 审批链路：默认档下危险命令要人批准，且没人批准就是不执行 ——
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_ASK_RISK)
+const riskyCmd = isWin ? 'del nothing-here.txt' : 'rm -f nothing-here.txt'
+
+async function askOnce(answer) {
+  events.length = 0
+  const runPromise = CommandService.run(convCmd.id, cmdRoot, { command: riskyCmd }, null)
+  const askEvent = await waitForEvent((e) => e.type === 'ask:user')
+  if (askEvent === null) {
+    return { askEvent: null, result: await runPromise }
+  }
+  await inv('work:answer', {
+    conversationId: convCmd.id,
+    requestId: askEvent.requestId,
+    canceled: answer.canceled === true,
+    selections: answer.selections ?? [],
+    note: answer.note ?? ''
+  })
+  return { askEvent, result: await runPromise }
+}
+
+const denied = await askOnce({ selections: ['拒绝'] })
+check(
+  '危险命令在默认档下弹出审批卡（问题里写清目录、风险与命令原文）',
+  denied.askEvent !== null &&
+    denied.askEvent.question.includes('需要你批准') &&
+    denied.askEvent.question.includes(riskyCmd) &&
+    denied.askEvent.question.includes('风险') &&
+    denied.askEvent.options.length === 3,
+  denied.askEvent === null ? '(没有审批卡)' : denied.askEvent.question.slice(0, 60)
+)
+check(
+  '用户点「拒绝」→ 命令没有执行，并把理由送回模型',
+  denied.result.ok === false && denied.result.output.includes('命令未执行') && denied.result.output.includes('用户明确拒绝')
+)
+
+const skippedAsk = await askOnce({ canceled: true })
+check(
+  '用户点跳过 → 同样按拒绝处理（fail-closed：沉默不等于同意）',
+  skippedAsk.result.ok === false && skippedAsk.result.output.includes('未获得批准')
+)
+
+const silent = await askOnce({ selections: [], note: '先看看' })
+check(
+  '只写补充说明、没点许可项 → 仍按拒绝处理（不能把没点按钮当批准）',
+  silent.result.ok === false && silent.result.output.includes('没有点选许可项')
+)
+
+const once = await askOnce({ selections: ['允许一次'], note: '只准删这一个文件' })
+check(
+  '点「允许一次」→ 命令真的执行了，且用户补充要求回写给模型',
+  once.result.ok === true &&
+    once.result.output.includes('[run_command] 退出码') &&
+    once.result.output.includes('只准删这一个文件'),
+  once.result.output.slice(0, 120)
+)
+
+const granted = await askOnce({ selections: ['本次任务全部允许'] })
+check(
+  '点「本次任务全部允许」→ 这一条执行成功',
+  granted.result.ok === true && granted.result.output.includes('已批准的危险项')
+)
+events.length = 0
+const afterGrant = await CommandService.run(convCmd.id, cmdRoot, { command: riskyCmd }, null)
+check(
+  '同一任务内的后续危险命令不再重复打扰用户',
+  afterGrant.ok === true && !events.some((e) => e.type === 'ask:user')
+)
+CommandService.clearGrant(convCmd.id)
+const afterClear = await askOnce({ selections: ['拒绝'] })
+check(
+  '新一轮任务开始会收回「本次任务全部允许」（授权不跨任务残留）',
+  afterClear.askEvent !== null && afterClear.result.ok === false
+)
+
+// —— 后台任务 ——
+const bgRun = await CommandService.run(
+  convCmd.id,
+  cmdRoot,
+  { command: 'node -e "console.log(7);setTimeout(function(){},20000)"', run_in_background: true },
+  null
+)
+check(
+  'run_in_background 立刻返回任务 id，不在本轮里等它',
+  bgRun.ok === true && bgRun.output.includes('已放入后台') && /cmd-\d+/.test(bgRun.output),
+  bgRun.output.slice(0, 80)
+)
+const bgId = (bgRun.output.match(/cmd-\d+/)?.[0]) ?? ''
+// 等半秒：刚拉起的进程还没来得及把 stdout 刷出来，这时读只会得到「没有新增输出」，
+// 那就验证不到「增量读」这件事了（job_list 的状态断言不受影响）。
+await new Promise((resolve) => setTimeout(resolve, 500))
+const jobList1 = CommandService.listJobs(convCmd.id)
+check(
+  'job_list 看得到运行中的后台任务',
+  jobList1.ok === true && jobList1.output.includes(bgId) && jobList1.output.includes('运行中')
+)
+const jobOut1 = CommandService.jobOutput(convCmd.id, cmdRoot, { job_id: bgId })
+check(
+  'job_output 读到已产生的输出',
+  jobOut1.ok === true && jobOut1.output.includes('7') && jobOut1.output.includes('仍在运行'),
+  jobOut1.output
+)
+const jobOut2 = CommandService.jobOutput(convCmd.id, cmdRoot, { job_id: bgId })
+check(
+  '游标读后即弃：第二次调用不会重复给同一段输出',
+  jobOut2.ok === true && jobOut2.output.includes('没有新增输出')
+)
+const killed = CommandService.killJob(convCmd.id, { job_id: bgId })
+check('job_kill 终止后台任务', killed.ok === true && killed.output.includes('已终止'))
+await new Promise((resolve) => setTimeout(resolve, 400))
+check(
+  '终止后 job_list 如实报「已被终止」（不是继续说运行中）',
+  CommandService.listJobs(convCmd.id).output.includes('已被终止')
+)
+check(
+  '未知 job id 明确报错，不会静默返回空',
+  CommandService.jobOutput(convCmd.id, cmdRoot, { job_id: 'cmd-999' }).ok === false &&
+    CommandService.killJob(convCmd.id, { job_id: 'cmd-999' }).ok === false
+)
+
+// —— 会话删除与退出都要收掉进程 ——
+const convLeak = await inv('conversations:create', agents[0].id, 'work')
+await inv('workspace:list', convLeak.id)
+await inv('workspace:setCommandPermission', convLeak.id, CommandGuard.PERMISSION_AUTO)
+const leakRoot = session.workspaceRoot(convLeak.id)
+const leakRun = await CommandService.run(
+  convLeak.id,
+  leakRoot,
+  { command: 'node -e "setTimeout(function(){},20000)"', run_in_background: true },
+  null
+)
+const leakId = (leakRun.output.match(/cmd-\d+/)?.[0]) ?? ''
+await inv('conversations:delete', convLeak.id)
+check(
+  '删除会话会带走它的后台进程与档位（不留孤儿进程）',
+  leakId !== '' &&
+    CommandService.listJobs(convLeak.id).output.includes('没有后台任务') &&
+    CommandService.permissionFor(convLeak.id) === CommandGuard.PERMISSION_ASK_RISK
+)
+const stillRunning = CommandService.listJobs(convCmd.id)
+CommandService.killAllJobs()
+check(
+  '应用退出的收尾路径可用（killAllJobs 之后不再有任务）',
+  stillRunning.output !== '' && CommandService.listJobs(convCmd.id).output.includes('没有后台任务')
+)
+
+console.log(`\nrun_command 验证：通过 ${passed} 项（累计）`)
+
+// 后台命令的进程刚刚被杀，Windows 上还压着「目录被占用」的句柄，立刻整树删除会 EPERM。
+function rmrfRetry(target, tries = 8) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      fs.rmSync(target, { recursive: true, force: true })
+      return
+    } catch {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300)
+    }
+  }
+}
+
 console.log(`\nIPC 验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')
@@ -3285,5 +3614,5 @@ if (failed > 0) {
     console.log(`  - ${f}`)
   }
 }
-fs.rmSync(dataRoot, { recursive: true, force: true })
+rmrfRetry(dataRoot)
 process.exitCode = failed === 0 ? 0 : 1

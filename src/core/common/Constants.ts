@@ -233,10 +233,30 @@ export class Constants {
   static readonly WORK_JS_OUTPUT_TOTAL_KB: number = 4096;
   // 超时被放弃的执行(无法回收的线程)达到该数量后拒绝再执行, 避免持续耗电
   static readonly WORK_JS_MAX_ABANDONED: number = 2;
+  // ===== 终端能力 run_command(桌面端独有, 见 service/CommandService 与 platform/shellExec) =====
+  // 前台命令的默认/最大超时(毫秒)。命令自己的超时一定先于外层护栏触发, 外层只负责
+  // 在解释器挂死、流不退出时把等待收回来 —— 护栏值见下面 WORK_CMD_TOOL_GUARD_TIMEOUT_MS。
+  static readonly WORK_CMD_DEFAULT_TIMEOUT_MS: number = 30000;
+  static readonly WORK_CMD_MAX_TIMEOUT_MS: number = 300000;
+  // 单条流(stdout/stderr)的输出缓冲上限(超出丢弃开头、保留结尾, 并在结果里如实标注)
+  static readonly WORK_CMD_STREAM_BUFFER_BYTES: number = 256 * 1024;
+  // 提问/审批卡在界面上的等待上限(毫秒): ask_user_question 与 run_command 的审批卡同一口径。
+  // 审批超时/跳过一律按**拒绝**处理 —— fail-closed, 没人应答就等于不许。
+  static readonly WORK_ASK_WAIT_TIMEOUT_MS: number = 300000;
+  // 后台任务数上限 / 单个后台任务的输出缓冲上限 / job_output 单次返回的字符上限
+  static readonly WORK_CMD_MAX_JOBS: number = 8;
+  static readonly WORK_CMD_JOB_BUFFER_BYTES: number = 512 * 1024;
+  static readonly WORK_CMD_JOB_OUTPUT_MAX_CHARS: number = 8000;
+  // 人工等待类工具的**外层护栏**超时(毫秒)。护栏在 WorkToolRunner 外面, 默认只有
+  // WORK_TOOL_TIMEOUT_MS(180s)—— 而那两类工具等的是「人在界面里读题、决定」:
+  // 外层先判超时会把 ERROR 送回模型, 可审批卡/提问卡还挂在界面上, 用户随后点的答案
+  // 落进一次已经返回的调用里(静默丢弃), 命令进程也还在后台跑。所以护栏必须盖满
+  // 「等待上限 + 真正的执行上限 + 余量」。
+  static readonly WORK_CMD_TOOL_GUARD_TIMEOUT_MS: number = 660000;  // 300000 审批 + 300000 命令 + 60000 余量
+  static readonly WORK_ASK_TOOL_GUARD_TIMEOUT_MS: number = 360000;  // 300000 等待 + 60000 余量
   // 工具并发执行的滚动池大小(对齐 dsh 的 maxParallelToolCalls, 只作用于只读并行段)
   static readonly WORK_MAX_PARALLEL_TOOLS: number = 4;
-  static readonly WORK_ALLOW_PARALLEL_TOOLS: boolean = true;
-  // 子代理并行派发: 是否把 subagent 归入并行组 + 全局最大并发子代理数(与只读池一致取 4)
+  static readonly WORK_ALLOW_PARALLEL_TOOLS: boolean = true;  // 子代理并行派发: 是否把 subagent 归入并行组 + 全局最大并发子代理数(与只读池一致取 4)
   static readonly WORK_ALLOW_PARALLEL_SUBAGENTS: boolean = true;
   static readonly WORK_MAX_PARALLEL_SUBAGENTS: number = 4;
   // 循环主体是否走 WorkLoopDriver 纯驱动(接入桥梁见 service/WorkLoopDriverBridge.ts):

@@ -250,6 +250,11 @@ export function registerIpcHandlers(session: SessionManager): void {
     async (_e, conversationId: string, dir: string | null): Promise<WorkspaceInfoDto> =>
       session.setWorkspaceDirectory(conversationId, dir)
   )
+  ipcMain.handle(
+    INVOKE.workspaceSetCommandPermission,
+    async (_e, conversationId: string, permission: string): Promise<WorkspaceInfoDto> =>
+      session.setCommandPermission(conversationId, permission)
+  )
   ipcMain.handle(INVOKE.workspaceClear, async (_e, conversationId: string) => {
     // 自定义工作区是用户自己的目录，「一键清空整个目录」不该出现在这条路上
     //（界面也会把按钮藏掉；这里是主进程侧的第二道闸）。

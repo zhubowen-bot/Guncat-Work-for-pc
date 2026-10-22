@@ -124,6 +124,8 @@ const api = {
       ipcRenderer.invoke(INVOKE.workspacePickDirectory),
     setCustom: (conversationId: string, dir: string | null): Promise<WorkspaceInfoDto> =>
       ipcRenderer.invoke(INVOKE.workspaceSetCustom, conversationId, dir),
+    setCommandPermission: (conversationId: string, permission: string): Promise<WorkspaceInfoDto> =>
+      ipcRenderer.invoke(INVOKE.workspaceSetCommandPermission, conversationId, permission),
     exportZip: (conversationId: string): Promise<{ saved: boolean; path?: string }> =>
       ipcRenderer.invoke(INVOKE.workspaceExportZip, conversationId)
   },

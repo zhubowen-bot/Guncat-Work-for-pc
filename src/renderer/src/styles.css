@@ -2459,6 +2459,34 @@ select {
   color: var(--warn);
 }
 
+/* 命令审批档位行：紧接在「位置」行下面，控件与 speech-bar 的紧凑下拉一致 */
+.workspace__perm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 11px;
+}
+
+.workspace__perm-label {
+  color: var(--text-faint);
+}
+
+.workspace__perm-select {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  font-size: 12px;
+}
+
+.workspace__perm-select:disabled {
+  opacity: 0.55;
+}
+
 .workspace__stats {
   display: flex;
   gap: 10px;

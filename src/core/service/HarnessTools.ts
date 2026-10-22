@@ -3,7 +3,8 @@
 // str-replace-editor) / web_fetch(对齐 web-fetch-http) / ask_user_question(对齐 ask-user,
 // 经 AskUserBridge 挂起等界面作答) /
 // schedule_*/goal_*(会话级提醒与目标) / subagent(进程内嵌套代理) / session_search(事件日志检索) /
-// run_js(JSVM-API 沙箱, 见 JsCodeService —— 无 shell 环境下的"执行代码"能力)。
+// run_js(JSVM-API 沙箱, 见 JsCodeService —— 无 shell 环境下的"执行代码"能力) /
+// run_command+job_*(本机命令执行, 见 CommandService —— 危险命令走审批卡, 硬禁表直接拒绝)。
 // 与 WorkFileService 的既有 25 工具并存; dispatch 由 WorkFileService 兜底转发至此。
 import { fileIo } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
@@ -18,6 +19,8 @@ import { WebFetchService } from './WebFetchService';
 import { SessionLogService } from './SessionLogService';
 import { JsCodeService } from './JsCodeService';
 import { AskUserBridge, AskAnswer } from './AskUserBridge';
+import { CommandService, RUN_COMMAND_TOOL_NAME, JOB_LIST_TOOL_NAME,
+  JOB_OUTPUT_TOOL_NAME, JOB_KILL_TOOL_NAME } from './CommandService';
 import { ToolExecResult, WorkFileService } from './WorkFileService';
 import { Constants } from '../common/Constants';
 import { AbortSignal } from '../common/Types';
@@ -84,14 +87,16 @@ export class HarnessTools {
 
   static isReadOnly(name: string): boolean {
     return name === 'glob' || name === 'grep' || name === 'web_fetch' ||
-      name === 'schedule_list' || name === 'goal_get' || name === 'session_search';
+      name === 'schedule_list' || name === 'goal_get' || name === 'session_search' ||
+      name === JOB_LIST_TOOL_NAME;
   }
 
   static isMutating(name: string): boolean {
     return name === 'edit' || name === 'str_replace_editor' ||
       name === 'goal_create' || name === 'goal_update' ||
       name === 'schedule_create' || name === 'schedule_delete' ||
-      name === 'run_js';
+      name === 'run_js' || name === RUN_COMMAND_TOOL_NAME ||
+      name === JOB_OUTPUT_TOOL_NAME || name === JOB_KILL_TOOL_NAME;
   }
 
   // ===== 分发(由 WorkFileService.dispatchTool 兜底转发) =====
@@ -180,6 +185,19 @@ export class HarnessTools {
     }
     if (name === JsCodeService.TOOL_NAME) {
       return await JsCodeService.run(root, args);
+    }
+    // 本机命令执行(安全边界见 CommandService): 审批走 AskUserBridge 同一条挂起链路
+    if (name === RUN_COMMAND_TOOL_NAME) {
+      return await CommandService.run(convId, root, args, abortSignal ?? null);
+    }
+    if (name === JOB_LIST_TOOL_NAME) {
+      return CommandService.listJobs(convId);
+    }
+    if (name === JOB_OUTPUT_TOOL_NAME) {
+      return CommandService.jobOutput(convId, root, args);
+    }
+    if (name === JOB_KILL_TOOL_NAME) {
+      return CommandService.killJob(convId, args);
     }
     return HarnessTools.fail('未知工具: ' + name);
   }
@@ -484,7 +502,7 @@ export class HarnessTools {
     let noteAllowed: boolean = HarnessTools.boolArg(args, 'allow_note', true);
     // 5 分钟未回答按取消处理, 避免工具永久挂起
     let answer: AskAnswer | null = await AskUserBridge.ask(question, options, multiSelect,
-      300000, convId);
+      Constants.WORK_ASK_WAIT_TIMEOUT_MS, convId);
     if (answer === null) {
       return HarnessTools.fail('用户未回答(已取消), 请基于合理假设继续, 并在总结中标注该假设');
     }
@@ -657,6 +675,35 @@ export class HarnessTools {
         'files', HarnessTools.strProp('可选: 要预载为只读输入的工作区文件相对路径(如 "data/in.csv"), 多个用逗号或 JSON 数组分隔(最多 6 个, 单个 ≤512KB); 不传则脚本里没有可读输入, 需要文件内容时必须传'),
         'timeout_ms', HarnessTools.strProp('可选: 执行超时毫秒数, 默认 10000, 范围 1000~30000')),
       ['code']));
+    defs.push(HarnessTools.makeTool(RUN_COMMAND_TOOL_NAME,
+      '在本机执行一条命令行命令(Windows 用 cmd, macOS/Linux 用 sh), 工作目录固定在本会话工作区。' +
+      '用于必须走真实工具链的活: 跑测试/构建脚本、node/npm/python/git 等本机程序、调用项目自带的 CLI、把文件转格式(在用户已授权目录内)。**边界(重要)**: ' +
+      '① cwd 只能是工作区内的相对子目录, 读写工作区之外会被安全策略拦下; ' +
+      '② 破坏性/外溢性命令(删除文件、改系统配置或服务、装全局包、git push、下载并执行网络内容、读凭据文件等)会先弹出审批卡请用户批准, ' +
+      '用户不批准(或超时/跳过)一律返回 ERROR —— 此时**不要重复请求同一条命令**, 改用别的工具或把命令写进回答交给用户; ' +
+      '③ 格式化磁盘/关机一类不可逆的系统级操作被硬性禁止, 不会询问也不会执行; ' +
+      '④ 环境变量按白名单净化, 依赖主进程环境变量的写法(如 $env:API_KEY)在这里拿不到值。' +
+      '默认 30 秒超时(最大 300 秒), 超时会终止整棵进程树; 需要更久请传 run_in_background=true 放后台, 用 job_output/job_list/job_kill 跟进。' +
+      '输出超过约 1.2 万字符会头尾截断, 全文落工作区 .spill/。' +
+      '**能不用 shell 就别用**: 读文件用 read_file、找文件用 glob、搜内容用 grep、算数与加工数据用 run_js(更快也更安全), 只有确实需要本机程序时才用它。',
+      HarnessTools.props4(
+        'command', HarnessTools.strProp('要执行的命令行(不是交互会话, 一次一条; 需要多步用 && 或 ; 串起来)'),
+        'cwd', HarnessTools.strProp('可选: 工作区内的相对子目录作为工作目录, 如 "project"; 不允许绝对路径或 .. 越界; 留空为工作区根'),
+        'timeout_ms', HarnessTools.strProp('可选: 超时毫秒数, 默认 30000, 最大 300000; 超时即终止进程树'),
+        'run_in_background', HarnessTools.boolProp('可选: true 时立即返回任务 id, 命令继续在后台跑')),
+      ['command']));
+    defs.push(HarnessTools.makeTool(JOB_LIST_TOOL_NAME,
+      '列出本会话的后台命令任务: id、状态(运行中/退出码/已终止)、未读输出字符数、命令与工作目录。',
+      HarnessTools.props0(),
+      []));
+    defs.push(HarnessTools.makeTool(JOB_OUTPUT_TOOL_NAME,
+      '读取指定后台任务**自上次读取以来**的新增输出(读后即弃: 下一次调用不会重复给同一段)。任务结束时一并给出退出码。没有 TTY, 交互式程序(等输入)不会工作。',
+      HarnessTools.props1('job_id', HarnessTools.strProp('任务 id, 见 job_list 或 run_command 的后台返回')),
+      ['job_id']));
+    defs.push(HarnessTools.makeTool(JOB_KILL_TOOL_NAME,
+      '终止一个后台任务(连同它派生的子进程一起结束)。',
+      HarnessTools.props1('job_id', HarnessTools.strProp('任务 id, 见 job_list')),
+      ['job_id']));
     return defs;
   }
 
@@ -830,6 +877,13 @@ export class HarnessTools {
   private static strProp(description: string): Record<string, Object> {
     return {
       'type': 'string',
+      'description': description
+    };
+  }
+
+  private static boolProp(description: string): Record<string, Object> {
+    return {
+      'type': 'boolean',
       'description': description
     };
   }

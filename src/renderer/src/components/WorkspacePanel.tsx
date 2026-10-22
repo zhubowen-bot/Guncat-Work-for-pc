@@ -415,6 +415,21 @@ export function WorkspacePanel() {
     }
   }
 
+  /** 命令审批档位：改完立刻刷新这一行（主进程返回的就是新的 info） */
+  async function applyPermission(permission: string): Promise<void> {
+    if (activeId === null) {
+      return
+    }
+    try {
+      const info = await window.guncat.workspace.setCommandPermission(activeId, permission)
+      setRootInfo(info)
+      const picked = COMMAND_PERMISSIONS.find((p) => p.value === info.commandPermission)
+      pushNotice('info', `命令审批：${picked !== undefined ? picked.label : info.commandPermission}`)
+    } catch (e) {
+      pushNotice('warn', String(e instanceof Error ? e.message : e))
+    }
+  }
+
   async function refreshTree(): Promise<void> {
     if (activeId === null) {
       setTree({})
@@ -636,6 +651,27 @@ export function WorkspacePanel() {
         </div>
       ) : null}
 
+      {/* 命令审批档位（见 COMMAND_PERMISSIONS 的说明）：智能体能跑命令了，
+          「哪些要先问你」这一行必须摆在用户看得见的位置。 */}
+      {rootInfo !== null ? (
+        <div className="workspace__perm">
+          <span className="workspace__perm-label">命令审批</span>
+          <select
+            className="workspace__perm-select"
+            disabled={running}
+            value={rootInfo.commandPermission}
+            title={running ? '任务执行中，稍后再改' : COMMAND_PERMISSIONS.find((p) => p.value === rootInfo.commandPermission)?.hint}
+            onChange={(e) => void applyPermission(e.target.value)}
+          >
+            {COMMAND_PERMISSIONS.map((p) => (
+              <option key={p.value} value={p.value} title={p.hint}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
       {/* 本轮统计卡（对齐原版 DetailsPanelView.ets:143-157）。
           任务用时用「会话工作秒数」这个每秒 +1 的计数（原版 workElapsedSec 同口径），
           所以它会**逐秒走字**；速度/命中取最后一条 assistant；
@@ -764,6 +800,31 @@ function rootLabel(info: WorkspaceInfoDto): string {
   const segs: string[] = trimmed.split(/[\\/]/)
   return segs[segs.length - 1] !== '' ? segs[segs.length - 1] : trimmed
 }
+
+/**
+ * 命令审批档位（取值与 core 的 CommandGuard.PERMISSIONS 一致）。
+ *
+ * 这一行存在的理由：智能体现在能在本机跑命令了，「跑到哪一步要先问你」必须由用户说了算，
+ * 而不是由模型决定。三档改的只是**要不要弹审批卡**；格式化磁盘、关机这类毁灭性操作
+ * 在任何档位下都会被直接拒绝，连批准的机会都没有。
+ */
+export const COMMAND_PERMISSIONS: { value: string; label: string; hint: string }[] = [
+  {
+    value: 'ask-risk',
+    label: '危险命令需批准',
+    hint: '默认档。删除文件、改系统配置或服务、安装全局包、git push、从网络下载等有风险命令会先请你批准，其余直接执行'
+  },
+  {
+    value: 'ask',
+    label: '每条都批准',
+    hint: '每条命令执行前都要你批准，包括看起来无害的'
+  },
+  {
+    value: 'auto',
+    label: '自动批准',
+    hint: '命令不再逐个批准。毁灭性操作（格式化磁盘、关机等）在任何档位下都会被直接拒绝'
+  }
+]
 
 export function useWorkspacePreview(activeId: string | null) {
   const pushNotice = useStore((s) => s.pushNotice)

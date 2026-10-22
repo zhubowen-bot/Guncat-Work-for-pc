@@ -5,6 +5,7 @@ import { createElement } from 'react'
 import { GuncatUiBlock } from '@renderer/guncat-ui/GuncatUiBlock'
 import { ToolCallRow } from '@renderer/components/Disclosure'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
+import { CommandGuard } from '@core/service/CommandGuard'
 import { docxFileName } from '@renderer/fileName'
 import {
   WORK_AGENT_ID,
@@ -56,6 +57,7 @@ import {
   searchEngineHint
 } from '@renderer/components/SettingsDialog'
 import {
+  COMMAND_PERMISSIONS,
   TaskGoalCard,
   TaskStatsCard,
   WorkspacePanel,
@@ -230,6 +232,18 @@ export { workspaceFileIcon }
  */
 export function renderWorkspacePanel(): string {
   return renderToStaticMarkup(createElement(WorkspacePanel))
+}
+
+/**
+ * 命令审批档位行的数据（面板那个下拉的三档）。
+ * 连同 core 的权威档位表一起返回，是为了让断言能钉住「界面上写出去的档位，主进程真的认」——
+ * 两边各抄一份字面量的话，早晚会漂成一个 UI 有、执行层不认的档位。
+ */
+export function commandPermissionRows(): {
+  rows: { value: string; label: string; hint: string }[]
+  guardPermissions: string[]
+} {
+  return { rows: COMMAND_PERMISSIONS, guardPermissions: CommandGuard.PERMISSIONS }
 }
 
 /** 工作区文件行的扩展名图标：返回「扩展名 → 渲染出来的 SVG」映射，供断言分类是否生效 */

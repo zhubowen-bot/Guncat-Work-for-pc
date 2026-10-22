@@ -65,10 +65,14 @@ export class WorkFileService {
   // 首次访问时把工具定义 + 只读/变更分类同步进注册中心(单例, 后续走 ToolRegistry)
   private static ensureToolRegistry(): void {
     let readOnly: string[] = WorkFileService.workReadOnlyNames();
-    readOnly = readOnly.concat(['glob', 'grep', 'web_fetch', 'schedule_list', 'goal_get', 'session_search']);
+    readOnly = readOnly.concat(['glob', 'grep', 'web_fetch', 'schedule_list', 'goal_get',
+      'session_search', 'job_list']);
     let mutating: string[] = WorkFileService.workMutatingNames();
     mutating = mutating.concat(['edit', 'str_replace_editor', 'goal_create', 'goal_update',
-      'schedule_create', 'schedule_delete', 'run_js']);
+      'schedule_create', 'schedule_delete', 'run_js',
+      // 命令执行: run_command 当然算变更; job_output 虽名为"读", 但它会推进"读后即弃"的游标,
+      // 放进只读并行池会让同一任务的输出被两次调用各读一半 —— 必须串行。
+      'run_command', 'job_output', 'job_kill']);
     ToolRegistry.ensure(WorkFileService.toolDefs(false), readOnly, mutating);
     // 并行安全标注(核心工具, 独立于只读/变更分类): subagent 是独立上下文/独立 LLM 循环的
     // 嵌套代理, 可与其他 subagent 并发派发; 由 ToolScheduler 归入并行组。
@@ -76,6 +80,14 @@ export class WorkFileService {
     for (let i: number = 0; i < parallelSafe.length; i++) {
       ToolRegistry.setParallelSafe(parallelSafe[i], true);
     }
+    // 运行期护栏超时: 这两类工具等的是**人**, 不是机器。外层默认 WORK_TOOL_TIMEOUT_MS(180s)
+    // 比卡片的等待上限(300s)更短, 于是护栏先返回「工具执行超时」, 而提问卡/审批卡还挂在界面上、
+    // 命令进程还在后台跑 —— 用户之后点的那一下落进一次已经结束的调用里, 静默丢弃。
+    // 护栏必须盖满「人工等待上限 + 真正的执行上限」, 见 Constants 的同名常量。
+    ToolRegistry.setRuntimeConfig('ask_user_question',
+      Constants.WORK_ASK_TOOL_GUARD_TIMEOUT_MS, 0);
+    ToolRegistry.setRuntimeConfig('run_command',
+      Constants.WORK_CMD_TOOL_GUARD_TIMEOUT_MS, 0);
   }
 
   // 供外部(SubagentService/插件层)确保注册中心已同步

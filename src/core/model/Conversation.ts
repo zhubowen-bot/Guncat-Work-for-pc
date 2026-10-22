@@ -12,6 +12,9 @@ export class Conversation {
   mode: string = 'chat';
   // 自定义工作区绝对路径; 空串 = 默认沙箱目录(filesDir/workspaces/<id>)
   workspacePath: string = '';
+  // run_command 的审批档位: 'ask' 每条都问 | 'ask-risk' 危险才问(默认) | 'auto' 全自动(硬禁仍生效)
+  // 空串 = 未设置, 按默认档处理(与 workspacePath 一样要过 JSON 往返, 否则重启就丢)
+  commandPermission: string = '';
 
   static create(agentId: string, title: string, mode: string): Conversation {
     let conv: Conversation = new Conversation();
@@ -31,6 +34,7 @@ export class Conversation {
     conv.createdAt = (json['createdAt'] as number) ?? 0;
     conv.mode = (json['mode'] as string) ?? 'chat';
     conv.workspacePath = (json['workspacePath'] as string) ?? '';
+    conv.commandPermission = (json['commandPermission'] as string) ?? '';
     let raw: Object = json['messages'];
     if (raw !== undefined) {
       let rawMessages: Object[] = raw as Object[];
@@ -55,7 +59,8 @@ export class Conversation {
       'messages': msgs,
       'createdAt': this.createdAt,
       'mode': this.mode,
-      'workspacePath': this.workspacePath
+      'workspacePath': this.workspacePath,
+      'commandPermission': this.commandPermission
     };
   }
 }

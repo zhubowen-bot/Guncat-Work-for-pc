@@ -94,6 +94,8 @@ export interface GuncatApi {
     pickDirectory(): Promise<string | null>
     /** 切换工作区目录；dir=null 恢复默认沙箱 */
     setCustom(conversationId: string, dir: string | null): Promise<WorkspaceInfoDto>
+    /** 命令审批档位：'ask' 每条都问 | 'ask-risk' 危险才问 | 'auto' 全自动（硬禁仍生效） */
+    setCommandPermission(conversationId: string, permission: string): Promise<WorkspaceInfoDto>
   }
   app: {
     info(): Promise<AppInfoDto>

@@ -88,6 +88,11 @@ export const INVOKE = {
   workspacePickDirectory: 'workspace:pickDirectory',
   /** 把会话工作区切到任意目录（dir=null 恢复默认沙箱） */
   workspaceSetCustom: 'workspace:setCustom',
+  /**
+   * 设置本会话的命令审批档位（'ask' | 'ask-risk' | 'auto'）。
+   * 存会话元数据（与 workspacePath 同样持久化），返回更新后的 workspace:info 负载。
+   */
+  workspaceSetCommandPermission: 'workspace:setCommandPermission',
   /** 用系统默认程序打开工作区内的某个文件（越界校验与 read 同一条路） */
   workspaceOpenFile: 'workspace:openFile',
   /** 在文件管理器中定位工作区内的某个文件（shell.showItemInFolder） */
@@ -484,6 +489,12 @@ export interface WorkspaceInfoDto {
   isCustom: boolean
   /** 目录当前是否仍存在（自定义目录被移动/删除时为 false，界面要如实提示） */
   exists: boolean
+  /**
+   * 本会话的命令审批档位：'ask' 每条都问 | 'ask-risk' 危险才问（默认）| 'auto' 全自动。
+   * 由 run_command 工具消费（见 core/service/CommandService），界面在面板里给一个选择行。
+   * 'auto' 也只是「不弹审批卡」—— CommandGuard 的硬禁表照样直接拒绝。
+   */
+  commandPermission: string
 }
 
 // ===== 事件（主进程 → 渲染进程） =====

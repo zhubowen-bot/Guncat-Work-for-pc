@@ -15,6 +15,7 @@ import { registerIpcHandlers } from './ipc'
 import { collectFileArgs } from './intake'
 import { installAppIdentity, installApplicationMenu } from './appmenu'
 import { SessionManager } from './session/SessionManager'
+import { CommandService } from '@core/service/CommandService'
 import { createMainWindow, getMainWindow, rendererDir, setPendingFlush, setRendererStalledHandler, setCompatMode, showLoadError } from './window'
 import { serveRenderer, registerAppScheme } from './protocol'
 import { buildCompatArgs, FRESH_PROFILE_FLAG, isCompatMode } from './compat'
@@ -350,6 +351,13 @@ if (!gotLock) {
   })
 
   app.on('will-quit', () => {
+    // 后台命令（run_command 的 run_in_background）不会跟着窗口一起没 ——
+    // 应用退出时把它们连同进程树收掉，否则用户关掉应用后机器上还留着一堆本应用拉起的进程。
+    try {
+      CommandService.killAllJobs()
+    } catch {
+      // 收尾失败不阻塞退出
+    }
     bootLog('=== 退出 ===')
   })
 }

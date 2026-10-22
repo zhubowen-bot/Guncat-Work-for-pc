@@ -55,6 +55,8 @@ import {
 } from '@core/service/LocalWebSearch'
 import { WEB_FETCH_TOOL_NAME, HarnessTools } from '@core/service/HarnessTools'
 import { AskUserBridge, PendingAsk, AskPhase } from '@core/service/AskUserBridge'
+import { CommandGuard } from '@core/service/CommandGuard'
+import { CommandService } from '@core/service/CommandService'
 import { ScheduleService } from '@core/service/ScheduleService'
 import { GoalService } from '@core/service/GoalService'
 import {
@@ -87,7 +89,8 @@ import type {
   MultimodalConfigDto,
   ToolCallRecordDto,
   WorkArtifactsDto,
-  WorkRunRequest
+  WorkRunRequest,
+  WorkspaceInfoDto
 } from '../../ipc/contract'
 import { REASONING_EFFORTS } from '../../ipc/contract'
 
@@ -208,13 +211,17 @@ export class SessionManager {
         conv.mode = fixed
       }
     }
-    // 自定义工作区目录回填：会话元数据里的 workspacePath 注册进 core 的路径咽喉点，
-    // 之后所有工具/面板/导出都按它取根目录。目录已失效（被移动/删除）的跳过注册并留 notice。
+    // 会话级 core 状态回填：workspacePath 注册进 core 的路径咽喉点（之后所有工具/面板/导出
+    // 都按它取根目录，目录已失效的跳过注册），commandPermission 注册进命令审批档位表。
+    // 两者同构：core 不认识 Electron，这些「按会话不同的设置」只能由主进程按会话带上。
     for (const conv of this.conversations) {
       if (conv.workspacePath !== '') {
         if (fs.existsSync(conv.workspacePath) && fs.statSync(conv.workspacePath).isDirectory()) {
           WorkFileService.setWorkspaceOverride(conv.id, conv.workspacePath)
         }
+      }
+      if (conv.commandPermission !== '') {
+        CommandService.setPermission(conv.id, conv.commandPermission)
       }
     }
     // 本地联网搜索配置同样在启动时绑定一次：渲染层虽然会在 init 里读一次设置，
@@ -587,6 +594,9 @@ export class SessionManager {
       return
     }
     this.conversations.splice(index, 1)
+    // 会话没了，它拉起的后台命令也没有归属了 —— 连同进程树一起收掉，
+    // 审批档位与「本次任务全部允许」的授权也一并清掉（id 不会复用，但别把注册表留成垃圾）。
+    CommandService.releaseConversation(id)
     try {
       WorkFileService.deleteWorkspace(this.ctx(), id)
     } catch {
@@ -1316,6 +1326,9 @@ export class SessionManager {
 
     const ctx: Context = this.ctx()
     WorkFileService.ensureWorkspace(ctx, conv.id)
+    // 每轮新任务都收回上一次的「本次任务全部允许」：它的字面范围就是本次任务，
+    // 跨过一轮还有效等于用户在自己的会话里永久签了张空白授权。
+    CommandService.clearGrant(conv.id)
 
     // 子代理工具通过钩子执行；这里注入当前配置，让 subagent 能独立发起请求
     SubagentService.bind(
@@ -2022,26 +2035,48 @@ export class SessionManager {
     return WorkFileService.workspaceRoot(this.ctx(), conversationId)
   }
 
-  /** 面板展示用：当前工作区根目录、是否为自定义、目录是否仍然存在 */
-  workspaceInfo(conversationId: string): { root: string; isCustom: boolean; exists: boolean } {
+  /** 面板展示用：当前工作区根目录、是否为自定义、目录是否仍然存在、命令审批档位 */
+  workspaceInfo(conversationId: string): WorkspaceInfoDto {
     const custom: string | null = WorkFileService.getWorkspaceOverride(conversationId)
     const root: string = this.workspaceRoot(conversationId)
+    const commandPermission: string = CommandService.permissionFor(conversationId)
     if (custom !== null) {
       // 目录失效时**不**自动 mkdir 一个空壳冒充用户的目录 —— 界面要如实报「已失效」
-      return { root, isCustom: true, exists: fs.existsSync(custom) && fs.statSync(custom).isDirectory() }
+      return {
+        root,
+        isCustom: true,
+        exists: fs.existsSync(custom) && fs.statSync(custom).isDirectory(),
+        commandPermission
+      }
     }
-    return { root, isCustom: false, exists: true }
+    return { root, isCustom: false, exists: true, commandPermission }
+  }
+
+  /**
+   * 设置本会话的命令审批档位。非法值不写（界面只给三档，走不到非法分支，但模型/旧数据可能给）。
+   * 硬禁表不受这个开关影响 —— 'auto' 的含义只是「危险命令也不弹审批卡」，
+   * 而不是「什么都能跑」，见 CommandGuard。
+   */
+  async setCommandPermission(conversationId: string, permission: string): Promise<WorkspaceInfoDto> {
+    const conv: Conversation = this.mustFind(conversationId)
+    if (CommandGuard.PERMISSIONS.indexOf(permission) === -1) {
+      throw new Error('未知的审批档位: ' + permission)
+    }
+    conv.commandPermission = permission
+    CommandService.setPermission(conversationId, permission)
+    await this.persist()
+    this.emit({ type: 'workspace:changed', conversationId })
+    return this.workspaceInfo(conversationId)
   }
 
   /**
    * 切换/恢复会话的工作区目录。dir=null 恢复默认沙箱。
    * 校验失败抛可读错误（界面直接 toast）；成功即持久化到会话元数据并全局生效。
    */
-  async setWorkspaceDirectory(conversationId: string, dir: string | null): Promise<{
-    root: string
-    isCustom: boolean
-    exists: boolean
-  }> {
+  async setWorkspaceDirectory(
+    conversationId: string,
+    dir: string | null
+  ): Promise<WorkspaceInfoDto> {
     const conv: Conversation = this.mustFind(conversationId)
     if (dir === null || dir === '') {
       WorkFileService.setWorkspaceOverride(conversationId, null)
