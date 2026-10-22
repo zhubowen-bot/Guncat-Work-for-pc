@@ -178,13 +178,21 @@ export class ApprovalReviewService {
     // 外层等待上限: 真实环境的模型没有「秒回」的保证, 而审批卡还等着结论。
     // 超时只改判定、不掐请求 —— 那个请求自己会结束(与主循环同一套网络层), 结论已经作废。
     let timedOut: boolean = false;
+    // 平台差异补丁: ArkTS 的 setTimeout 返回 number, Node 返回 Timeout 对象
+    let guardTimer: ReturnType<typeof setTimeout> | null = null;
     let guard: Promise<null> = new Promise<null>((resolve: (v: null) => void): void => {
-      setTimeout((): void => {
+      guardTimer = setTimeout((): void => {
         timedOut = true;
         resolve(null);
       }, Constants.WORK_APPROVAL_REVIEW_TIMEOUT_MS);
+      guardTimer.unref?.();
     });
     let winner: LoopTurnResult | null = await Promise.race<LoopTurnResult | null>([turn, guard]);
+    // 结论已经拿到了就不许再留着这张表: 每次审阅都留一个到点才释手的计时器,
+    // 攒起来就是「跑完不退、收尾空转」的那笔尾巴。
+    if (guardTimer !== null) {
+      clearTimeout(guardTimer);
+    }
     if (timedOut) {
       throw new Error('超过 ' + Math.round(Constants.WORK_APPROVAL_REVIEW_TIMEOUT_MS / 1000).toString() +
         ' 秒没有结论');

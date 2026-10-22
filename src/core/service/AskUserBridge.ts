@@ -38,6 +38,9 @@ export type AskNotifier = (item: PendingAsk, phase: AskPhase, answered: boolean)
 export class AskUserBridge {
   private static pending: Map<string, PendingAsk> = new Map();
   private static resolvers: Map<string, (answer: AskAnswer | null) => void> = new Map();
+  // 每张卡的兜底计时器：落定（作答/取消/超时）就必须清掉。留着它等于「用户 3 毫秒就答完了，
+  // 进程还要为这张已经作废的卡再挂 5 分钟」——主进程退出和验证脚本收口都被这一步吊住。
+  private static timers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private static seq: number = 0;
   private static notifier: AskNotifier | null = null;
 
@@ -63,12 +66,18 @@ export class AskUserBridge {
       // 顺序反过来的话那一次作答会找不到 resolver 而被丢掉(工具继续挂到超时)。
       AskUserBridge.notify(item, 'ask', false);
       if (timeoutMs > 0) {
-        setTimeout((): void => {
+        // 平台差异补丁: ArkTS 的 setTimeout 返回 number, Node 返回 Timeout 对象
+        let timer: ReturnType<typeof setTimeout> = setTimeout((): void => {
+          AskUserBridge.timers.delete(id);
           if (AskUserBridge.resolvers.has(id)) {
             // 超时未答: 以取消收场, 避免工具永久挂起
             AskUserBridge.resolveWith(id, null);
           }
         }, timeoutMs);
+        AskUserBridge.timers.set(id, timer);
+        // 兜底计时器不该反过来决定宿主能活多久: 到点无人应答仍然按取消收场,
+        // 但一张挂着的卡不能让主进程退不出去（关窗、验证脚本收口都被它拖住过）。
+        timer.unref?.();
       }
     });
   }
@@ -114,6 +123,11 @@ export class AskUserBridge {
     let item: PendingAsk | undefined = AskUserBridge.pending.get(id);
     AskUserBridge.resolvers.delete(id);
     AskUserBridge.pending.delete(id);
+    let timer: ReturnType<typeof setTimeout> | undefined = AskUserBridge.timers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      AskUserBridge.timers.delete(id);
+    }
     // 先 resolve 再通知界面收卡片: 工具被唤醒后会继续往下跑,
     // 通知放在 resolve 之前的话, 界面可能先看到卡片消失、再看到工具已经出新结果,
     // 中间那一下「卡片还在但工具已经往下走」的错位窗口就没必要存在。

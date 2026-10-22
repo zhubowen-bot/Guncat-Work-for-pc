@@ -12,6 +12,7 @@ import os from 'node:os'
 import http from 'node:http'
 import { root, alias } from './esbuild-aliases.mjs'
 
+const startedAt = Date.now()
 const dir = path.join(root, '.smoke')
 fs.mkdirSync(dir, { recursive: true })
 
@@ -4978,6 +4979,10 @@ check(
       .every((m) => !String(m.content ?? '').includes(CTX_SECRET))
 )
 
+// 这一段用替身模型服务验完了，必须关掉：还 listen 着的 server 是个引用句柄，
+// 忘关就等于「断言全跑完、结果也打印了，但进程永远不退」——收尾挂住的直接原因。
+await new Promise((resolve) => ctxServer.close(resolve))
+
 console.log(`\n跨轮上下文验证：通过 ${passed} 项（累计）`)
 
 // ===== 22. 界面消息切分：裸代码围栏不能被当成界面程序 =====
@@ -5042,12 +5047,16 @@ function rmrfRetry(target, tries = 8) {
   }
 }
 
-console.log(`\nIPC 验证：通过 ${passed} 项，失败 ${failed} 项`)
+let summary = `\nIPC 验证：通过 ${passed} 项，失败 ${failed} 项` +
+  `（全程 ${((Date.now() - startedAt) / 1000).toFixed(1)} 秒）\n`
 if (failed > 0) {
-  console.log('失败项：')
-  for (const f of failures) {
-    console.log(`  - ${f}`)
-  }
+  summary += '失败项：\n' + failures.map((f) => `  - ${f}`).join('\n') + '\n'
 }
 rmrfRetry(dataRoot)
-process.exitCode = failed === 0 ? 0 : 1
+// 主动退出，不等「自然退出」：上一版就是靠自然退出，于是一个忘关的句柄把收尾变成无限等。
+// 先让出一个 tick 把前面几千行 console.log 排空（stdout 接管道时是异步写），
+// 再用同步写把结论打出去，最后退出——顺序反了就会把结论截掉。
+setImmediate(() => {
+  fs.writeSync(1, summary)
+  process.exit(failed === 0 ? 0 : 1)
+})
