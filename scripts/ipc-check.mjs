@@ -4253,6 +4253,127 @@ mod.bindSafeStorage(null)
 
 console.log(`\n凭据加密验证：通过 ${passed} 项（累计）`)
 
+// 26. 跨轮上下文（真实事故：第二轮开始模型说「没有历史消息」）
+console.log('\n26. 跨轮上下文：第二轮的请求必须带着第一轮的往来')
+
+const CTX_SECRET = '紫罗兰42'
+const CTX_ANSWER = '收到暗号 ' + CTX_SECRET
+const ctxBodies = []
+const ctxLoopBodies = () =>
+  ctxBodies.filter((b) => !b.includes('会话标题生成器') && !b.includes('【上下文压缩指令】'))
+const ctxServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    ctxBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n')
+    const done = () => {
+      res.write('data: [DONE]\n\n')
+      res.end()
+    }
+    if (raw.includes('会话标题生成器')) {
+      send({ choices: [{ delta: { content: '上下文' } }] })
+      done()
+      return
+    }
+    send({ choices: [{ delta: { content: CTX_ANSWER } }] })
+    done()
+  })
+})
+await new Promise((resolve) => ctxServer.listen(0, '127.0.0.1', () => resolve()))
+const ctxPort = ctxServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(ctxPort),
+  apiKey: 'sk-ctx-test',
+  model: 'ctx-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const runCtxTurn = (conversationId, mode, text) =>
+  inv('work:run', {
+    conversationId,
+    text,
+    mode,
+    thinkingEnabled: false,
+    webSearchEnabled: false
+  })
+
+const convCtx = await inv('conversations:create', agents[0].id, 'work')
+await runCtxTurn(convCtx.id, 'work', '第一轮暗号：' + CTX_SECRET)
+await runCtxTurn(convCtx.id, 'work', '第二轮：把上一轮我说过的原话复述一遍')
+const ctxPair = ctxLoopBodies()
+const ctxSecondMsgs = ctxPair.length > 1 ? jsonMessages(ctxPair[ctxPair.length - 1]) : []
+const ctxFirstIdx = ctxSecondMsgs.findIndex(
+  (m) => m.role === 'user' && String(m.content ?? '').includes(CTX_SECRET)
+)
+const ctxLastIdx = ctxSecondMsgs.findIndex(
+  (m) => m.role === 'user' && String(m.content ?? '').includes('复述一遍')
+)
+const ctxAnswerIdx = ctxSecondMsgs.findIndex(
+  (m) => m.role === 'assistant' && String(m.content ?? '').includes('收到暗号')
+)
+
+check(
+  '两个任务各自发了一次请求（后面的索引断言才有对照）',
+  ctxPair.length === 2,
+  `${ctxPair.length} 次`
+)
+check(
+  '第二轮请求里带回了第一轮的用户原话',
+  ctxFirstIdx > 0,
+  `user 命中下标 ${ctxFirstIdx} / 共 ${ctxSecondMsgs.length} 条`
+)
+check(
+  '第二轮请求里带回了第一轮的回答正文（assistant 角色，不是塞进用户消息）',
+  ctxAnswerIdx > 0
+)
+check(
+  '顺序是 系统提示词 → 上一轮 user → 上一轮 assistant → 本轮 user（前缀稳定，本轮永远在末尾）',
+  ctxSecondMsgs[0]?.role === 'system' && ctxFirstIdx < ctxAnswerIdx && ctxAnswerIdx < ctxLastIdx
+)
+check(
+  '第一轮请求里没有第二轮的话（历史是往回看，不是把未来塞进去）',
+  !ctxPair[0].includes('复述一遍')
+)
+check(
+  '重放的历史 assistant 不带 tool_calls（工具结果不重放：既省预算，也避免 result 被裁后协议断链）',
+  ctxAnswerIdx > 0 &&
+    (ctxSecondMsgs[ctxAnswerIdx].tool_calls === undefined ||
+      ctxSecondMsgs[ctxAnswerIdx].tool_calls.length === 0)
+)
+
+// 交互模式走的是同一条 runWork，也必须记得上一轮（用户报障覆盖两种模式）
+const convCtxI = await inv('conversations:create', agents[0].id, 'interactive')
+await runCtxTurn(convCtxI.id, 'interactive', '交互第一轮，记号 ' + CTX_SECRET)
+await runCtxTurn(convCtxI.id, 'interactive', '交互第二轮')
+const ctxIMsgs = jsonMessages(ctxLoopBodies()[ctxLoopBodies().length - 1])
+check(
+  '交互模式第二轮同样带上第一轮',
+  ctxIMsgs.some((m) => m.role === 'user' && String(m.content ?? '').includes(CTX_SECRET)) &&
+    ctxIMsgs.some((m) => m.role === 'assistant' && String(m.content ?? '').includes('收到暗号'))
+)
+
+// 新会话不受影响：第一条任务除了系统提示词与本轮，不该有别的往来
+const convCtxNew = await inv('conversations:create', agents[0].id, 'work')
+await runCtxTurn(convCtxNew.id, 'work', '全新会话的第一句')
+const ctxNewMsgs = jsonMessages(ctxLoopBodies()[ctxLoopBodies().length - 1])
+check(
+  '全新会话首轮不会被别的会话的历史污染',
+  ctxNewMsgs.filter((m) => m.role === 'user').length === 1 ||
+    ctxNewMsgs
+      .filter((m) => m.role === 'user')
+      .every((m) => !String(m.content ?? '').includes(CTX_SECRET))
+)
+
+console.log(`\n跨轮上下文验证：通过 ${passed} 项（累计）`)
+
 // 后台命令的进程刚刚被杀，Windows 上还压着「目录被占用」的句柄，立刻整树删除会 EPERM。
 function rmrfRetry(target, tries = 8) {
   for (let i = 0; i < tries; i++) {

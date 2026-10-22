@@ -17,6 +17,7 @@ import { SSEAdapterFactory } from './SSEAdapterFactory';
 import { WorkFileService } from './WorkFileService';
 import { WorkSkillService } from './WorkSkillService';
 import { ApiConfig } from '../model/ApiConfig';
+import { Message } from '../model/Message';
 import { ToolCallRecord } from '../model/ToolCallRecord';
 import { AbortSignal } from '../common/Types';
 import { Constants } from '../common/Constants';
@@ -82,7 +83,6 @@ export class LoopMessage {
     m.toolCalls = calls;
     return m;
   }
-
   // 由单轮结果构造 assistant 循环消息: 同时携带思考文本与签名,
   // 供 Anthropic 协议在下一轮请求中回传 thinking 块(思考模式下必传)
   static fromTurn(turn: LoopTurnResult): LoopMessage {
@@ -139,6 +139,34 @@ export class ToolImageAttachment {
 
 // 流式工具调用累积器: 三种协议统一汇入(共享实现见 ToolCallStream.ts)
 export class AgentLoopService {
+  /**
+   * 跨任务历史（会话里此前几轮的往来）→ 循环消息。
+   *
+   * 为什么单独抽出来：工作/交互模式每开一个任务都要重建 messages，不先把旧轮次接上的话，
+   * 模型从第二轮起就是「失忆」的 —— 用户问「我上面说了什么」，它如实回答「没有历史」。
+   *
+   * 只搬正文，**刻意不搬 toolCalls**：上一轮的工具结果动辄几十 KB，重放既撑爆预算，
+   * 又会在协议里造出「assistant 的 tool_calls 找不到配对的 result」的断链
+   * （历史被裁剪时必然发生，那是 400 的直接来源）。模型要记住的是「谁说了什么」，正文够。
+   * 正文为空的跳过：工作模式里存在只调工具、一个字没写的 assistant 消息，
+   * 而 content 为空的消息在部分协议上会被直接拒绝。
+   */
+  static historyMessages(history: Message[]): LoopMessage[] {
+    let out: LoopMessage[] = [];
+    for (let i: number = 0; i < history.length; i++) {
+      let msg: Message = history[i];
+      if (msg.content.trim() === '') {
+        continue;
+      }
+      if (msg.role === 'user') {
+        out.push(LoopMessage.user(msg.content));
+      } else if (msg.role === 'assistant') {
+        out.push(LoopMessage.assistant(msg.content, []));
+      }
+    }
+    return out;
+  }
+
   /**
    * 把工具产出的图片接在工具结果之后，作为 user 多模态消息追加进循环历史。
    *

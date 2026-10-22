@@ -1361,8 +1361,15 @@ export class SessionManager {
     const uiContext: string = this.describeUiState(conv)
     const taskText: string = uiContext === '' ? request.text : `${request.text}\n${uiContext}`
 
+    // 循环消息：系统提示词固定在第 0 条，随后是**本会话此前几轮的往来**，最后才是本轮任务。
+    // 少了中间那一段，第二轮开始模型就是彻底失忆的（真实事故：用户问「我上面发了什么」，
+    // 它回答「没有历史消息」）—— 上一轮的用户原话与回答正文都必须重放进去。
+    // 上面已经 push 了本轮的 user 消息，所以历史取到倒数第二条为止。
+    const prior: Message[] = conv.messages.slice(0, conv.messages.length - 1)
+
     const messages: LoopMessage[] = [
       LoopMessage.system(AgentLoopService.buildWorkSystemPromptFor(request.mode)),
+      ...AgentLoopService.historyMessages(prior),
       LoopMessage.user(this.expandMentions(conv.id, taskText))
     ]
 
