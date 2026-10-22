@@ -10,7 +10,7 @@
 ![Electron](https://img.shields.io/badge/Electron-38-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
-![version](https://img.shields.io/badge/version-0.1.0-blue)
+![version](https://img.shields.io/badge/version-0.2.0-blue)
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 ![forms](https://img.shields.io/badge/Agent%20Forms-Intelligent%20UI%20%2B%20Harness-blueviolet)
 ![tools](https://img.shields.io/badge/%E5%86%85%E7%BD%AE%E5%B7%A5%E5%85%B7-45-informational)
@@ -74,7 +74,7 @@ npm run dist       # 产出 release/Guncat Work-<版本>/
 产物：
 
 ```text
-release/Guncat Work-0.1.0/
+release/Guncat Work-0.2.0/
 ├── Guncat Work.exe              ← 双击这个
 ├── create-desktop-shortcut.cmd  ← 想放桌面就双击一次（带应用图标）
 ├── run-compat.cmd               ← 不提权，直接带 --no-sandbox 启动
@@ -245,7 +245,7 @@ docs/PORTING.md   # ★ 移植策略、平台适配对照、与上游的分歧�
 | [交互模式实现说明](docs/INTERACTIVE-MODE.md) | guncat-ui lang 数据流、76 个组件覆盖、容错设计、两层无头验证 |
 | [启动排障与兼容模式](docs/STARTUP-TROUBLESHOOTING.md) | 崩溃根因、14 组对照实验、白屏真凶、6 档诊断阶梯、崩溃转储分析 |
 | [参与贡献](CONTRIBUTING.md) | 环境要求、验证矩阵、编码约定与红线、PR 流程 |
-| [更新记录](CHANGELOG.md) | 0.1.0 全部变更 |
+| [更新记录](CHANGELOG.md) | 全部版本变更 |
 
 上游（鸿蒙版）的研究材料：[open-intelligent-ui 规格](https://github.com/zhubowen-bot/Guncat-Work-for-hmos/blob/main/docs/reference/open-intelligent-ui-spec.md) ·
 [openui-lang 规范](https://github.com/zhubowen-bot/Guncat-Work-for-hmos/blob/main/docs/reference/openui-lang-spec.md)。

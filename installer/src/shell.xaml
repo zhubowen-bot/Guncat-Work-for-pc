@@ -70,7 +70,7 @@
                        Style="{StaticResource T_Sub}" Margin="0,7,0,0" TextWrapping="Wrap"/>
             <Border x:Name="BrandChip" Style="{StaticResource Chip}" HorizontalAlignment="Left"
                     Margin="0,14,0,0">
-              <TextBlock x:Name="BrandVersion" Text="v0.1.0" FontFamily="{StaticResource UiFont}"
+              <TextBlock x:Name="BrandVersion" Text="v0.2.0" FontFamily="{StaticResource UiFont}"
                          FontSize="11.5" Foreground="{StaticResource TextBody}"/>
             </Border>
           </StackPanel>
