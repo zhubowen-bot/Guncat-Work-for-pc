@@ -262,6 +262,12 @@ export class Constants {
   // 项目指令的候选文件名(按优先级, 只认工作区根目录这几个)。放在这里而不是 service 里,
   // 是因为渲染进程只允许引用 @core/common(不能把 node:fs 打进浏览器包), 面板的文案要跟同一份清单。
   static readonly WORK_INSTRUCTION_FILES: string[] = ['AGENTS.md', 'CLAUDE.md', 'GUNCAT.md'];
+  // 编辑前读取守卫的登记表容量上限(条数, 见 common/FileObservation):
+  // 超出按最旧登记淘汰, 代价只是那次编辑被拒后重新读一遍, 不会改坏文件。
+  static readonly WORK_FS_OBSERVATION_MAX_ENTRIES: number = 2048;
+  // 文件版本指纹里参与哈希的字节数(只取开头这么多)。指纹只用于判断「文件有没有被改动过」，
+  // 不承担完整性校验，所以不必覆盖全文；取开头一段是因为绝大多数改动都落在文件里。
+  static readonly WORK_FS_VERSION_HASH_BYTES: number = 8192;
   // 工具并发执行的滚动池大小(对齐 dsh 的 maxParallelToolCalls, 只作用于只读并行段)
   static readonly WORK_MAX_PARALLEL_TOOLS: number = 4;
   static readonly WORK_ALLOW_PARALLEL_TOOLS: boolean = true;  // 子代理并行派发: 是否把 subagent 归入并行组 + 全局最大并发子代理数(与只读池一致取 4)

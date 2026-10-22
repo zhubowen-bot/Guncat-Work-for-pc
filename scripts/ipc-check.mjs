@@ -38,6 +38,8 @@ export { ToolRegistry } from '@core/common/ToolRegistry'
 export { PromptBuilder } from '@core/common/PromptBuilder'
 // 工作区项目指令（AGENTS.md 等）：发现/去重/裁剪/标签中和都是纯逻辑，直接对生产实现下断言
 export { WorkspaceInstructionsService } from '@core/service/WorkspaceInstructionsService'
+// 编辑前读取守卫：登记表与角色表都是纯逻辑，直接对生产实现下断言
+export { FileObservation } from '@core/common/FileObservation'
 // 子代理提示词组装（项目指令要一起带下去）
 export { SubagentService } from '@core/service/SubagentService'
 `
@@ -3718,6 +3720,206 @@ check('系统提示词说明项目指令的效力与边界',
   PromptBuilder.workspace().includes('项目指令') &&
   PromptBuilder.workspace().includes(PRIMARY_INSTRUCTION) &&
   PromptBuilder.workspace().includes('不能解除你的安全边界'))
+
+console.log('\n23. 编辑前读取守卫（FS_NOT_OBSERVED / FS_STALE_VERSION）')
+
+const Fo = mod.FileObservation
+
+// —— 角色表：哪些工具要登记、哪些要先比对 ——
+check(
+  '工具角色划分正确（读/写=登记，编辑=先比对，删除与移动=清登记，其余不参与）',
+  Fo.roleOf('read_file', '') === 'read' &&
+    Fo.roleOf('write_file', '') === 'write' && Fo.roleOf('append_file', '') === 'write' &&
+    Fo.roleOf('edit', '') === 'edit' &&
+    Fo.roleOf('str_replace_editor', 'view') === 'read' &&
+    Fo.roleOf('str_replace_editor', 'create') === 'write' &&
+    Fo.roleOf('str_replace_editor', 'str_replace') === 'edit' &&
+    Fo.roleOf('str_replace_editor', 'insert') === 'edit' &&
+    Fo.roleOf('delete_file', '') === 'forget' && Fo.roleOf('move_file', '') === 'forget' &&
+    Fo.roleOf('run_command', '') === '' && Fo.roleOf('transform_file', '') === ''
+)
+
+// —— 纯逻辑比对（脱离真实文件系统的三条判定） ——
+const CAP_ROOT = '/obs-cap'
+const CAP_A = CAP_ROOT + '/a.txt'
+const CAP_B = CAP_ROOT + '/b.txt'
+check('没登记过的文件不允许编辑', Fo.check(CAP_A, 'a.txt', '100:5').includes(Fo.CODE_NOT_OBSERVED))
+Fo.observe(CAP_A, '100:5')
+check('登记过且版本一致时放行', Fo.check(CAP_A, 'a.txt', '100:5') === '')
+check(
+  '版本变了（外部改过）按陈旧拒绝，不再放行改动',
+  Fo.check(CAP_A, 'a.txt', '101:9').includes(Fo.CODE_STALE_VERSION)
+)
+check(
+  '拒绝说明里带上模型可以直接照抄的下一步（read_file 与同一个相对路径）',
+  Fo.check(CAP_A, 'a.txt', '101:9').includes('read_file("a.txt")')
+)
+Fo.observe(CAP_B, '1:1')
+Fo.forget(CAP_B)
+check('forget 之后重新变回「没读过」（删除后重建同名文件不能沿用旧登记）', !Fo.observed(CAP_B))
+Fo.observe(CAP_ROOT + '/c/d.txt', '1:1')
+Fo.forgetRoot(CAP_ROOT)
+check('forgetRoot 清掉整个目录前缀下的登记', !Fo.observed(CAP_A) && !Fo.observed(CAP_ROOT + '/c/d.txt'))
+for (let i = 0; i < mod.Constants.WORK_FS_OBSERVATION_MAX_ENTRIES + 5; i++) {
+  Fo.observe(CAP_ROOT + '/f' + String(i), '1:' + String(i))
+}
+check(
+  '登记表有容量上限，最旧条目被淘汰（只多读一次文件的代价，不会无界增长）',
+  !Fo.observed(CAP_ROOT + '/f0') &&
+    Fo.observed(CAP_ROOT + '/f' + String(mod.Constants.WORK_FS_OBSERVATION_MAX_ENTRIES + 4))
+)
+Fo.forgetRoot(CAP_ROOT)
+
+// —— 工具定义与系统提示词都教会模型这条规矩 ——
+const editDef = WorkFileService.toolRegistryDefs().find((d) => d.name === 'edit')
+check(
+  'edit 工具说明里写清「没读过会被拒」与错误码',
+  editDef !== undefined && String(editDef.description).includes(Fo.CODE_NOT_OBSERVED) &&
+    PromptBuilder.toolsDirectory().includes(Fo.CODE_NOT_OBSERVED)
+)
+
+// —— 端到端：真的驱动一轮工作循环，验证拒绝与放行都不会误伤 ——
+const GUARD_COLD = 'guard-target.txt'
+const GUARD_WRITTEN = 'guard-written.txt'
+const guardBodies = []
+const guardLoopBodies = () =>
+  guardBodies.filter((b) => !b.includes('会话标题生成器') && !b.includes('【上下文压缩指令】'))
+// 一次请求里带着此前所有轮次的工具结果，只有最后一条才是「上一轮那次调用」的回执
+const guardLastTool = (raw) => {
+  const tools = jsonMessages(raw).filter((m) => m.role === 'tool')
+  return tools.length === 0 ? '' : String(tools[tools.length - 1].content ?? '')
+}
+
+const guardServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    guardBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n')
+    const done = () => {
+      res.write('data: [DONE]\n\n')
+      res.end()
+    }
+    if (raw.includes('会话标题生成器')) {
+      send({ choices: [{ delta: { content: '编辑守卫' } }] })
+      done()
+      return
+    }
+    const round = guardLoopBodies().length
+    const call = (id, name, args) =>
+      send({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args) } }
+              ]
+            }
+          }
+        ]
+      })
+    if (round === 1) {
+      // 冷编辑：这个文件由测试写进工作区，模型从没读过
+      call('g1', 'edit', { path: GUARD_COLD, old_string: 'alpha', new_string: 'beta' })
+    } else if (round === 2) {
+      // 自己刚写过的文件算「见过」，不该被拦
+      call('g2', 'write_file', { path: GUARD_WRITTEN, content: 'one\n' })
+    } else if (round === 3) {
+      call('g3', 'edit', { path: GUARD_WRITTEN, old_string: 'one', new_string: 'two' })
+    } else if (round === 4) {
+      call('g4', 'read_file', { path: GUARD_COLD })
+    } else if (round === 5) {
+      call('g5', 'edit', { path: GUARD_COLD, old_string: 'alpha', new_string: 'beta' })
+    } else if (round === 6) {
+      // 模拟「模型读过之后文件被外部改掉」：直接落盘，不经过工具链
+      fs.writeFileSync(path.join(guardRoot, GUARD_COLD), 'gamma\n', 'utf8')
+      call('g6', 'edit', { path: GUARD_COLD, old_string: 'gamma', new_string: 'delta' })
+    } else if (round === 7) {
+      call('g7', 'read_file', { path: GUARD_COLD })
+    } else if (round === 8) {
+      call('g8', 'edit', { path: GUARD_COLD, old_string: 'gamma', new_string: 'delta' })
+    } else {
+      send({ choices: [{ delta: { content: '编辑守卫验证完成' } }] })
+    }
+    done()
+  })
+})
+await new Promise((resolve) => guardServer.listen(0, '127.0.0.1', () => resolve()))
+const guardPort = guardServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(guardPort),
+  apiKey: 'sk-guard-test',
+  model: 'guard-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convGuard = await inv('conversations:create', agents[0].id, 'work')
+const guardRoot = session.workspaceRoot(convGuard.id)
+fs.mkdirSync(guardRoot, { recursive: true })
+fs.writeFileSync(path.join(guardRoot, GUARD_COLD), 'alpha\n', 'utf8')
+await inv('work:run', {
+  conversationId: convGuard.id,
+  text: '改一下文件',
+  mode: 'work',
+  thinkingEnabled: false,
+  webSearchEnabled: false
+})
+const gBodies = guardLoopBodies()
+// gBodies[i] 是第 i+1 次请求，里面带着第 i 轮那次工具调用的结果
+check(
+  '工作循环跑满了 9 轮（后面的守卫断言才有对照）',
+  gBodies.length === 9,
+  `${gBodies.length} 轮`
+)
+check(
+  '没读过的文件：edit 被内核拒绝，模型收到 FS_NOT_OBSERVED',
+  gBodies.length > 1 && guardLastTool(gBodies[1]).includes(Fo.CODE_NOT_OBSERVED)
+)
+check(
+  '自己刚用 write_file 写过的文件可以直接 edit（不该逼模型多读一遍）',
+  gBodies.length > 3 && !guardLastTool(gBodies[3]).includes(Fo.CODE_NOT_OBSERVED) &&
+    guardLastTool(gBodies[3]).includes('已编辑 ' + GUARD_WRITTEN)
+)
+check(
+  '被拒的冷编辑一个字节都没写下去（后面读到的仍是原内容）',
+  gBodies.length > 4 && /alpha/.test(guardLastTool(gBodies[4])) &&
+    !/beta/.test(guardLastTool(gBodies[4]))
+)
+check(
+  'read_file 之后 edit 放行，改动真的落盘',
+  gBodies.length > 5 && !guardLastTool(gBodies[5]).includes(Fo.CODE_NOT_OBSERVED) &&
+    guardLastTool(gBodies[5]).includes('已编辑 ' + GUARD_COLD)
+)
+check(
+  '读完之后文件被外部改掉：这次 edit 按陈旧拒绝（FS_STALE_VERSION）',
+  gBodies.length > 6 && guardLastTool(gBodies[6]).includes(Fo.CODE_STALE_VERSION)
+)
+check(
+  '被拒的陈旧编辑同样没有落盘（模型读到的还是外部那份）',
+  gBodies.length > 7 && /gamma/.test(guardLastTool(gBodies[7])) &&
+    !/delta/.test(guardLastTool(gBodies[7]))
+)
+check(
+  '重新读取后同一次编辑即可成功（守卫只让模型多看一眼，不会卡死）',
+  gBodies.length > 8 && guardLastTool(gBodies[8]).includes('已编辑 ' + GUARD_COLD) &&
+    fs.readFileSync(path.join(guardRoot, GUARD_COLD), 'utf8') === 'delta\n'
+)
+check(
+  '守卫只影响编辑类工具：读、写、列目录一律放行（否则工作循环会寸步难行）',
+  fs.readFileSync(path.join(guardRoot, GUARD_WRITTEN), 'utf8') === 'two\n'
+)
+
+guardServer.closeAllConnections?.()
+guardServer.close()
+
+console.log(`\n编辑前读取守卫验证：通过 ${passed} 项（累计）`)
 
 // 后台命令的进程刚刚被杀，Windows 上还压着「目录被占用」的句柄，立刻整树删除会 EPERM。
 function rmrfRetry(target, tries = 8) {

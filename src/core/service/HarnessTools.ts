@@ -592,7 +592,7 @@ export class HarnessTools {
         'ignore_case', HarnessTools.strProp('可选: 忽略大小写, 默认 true')),
       ['pattern']));
     defs.push(HarnessTools.makeTool('edit',
-      '对工作区文本文件做精确编辑: old_string 必须与文件内容逐字符一致(含空白; CRLF/LF 换行与文件风格不一致时自动对齐重试), 默认要求唯一匹配(多处匹配会被拒绝, 补充上下文或传 replace_all=true)。返回 diff(+新增 -删除)。对已有文件的小改动优先用它(比 write_file 全量重写更安全); 新建文件用 write_file。',
+      '对工作区文本文件做精确编辑: old_string 必须与文件内容逐字符一致(含空白; CRLF/LF 换行与文件风格不一致时自动对齐重试), 默认要求唯一匹配(多处匹配会被拒绝, 补充上下文或传 replace_all=true)。返回 diff(+新增 -删除)。对已有文件的小改动优先用它(比 write_file 全量重写更安全); 新建文件用 write_file。**编辑前必须先在本会话里 read_file 过这个文件**: 没读过会被拒绝(ERROR[FS_NOT_OBSERVED]), 读完之后再改; 文件在你读过之后被改过(你自己、run_command 或用户)会拒绝(ERROR[FS_STALE_VERSION]), 重新 read_file 再改。',
       HarnessTools.props4(
         'path', HarnessTools.strProp('目标文件相对路径'),
         'old_string', HarnessTools.strProp('要被替换的原文(逐字符精确匹配)'),
@@ -600,7 +600,7 @@ export class HarnessTools {
         'replace_all', HarnessTools.strProp('可选: true 时替换全部匹配, 默认 false(要求唯一)')),
       ['path', 'old_string', 'new_string']));
     defs.push(HarnessTools.makeTool('str_replace_editor',
-      '多命令文本编辑器(view/create/str_replace/insert)。view: 分页查看(offset+limit); create: 新建文件(file_text); str_replace: 唯一匹配替换(old_string/new_string); insert: 在第 insert_line 行后插入 insert_text。普通编辑用 edit 更简单; 需要"查看"或在指定行插入时用本工具。',
+      '多命令文本编辑器(view/create/str_replace/insert)。view: 分页查看(offset+limit); create: 新建文件(file_text); str_replace: 唯一匹配替换(old_string/new_string); insert: 在第 insert_line 行后插入 insert_text。普通编辑用 edit 更简单; 需要"查看"或在指定行插入时用本工具。str_replace/insert 同样要求先 view 或 read_file 过该文件(未读过 ERROR[FS_NOT_OBSERVED], 之后被改过 ERROR[FS_STALE_VERSION])。',
       HarnessTools.props3(
         'command', HarnessTools.strProp('view / create / str_replace / insert 之一'),
         'path', HarnessTools.strProp('目标文件相对路径'),

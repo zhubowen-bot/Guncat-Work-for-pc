@@ -18,6 +18,7 @@ import { ImageProbe, ImageProbeResult } from '../common/ImageProbe';
 import { isNativeDecoderAvailable, decodeImageSize } from '@kit.ImageKit';
 import { ToolRegistry } from '../common/ToolRegistry';
 import { Constants } from '../common/Constants';
+import { FileObservation } from '../common/FileObservation';
 import { LocalWebSearch, LocalSearchOutcome, LOCAL_SEARCH_TOOL_DESC_WORK, LOCAL_SEARCH_TOOL_DESC_WORK_FALLBACK,
   LOCAL_SEARCH_QUERY_PROP_DESC, LOCAL_SEARCH_TOOL_NAME, LOCAL_SEARCH_LEGACY_TOOL_NAME,
   isLocalSearchToolName } from './LocalWebSearch';
@@ -497,6 +498,8 @@ export class WorkFileService {
       if (fileIo.accessSync(root)) {
         WorkFileService.deleteRecursive(root);
       }
+      // 目录没了，登记也就没意义（同名文件重建后必须重新读过才能编辑）
+      FileObservation.forgetRoot(root);
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'deleteWorkspace failed: %{public}s', JSON.stringify(e));
     }
@@ -511,6 +514,9 @@ export class WorkFileService {
         return false;
       }
       WorkFileService.deleteRecursive(abs);
+      // 条目可能是文件也可能是目录：forget 与 forgetRoot 各自只命中一种，两次都调用不必先判断类型
+      FileObservation.forget(abs);
+      FileObservation.forgetRoot(abs);
       return true;
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'removePath failed: %{public}s', JSON.stringify(e));
@@ -635,7 +641,110 @@ export class WorkFileService {
     }
   }
 
+  // ===== 编辑前读取守卫（登记与比对见 common/FileObservation） =====
+  //
+  // 只挂在工具分发这一个咽喉点上：工具调用都从这里过，读/写成功后登记版本，edit 类动手前比对。
+  // 不放进各工具内部是为了让「绕过登记的变化」也能被抓出来 —— 面板改文件、run_command 改文件、
+  // 用户自己在编辑器里保存都不经过这里，正是陈旧版本比对要拦的那一类。
+  // 版本指纹 = 大小 : 修改秒数 : 开头若干字节的 FNV-1a。
+  // 只看 mtime+size 不够：同一秒内被改掉、而字节数恰好没变的编辑（用户在编辑器里改一个词、
+  // run_command 原地重写）会完全看不出来，而那正是最需要拦的情形。
+  private static fsVersionOf(abs: string): string {
+    try {
+      if (!fileIo.accessSync(abs)) {
+        return '';
+      }
+      let stat: fileIo.Stat = fileIo.statSync(abs);
+      if (stat.isDirectory()) {
+        return '';
+      }
+      let cap: number = Constants.WORK_FS_VERSION_HASH_BYTES;
+      let readLen: number = stat.size < cap ? stat.size : cap;
+      let digest: string = WorkFileService.fnv1a(WorkFileService.readBytes(abs, readLen))
+        .toString(16);
+      return stat.size.toString() + ':' + stat.mtime.toString() + ':' + digest;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // FNV-1a(32 位): 廉价指纹，只回答「这段字节变过没有」，不是完整性校验（那需要 sha + 全文件）
+  private static fnv1a(bytes: Uint8Array): number {
+    let h: number = 0x811c9dc5;
+    for (let i: number = 0; i < bytes.length; i++) {
+      h = h ^ bytes[i];
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h >>> 0;
+  }
+
+  // 返回 null 表示放行；否则是直接送回模型的拒绝结果（含「先 read_file」的下一步指令）
+  private static guardBeforeTool(name: string, args: Record<string, Object>,
+    root: string): ToolExecResult | null {
+    if (FileObservation.roleOf(name, WorkFileService.strArg(args, 'command', '')) !== 'edit') {
+      return null;
+    }
+    let rel: string = WorkFileService.strArg(args, 'path', '');
+    if (rel === '') {
+      return null;
+    }
+    let abs: string | null = WorkFileService.resolveSafe(root, rel);
+    if (abs === null) {
+      return null;  // 非法路径交给工具自己报「非法路径」，这里不抢更准的错误
+    }
+    let version: string = WorkFileService.fsVersionOf(abs);
+    if (version === '') {
+      return null;  // 文件不存在或是目录：由工具给出「文件不存在」这类更贴切的说明
+    }
+    let message: string = FileObservation.check(abs, rel, version);
+    return message === '' ? null : WorkFileService.fail(message);
+  }
+
+  // 调用成功后登记：read/write/edit 都记当前版本，delete/move 清登记
+  private static recordAfterTool(name: string, args: Record<string, Object>, root: string): void {
+    let role: string = FileObservation.roleOf(name, WorkFileService.strArg(args, 'command', ''));
+    if (role === '') {
+      return;
+    }
+    if (role === 'forget') {
+      let fromRel: string = name === 'move_file' ? WorkFileService.strArg(args, 'from', '') :
+        WorkFileService.strArg(args, 'path', '');
+      let fromAbs: string | null = WorkFileService.resolveSafe(root, fromRel);
+      if (fromAbs !== null) {
+        FileObservation.forget(fromAbs);
+      }
+      // 移动后的新路径要重新读过才能编辑：内容虽然没变，但模型看到的还是旧坐标
+      let toAbs: string | null = name === 'move_file' ?
+        WorkFileService.resolveSafe(root, WorkFileService.strArg(args, 'to', '')) : null;
+      if (toAbs !== null) {
+        FileObservation.forget(toAbs);
+      }
+      return;
+    }
+    let rel: string = WorkFileService.strArg(args, 'path', '');
+    let abs: string | null = rel === '' ? null : WorkFileService.resolveSafe(root, rel);
+    if (abs !== null) {
+      FileObservation.observe(abs, WorkFileService.fsVersionOf(abs));
+    }
+  }
+
   private static async dispatchTool(context: common.UIAbilityContext, convId: string,
+    name: string, args: Record<string, Object>, argsJson: string,
+    abortSignal?: AbortSignal | null): Promise<ToolExecResult> {
+    let root: string = WorkFileService.workspaceRoot(context, convId);
+    let blocked: ToolExecResult | null = WorkFileService.guardBeforeTool(name, args, root);
+    if (blocked !== null) {
+      return blocked;
+    }
+    let result: ToolExecResult = await WorkFileService.dispatchToolInner(
+      context, convId, name, args, argsJson, abortSignal);
+    if (result.ok) {
+      WorkFileService.recordAfterTool(name, args, root);
+    }
+    return result;
+  }
+
+  private static async dispatchToolInner(context: common.UIAbilityContext, convId: string,
     name: string, args: Record<string, Object>, argsJson: string,
     abortSignal?: AbortSignal | null): Promise<ToolExecResult> {
     let root: string = WorkFileService.workspaceRoot(context, convId);

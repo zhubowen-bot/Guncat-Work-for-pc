@@ -51,7 +51,7 @@ export class PromptBuilder {
     lines.push('- todo_write(todos)：整体替换式地创建/更新任务清单。todos 为 JSON 数组，如 [{"content":"解析数据","status":"in_progress"}]；status 取 pending/in_progress/completed；最多 50 项，每项 content 超过 200 字会被截断。同一时刻只保留一项 in_progress；一项真正完成并验证后才标 completed。');
     lines.push('**读取与检索**');
     lines.push('- list_files(path?)：列出文件与目录（含子目录与大小），path 留空列出整个工作区。适合确认产出物存在、查看目录结构。');
-    lines.push('- read_file(path, offset?, limit?)：读取文件内容，按行分页（默认返回前约 1.2 万字符，末尾有"未读完"提示与下一次 offset）。.docx/.xlsx/.pptx 自动抽取文字层且行号与 search_files 一致——长文档先 search_files 定位行号，再 read_file 传 offset 精读该段。.pdf 只返回开头，完整/分页阅读用 parse_document；二进制文件拒绝。修改文件前先读取确认现状。');
+    lines.push('- read_file(path, offset?, limit?)：读取文件内容，按行分页（默认返回前约 1.2 万字符，末尾有"未读完"提示与下一次 offset）。.docx/.xlsx/.pptx 自动抽取文字层且行号与 search_files 一致——长文档先 search_files 定位行号，再 read_file 传 offset 精读该段。.pdf 只返回开头，完整/分页阅读用 parse_document；二进制文件拒绝。修改文件前先用它读取确认现状——这是强制的：没读过的文件 edit 会被内核拒绝（ERROR[FS_NOT_OBSERVED]）。');
     lines.push('- glob(pattern, path?)：按 glob 模式找文件路径（** 跨目录 / * 段内 / ? 单字符 / {a,b} 分支），返回路径与大小，如 "**/*.csv"、"assets/{png,svg}/*"。只匹配路径不读内容——找素材、确认产出物命名时用它。');
     lines.push('- grep(pattern, path?, glob?, ignore_case?)：按正则表达式搜索文件内容（\\d、^、$、词边界等），返回 文件:行号: 内容（最多 200 处）。要模式匹配（编号/日期/代码标识）时用它，普通子串搜索用 search_files；命中后 read_file 传 offset 精读。');
     lines.push('- parse_document(path, page?, page_count?)：解析 PDF 文本（本地），按页分批返回并带 [第 N 页] 标注。超长 PDF 单次只返回一部分，末尾有"未读完"提示——按提示传 page 继续下一批，循环直到"已到文档末页"，不要重复读同一页。仅支持 .pdf，加密 PDF 与扫描件无法解析（扫描件改用 pdf_to_images 转图片后 view_image）；.docx/.xlsx/.pptx 用 read_file 即可。');
@@ -71,7 +71,7 @@ export class PromptBuilder {
     lines.push('- move_file(from, to)：移动/重命名文件或目录。目标路径已存在会被拒绝，不会覆盖。');
     lines.push('- delete_file(path)：删除文件或目录（递归）。**危险操作**：path 为空字符串会清空整个工作区，仅在用户明确要求时执行。');
     lines.push('**精准编辑（改已有文件优先用 edit）**');
-    lines.push('- edit(path, old_string, new_string, replace_all?)：精确编辑文本文件。old_string 必须与文件内容逐字符一致（含空白；CRLF/LF 换行与文件风格不一致时自动对齐重试），默认要求唯一匹配——多处匹配会被拒绝，补充上下文或传 replace_all=true。返回 diff（+新增 -删除）。对已有文件的小改动一律优先 edit，比 write_file 全量重写更安全；新建文件仍用 write_file。');
+    lines.push('- edit(path, old_string, new_string, replace_all?)：精确编辑文本文件。old_string 必须与文件内容逐字符一致（含空白；CRLF/LF 换行与文件风格不一致时自动对齐重试），默认要求唯一匹配——多处匹配会被拒绝，补充上下文或传 replace_all=true。返回 diff（+新增 -删除）。对已有文件的小改动一律优先 edit，比 write_file 全量重写更安全；新建文件仍用 write_file。动手前必须本会话 read_file 过该文件（否则 ERROR[FS_NOT_OBSERVED]），文件在读过之后又被改过会 ERROR[FS_STALE_VERSION]——两种都按提示重读再改，不要重复提交同一次编辑。');
     lines.push('- str_replace_editor(command, path, …)：多命令编辑器。view 分页查看；create 新建；str_replace 唯一匹配替换（同 edit）；insert 在指定行后插入。在指定行插入内容时用它。');
     lines.push('**数据处理**');
     lines.push('- transform_file(input, steps, output?, format?, json_path?, has_header?, delimiter?, bom?, preview?)：对工作区数据文件执行本地转换管道——过滤/派生列/重算列/正则提取/拆列/去重/排序/替换/数值化，以及 CSV↔TSV↔JSON↔Markdown 表格↔XLSX 互转。数据全程不进入对话上下文，是处理大文件与非标格式的专用工具（read_file 读不全的表、要批量清洗/提取/转换的数据都归它）。流程：先省略 output 预览前 3 行 → 调整 steps → 带 output 写盘 → read_file 抽查。steps 完整语法先 load_skill("data")。限制：输入 ≤2MB 文本、≤10 万行、steps ≤30 步；小表格直接 write_file/write_csv 更快，不要滥用。');
