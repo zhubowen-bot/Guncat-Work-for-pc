@@ -2437,6 +2437,28 @@ select {
   color: var(--ok);
 }
 
+.workspace__root {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 11px;
+}
+
+.workspace__root-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace__root-path--stale {
+  color: var(--warn);
+}
+
 .workspace__stats {
   display: flex;
   gap: 10px;

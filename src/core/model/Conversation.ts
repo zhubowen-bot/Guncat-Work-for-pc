@@ -10,6 +10,8 @@ export class Conversation {
   createdAt: number = 0;
   // 会话模式: 'chat' 聊天模式 | 'work' 工作模式(Agent Loop + 沙箱工作区); 旧数据缺省为 chat
   mode: string = 'chat';
+  // 自定义工作区绝对路径; 空串 = 默认沙箱目录(filesDir/workspaces/<id>)
+  workspacePath: string = '';
 
   static create(agentId: string, title: string, mode: string): Conversation {
     let conv: Conversation = new Conversation();
@@ -28,6 +30,7 @@ export class Conversation {
     conv.title = (json['title'] as string) ?? '';
     conv.createdAt = (json['createdAt'] as number) ?? 0;
     conv.mode = (json['mode'] as string) ?? 'chat';
+    conv.workspacePath = (json['workspacePath'] as string) ?? '';
     let raw: Object = json['messages'];
     if (raw !== undefined) {
       let rawMessages: Object[] = raw as Object[];
@@ -51,7 +54,8 @@ export class Conversation {
       'title': this.title,
       'messages': msgs,
       'createdAt': this.createdAt,
-      'mode': this.mode
+      'mode': this.mode,
+      'workspacePath': this.workspacePath
     };
   }
 }

@@ -208,6 +208,15 @@ export class SessionManager {
         conv.mode = fixed
       }
     }
+    // 自定义工作区目录回填：会话元数据里的 workspacePath 注册进 core 的路径咽喉点，
+    // 之后所有工具/面板/导出都按它取根目录。目录已失效（被移动/删除）的跳过注册并留 notice。
+    for (const conv of this.conversations) {
+      if (conv.workspacePath !== '') {
+        if (fs.existsSync(conv.workspacePath) && fs.statSync(conv.workspacePath).isDirectory()) {
+          WorkFileService.setWorkspaceOverride(conv.id, conv.workspacePath)
+        }
+      }
+    }
     // 本地联网搜索配置同样在启动时绑定一次：渲染层虽然会在 init 里读一次设置，
     // 但那是一次 IPC 往返，理论上可以在它之前就跑起一轮工作 —— 那时工具会拿到默认配置。
     await this.bindLocalSearchConfig(ctx)
@@ -2011,6 +2020,51 @@ export class SessionManager {
 
   workspaceRoot(conversationId: string): string {
     return WorkFileService.workspaceRoot(this.ctx(), conversationId)
+  }
+
+  /** 面板展示用：当前工作区根目录、是否为自定义、目录是否仍然存在 */
+  workspaceInfo(conversationId: string): { root: string; isCustom: boolean; exists: boolean } {
+    const custom: string | null = WorkFileService.getWorkspaceOverride(conversationId)
+    const root: string = this.workspaceRoot(conversationId)
+    if (custom !== null) {
+      // 目录失效时**不**自动 mkdir 一个空壳冒充用户的目录 —— 界面要如实报「已失效」
+      return { root, isCustom: true, exists: fs.existsSync(custom) && fs.statSync(custom).isDirectory() }
+    }
+    return { root, isCustom: false, exists: true }
+  }
+
+  /**
+   * 切换/恢复会话的工作区目录。dir=null 恢复默认沙箱。
+   * 校验失败抛可读错误（界面直接 toast）；成功即持久化到会话元数据并全局生效。
+   */
+  async setWorkspaceDirectory(conversationId: string, dir: string | null): Promise<{
+    root: string
+    isCustom: boolean
+    exists: boolean
+  }> {
+    const conv: Conversation = this.mustFind(conversationId)
+    if (dir === null || dir === '') {
+      WorkFileService.setWorkspaceOverride(conversationId, null)
+      conv.workspacePath = ''
+      await this.persist()
+      this.emit({ type: 'workspace:changed', conversationId })
+      return this.workspaceInfo(conversationId)
+    }
+    const abs: string = path.resolve(dir)
+    if (!path.isAbsolute(abs) || !fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+      throw new Error('所选目录不存在或不是目录')
+    }
+    // 拒绝把系统盘根目录当工作区（清空/删除工具会作用到整个盘的相对子树之外没有意义，
+    // 而且用户极可能后悔）；具体盘符根（C:\ 之类）一律拒绝。
+    const parsed: path.ParsedPath = path.parse(abs)
+    if (parsed.dir === '') {
+      throw new Error('不能把工作区设在盘符根目录')
+    }
+    WorkFileService.setWorkspaceOverride(conversationId, abs)
+    conv.workspacePath = abs
+    await this.persist()
+    this.emit({ type: 'workspace:changed', conversationId })
+    return this.workspaceInfo(conversationId)
   }
 
   /**

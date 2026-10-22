@@ -21,6 +21,7 @@ import type {
   SearchEngineDto,
   WorkspaceBinaryDto,
   WorkspaceEntryDto,
+  WorkspaceInfoDto,
   WorkAnswerRequest,
   WorkRunRequest
 } from '@ipc/contract'
@@ -87,6 +88,12 @@ export interface GuncatApi {
     clear(conversationId: string): Promise<{ cleared: boolean }>
     openInFolder(conversationId: string): Promise<void>
     exportZip(conversationId: string): Promise<{ saved: boolean; path?: string }>
+    /** 当前工作区根目录状态（自定义目录时 isCustom=true） */
+    info(conversationId: string): Promise<WorkspaceInfoDto>
+    /** 原生目录选择器；取消返回 null */
+    pickDirectory(): Promise<string | null>
+    /** 切换工作区目录；dir=null 恢复默认沙箱 */
+    setCustom(conversationId: string, dir: string | null): Promise<WorkspaceInfoDto>
   }
   app: {
     info(): Promise<AppInfoDto>

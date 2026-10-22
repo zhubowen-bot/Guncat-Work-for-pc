@@ -80,6 +80,14 @@ export const INVOKE = {
   workspaceClear: 'workspace:clear',
   workspaceExportZip: 'workspace:exportZip',
   workspaceOpenInFolder: 'workspace:openInFolder',
+  /**
+   * 工作区根信息（面板显示真实路径；自定义目录时禁用「清空工作区」）。
+   */
+  workspaceInfo: 'workspace:info',
+  /** 弹出原生目录选择器，返回选中的目录（取消返回 null） */
+  workspacePickDirectory: 'workspace:pickDirectory',
+  /** 把会话工作区切到任意目录（dir=null 恢复默认沙箱） */
+  workspaceSetCustom: 'workspace:setCustom',
   /** 用系统默认程序打开工作区内的某个文件（越界校验与 read 同一条路） */
   workspaceOpenFile: 'workspace:openFile',
   /** 在文件管理器中定位工作区内的某个文件（shell.showItemInFolder） */
@@ -467,6 +475,15 @@ export interface WorkspaceBinaryDto {
   dataUrl: string
   mimeType: string
   size: number
+}
+
+/** workspace:info 的返回体：当前工作区根目录的状态 */
+export interface WorkspaceInfoDto {
+  root: string
+  /** true = 用户自选目录（不是应用托管的沙箱） */
+  isCustom: boolean
+  /** 目录当前是否仍存在（自定义目录被移动/删除时为 false，界面要如实提示） */
+  exists: boolean
 }
 
 // ===== 事件（主进程 → 渲染进程） =====

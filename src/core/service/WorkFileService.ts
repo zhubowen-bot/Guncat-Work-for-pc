@@ -107,8 +107,31 @@ export class WorkFileService {
 
   // 会话工作区根目录
   static workspaceRoot(context: common.UIAbilityContext, convId: string): string {
+    // 自定义工作区覆盖（「打开任意目录作为工作区」）：整个应用只有这一个路径咽喉点，
+    // 工具链 / 面板 / 目标 / 定时 / 导出都经 workspaceRoot 取路径，这里注册一次全局生效。
+    let custom: string | undefined = WorkFileService.customRoots[convId];
+    if (custom !== undefined && custom !== '') {
+      return custom;
+    }
     return context.filesDir + '/' + Constants.WORKSPACE_ROOT_DIR + '/' +
       WorkFileService.sanitizeConvId(convId);
+  }
+
+  // ===== 自定义工作区注册表（主进程启动时按会话元数据回填，切换目录时实时更新） =====
+  private static customRoots: Record<string, string> = {};
+
+  // dir 传空串/null = 恢复默认沙箱目录。设置方（主进程）负责校验目录存在且为绝对路径。
+  static setWorkspaceOverride(convId: string, dir: string | null): void {
+    if (dir === null || dir === '') {
+      delete WorkFileService.customRoots[convId];
+      return;
+    }
+    WorkFileService.customRoots[convId] = dir;
+  }
+
+  static getWorkspaceOverride(convId: string): string | null {
+    let custom: string | undefined = WorkFileService.customRoots[convId];
+    return custom !== undefined && custom !== '' ? custom : null;
   }
 
   // 会话 id 由 generateConversationId 生成, 此处兜底过滤非法字符, 防止路径拼接被注入
@@ -337,6 +360,11 @@ export class WorkFileService {
   }
 
   static ensureWorkspace(context: common.UIAbilityContext, convId: string): void {
+    // 自定义工作区是用户自己的目录, 缺失时不能由应用凭空创建(那会掩盖「目录已失效」的真实状态);
+    // 只有默认沙箱目录才由应用负责随时补齐。
+    if (WorkFileService.getWorkspaceOverride(convId) !== null) {
+      return;
+    }
     WorkFileService.ensureDir(WorkFileService.workspaceRoot(context, convId));
   }
 
@@ -449,6 +477,10 @@ export class WorkFileService {
   // 删除整个工作区目录(会话删除时清理孤儿数据)
   static deleteWorkspace(context: common.UIAbilityContext, convId: string): void {
     try {
+      // 自定义工作区是用户自己盘上的目录，删除会话绝不能连带删它 —— 只清默认沙箱目录。
+      if (WorkFileService.getWorkspaceOverride(convId) !== null) {
+        return;
+      }
       let root: string = WorkFileService.workspaceRoot(context, convId);
       if (fileIo.accessSync(root)) {
         WorkFileService.deleteRecursive(root);

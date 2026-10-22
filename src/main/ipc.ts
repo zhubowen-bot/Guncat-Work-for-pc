@@ -16,6 +16,7 @@ import type {
   PickedAttachmentDto,
   RendererStage,
   WorkspaceBinaryDto,
+  WorkspaceInfoDto,
   WorkAnswerRequest,
   WorkRunRequest
 } from '../ipc/contract'
@@ -229,7 +230,33 @@ export function registerIpcHandlers(session: SessionManager): void {
     fs.rmSync(full, { recursive: true, force: true })
     send({ type: 'workspace:changed', conversationId })
   })
+  ipcMain.handle(INVOKE.workspaceInfo, async (_e, conversationId: string): Promise<WorkspaceInfoDto> =>
+    session.workspaceInfo(conversationId)
+  )
+  ipcMain.handle(INVOKE.workspacePickDirectory, async (): Promise<string | null> => {
+    const window = getMainWindow()
+    const result = await dialog.showOpenDialog(window ?? undefined!, {
+      title: '打开文件夹作为工作区',
+      buttonLabel: '用作工作区',
+      properties: ['openDirectory']
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return null
+    }
+    return result.filePaths[0]
+  })
+  ipcMain.handle(
+    INVOKE.workspaceSetCustom,
+    async (_e, conversationId: string, dir: string | null): Promise<WorkspaceInfoDto> =>
+      session.setWorkspaceDirectory(conversationId, dir)
+  )
   ipcMain.handle(INVOKE.workspaceClear, async (_e, conversationId: string) => {
+    // 自定义工作区是用户自己的目录，「一键清空整个目录」不该出现在这条路上
+    //（界面也会把按钮藏掉；这里是主进程侧的第二道闸）。
+    if (session.workspaceInfo(conversationId).isCustom) {
+      send({ type: 'notice', level: 'warn', text: '自定义工作区不支持一键清空，请在目录中自行管理文件' })
+      return { cleared: false }
+    }
     const root: string = session.workspaceRoot(conversationId)
     // 清空是不可恢复的破坏性操作，必须先确认（对齐原版 ChatViewModel.clearWorkspace
     // 的 promptAction.showDialog：标题/正文/按钮文案逐字一致）。
@@ -254,9 +281,17 @@ export function registerIpcHandlers(session: SessionManager): void {
     return { cleared: true }
   })
   ipcMain.handle(INVOKE.workspaceOpenInFolder, async (_e, conversationId: string) => {
-    const root: string = session.workspaceRoot(conversationId)
-    fs.mkdirSync(root, { recursive: true })
-    await shell.openPath(root)
+    const info = session.workspaceInfo(conversationId)
+    if (info.isCustom) {
+      // 自定义目录失效时如实报错，不要顺手 mkdir 出一个空壳冒充用户的目录
+      if (!info.exists) {
+        throw new Error('工作区目录已失效：' + info.root)
+      }
+      await shell.openPath(info.root)
+      return
+    }
+    fs.mkdirSync(info.root, { recursive: true })
+    await shell.openPath(info.root)
   })
   ipcMain.handle(INVOKE.workspaceExportZip, async (_e, conversationId: string) => {
     const window = getMainWindow()

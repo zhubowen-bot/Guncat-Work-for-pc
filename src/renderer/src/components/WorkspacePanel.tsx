@@ -10,7 +10,8 @@ import type {
   ConversationDto,
   ConversationStatsDto,
   GoalDto,
-  WorkspaceEntryDto
+  WorkspaceEntryDto,
+  WorkspaceInfoDto
 } from '@ipc/contract'
 import { useStore } from '../store'
 import { CodeBlock, normalizeLanguage } from './CodeBlock'
@@ -356,7 +357,63 @@ export function WorkspacePanel() {
     treeSeq.current += 1
     setTree({})
     setExpanded([])
+    setRootInfo(null)
+    void loadRoot()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId])
+
+  // 工作区根状态（默认沙箱 / 用户自选目录 / 目录已失效）
+  const [rootInfo, setRootInfo] = useState<WorkspaceInfoDto | null>(null)
+
+  async function loadRoot(): Promise<void> {
+    if (activeId === null) {
+      setRootInfo(null)
+      return
+    }
+    try {
+      setRootInfo(await window.guncat.workspace.info(activeId))
+    } catch {
+      setRootInfo(null)
+    }
+  }
+
+  async function switchRoot(): Promise<void> {
+    if (activeId === null) {
+      return
+    }
+    const dir = await window.guncat.workspace.pickDirectory()
+    if (dir === null) {
+      return
+    }
+    try {
+      const info = await window.guncat.workspace.setCustom(activeId, dir)
+      setRootInfo(info)
+      treeSeq.current += 1
+      setTree({})
+      setExpanded([])
+      void loadWorkspace()
+      pushNotice('info', `本会话工作区已切换到 ${info.root}`)
+    } catch (e) {
+      pushNotice('warn', String(e instanceof Error ? e.message : e))
+    }
+  }
+
+  async function restoreSandbox(): Promise<void> {
+    if (activeId === null) {
+      return
+    }
+    try {
+      const info = await window.guncat.workspace.setCustom(activeId, null)
+      setRootInfo(info)
+      treeSeq.current += 1
+      setTree({})
+      setExpanded([])
+      void loadWorkspace()
+      pushNotice('info', '已恢复为应用托管的沙箱工作区')
+    } catch (e) {
+      pushNotice('warn', String(e instanceof Error ? e.message : e))
+    }
+  }
 
   async function refreshTree(): Promise<void> {
     if (activeId === null) {
@@ -481,6 +538,7 @@ export function WorkspacePanel() {
     const tick = (): void => {
       void loadWorkspace()
       void refreshTree()
+      void loadRoot()
     }
     tick()
     const timer = window.setInterval(tick, 3000)
@@ -548,6 +606,36 @@ export function WorkspacePanel() {
         </button>
       </div>
 
+      {/* 工作区根路径行：让人一眼知道文件到底落在哪 —— 默认沙箱 or 自选目录。
+          「打开…」把任意文件夹接进来作本会话工作区（工具链/面板/导出全局跟随）。 */}
+      {rootInfo !== null ? (
+        <div className="workspace__root" title={rootInfo.root}>
+          <span className={`workspace__root-path${rootInfo.exists ? '' : ' workspace__root-path--stale'}`}>
+            {rootInfo.exists
+              ? `位置：${rootLabel(rootInfo)}`
+              : `位置：${rootLabel(rootInfo)}（目录已失效）`}
+          </span>
+          <button
+            className="filecard__action"
+            disabled={running}
+            title={running ? '任务执行中，稍后再切换' : '打开任意文件夹作为本会话的工作区'}
+            onClick={() => void switchRoot()}
+          >
+            打开…
+          </button>
+          {rootInfo.isCustom ? (
+            <button
+              className="filecard__action"
+              disabled={running}
+              title="恢复为应用托管的沙箱目录（不会删除你目录里的文件）"
+              onClick={() => void restoreSandbox()}
+            >
+              恢复沙箱
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* 本轮统计卡（对齐原版 DetailsPanelView.ets:143-157）。
           任务用时用「会话工作秒数」这个每秒 +1 的计数（原版 workElapsedSec 同口径），
           所以它会**逐秒走字**；速度/命中取最后一条 assistant；
@@ -607,7 +695,7 @@ export function WorkspacePanel() {
         )}
       </div>
 
-      {workspace.length > 0 ? (
+      {workspace.length > 0 && rootInfo?.isCustom !== true ? (
         <div className="workspace__foot">
           <button
             className="btn btn--ghost btn--block btn--danger"
@@ -665,6 +753,16 @@ interface PreviewState {
 function extOf(path: string): string {
   const dot = path.lastIndexOf('.')
   return dot >= 0 ? path.slice(dot + 1).toLowerCase() : ''
+}
+
+/** 工作区根路径的短标签：沙箱说「沙箱目录」，自选目录显示目录名（完整路径放 tooltip） */
+function rootLabel(info: WorkspaceInfoDto): string {
+  if (!info.isCustom) {
+    return '沙箱目录（应用托管）'
+  }
+  const trimmed: string = info.root.replace(/[\\/]+$/, '')
+  const segs: string[] = trimmed.split(/[\\/]/)
+  return segs[segs.length - 1] !== '' ? segs[segs.length - 1] : trimmed
 }
 
 export function useWorkspacePreview(activeId: string | null) {

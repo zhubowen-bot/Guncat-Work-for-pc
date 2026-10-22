@@ -126,6 +126,9 @@ const required = [
   'workspace:readBinary',
   'workspace:openFile',
   'workspace:reveal',
+  'workspace:info',
+  'workspace:pickDirectory',
+  'workspace:setCustom',
   'workspace:delete',
   'workspace:clear',
   'workspace:openInFolder',
@@ -593,6 +596,43 @@ try {
   openMissing = String(e.message ?? e)
 }
 check('workspace:openFile 对不存在路径报错', openMissing.includes('不存在'), openMissing.slice(0, 60))
+
+// --- 自定义工作区：把任意目录接进本会话，工具链/面板全局跟随该根 ---
+const infoSandbox = await inv('workspace:info', conv3.id)
+check('workspace:info 默认报沙箱目录', infoSandbox.isCustom === false && infoSandbox.exists === true)
+const customDir = path.join(dataRoot, 'custom-ws')
+fs.mkdirSync(customDir, { recursive: true })
+fs.writeFileSync(path.join(customDir, 'outside.txt'), 'from custom root', 'utf8')
+const infoCustom = await inv('workspace:setCustom', conv3.id, customDir)
+check('setCustom 后根切到自选目录', infoCustom.isCustom === true && infoCustom.root === customDir, infoCustom.root)
+const customList = await inv('workspace:listDir', conv3.id, '')
+check('文件树以自定义目录为根', customList.some((it) => it.name === 'outside.txt'))
+const customRead = await inv('workspace:read', conv3.id, 'outside.txt')
+check('workspace:read 跟随自定义根', customRead.text === 'from custom root')
+let customTraversal = ''
+try {
+  await inv('workspace:read', conv3.id, '../outside.txt')
+} catch (e) {
+  customTraversal = String(e.message ?? e)
+}
+check('自定义根同样拒绝目录穿越', customTraversal.includes('越界'), customTraversal.slice(0, 40))
+const clearCustom = await inv('workspace:clear', conv3.id)
+check('自定义工作区拒绝一键清空', clearCustom.cleared === false)
+const infoGone = await inv('workspace:setCustom', conv3.id, null)
+check('恢复沙箱后回到默认根', infoGone.isCustom === false && !infoGone.root.includes('custom-ws'))
+check('恢复沙箱不会删用户目录里的文件', fs.existsSync(path.join(customDir, 'outside.txt')))
+let badRoot = ''
+try {
+  await inv('workspace:setCustom', conv3.id, path.join(dataRoot, '不存在的方向'))
+} catch (e) {
+  badRoot = String(e.message ?? e)
+}
+check('setCustom 拒绝不存在的目录', badRoot.includes('不存在'), badRoot.slice(0, 40))
+// 删除会话不得连带删除用户自选目录
+const convCustom = await inv('conversations:create', agents[0].id, 'work')
+await inv('workspace:setCustom', convCustom.id, customDir)
+await inv('conversations:delete', convCustom.id)
+check('删除绑定自定义目录的会话后目录仍在', fs.existsSync(path.join(customDir, 'outside.txt')))
 
 // --- 工作区「上传」按钮：弹系统文件选择框并导入 ---
 // 用户报障「工作区上传文件找不到入口」——原版 WorkspaceBar 头部有可见的「上传」按钮，

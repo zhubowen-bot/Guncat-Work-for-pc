@@ -16,6 +16,7 @@ import type {
   RendererStage,
   WorkspaceBinaryDto,
   WorkspaceEntryDto,
+  WorkspaceInfoDto,
   WorkAnswerRequest,
   WorkRunRequest
 } from '../ipc/contract'
@@ -117,6 +118,12 @@ const api = {
       ipcRenderer.invoke(INVOKE.workspaceClear, conversationId),
     openInFolder: (conversationId: string): Promise<void> =>
       ipcRenderer.invoke(INVOKE.workspaceOpenInFolder, conversationId),
+    info: (conversationId: string): Promise<WorkspaceInfoDto> =>
+      ipcRenderer.invoke(INVOKE.workspaceInfo, conversationId),
+    pickDirectory: (): Promise<string | null> =>
+      ipcRenderer.invoke(INVOKE.workspacePickDirectory),
+    setCustom: (conversationId: string, dir: string | null): Promise<WorkspaceInfoDto> =>
+      ipcRenderer.invoke(INVOKE.workspaceSetCustom, conversationId, dir),
     exportZip: (conversationId: string): Promise<{ saved: boolean; path?: string }> =>
       ipcRenderer.invoke(INVOKE.workspaceExportZip, conversationId)
   },
