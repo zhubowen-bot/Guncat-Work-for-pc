@@ -998,12 +998,20 @@ check(
   '每个文件有自己的 +N -M',
   artifactsHtml.includes('artifact__counts') && artifactsHtml.includes('+3')
 )
-check('有 diff 的文件才给展开箭头（Office 产物没有）', artifactsHtml.includes('artifact__caret'))
+// 行上只留「文件名」这一个入口（用户反馈：预览按钮 + 箭头 + 文件名挤在一行，两个入口做同一件事）
+check('每行只有一个入口：文件名即预览入口（计数留在行右侧）', (() => {
+  const paths = artifactsHtml.match(/class="artifact__path"/g) || []
+  return paths.length === 2 && artifactsHtml.includes('artifact__name')
+})(), (artifactsHtml.match(/class="artifact__path"/g) || []).length + ' 个文件名入口')
 check(
-  '行级改动默认收起（对齐原版 expandedDiffFiles 的初值）',
+  '行上没有多余的「预览」按钮，也没有行级 diff 的展开箭头',
+  !artifactsHtml.includes('artifact__preview') && !artifactsHtml.includes('artifact__caret')
+)
+check(
+  '行内不再嵌行级 diff 缩略（改动细节归时间线的工具行）',
   !artifactsHtml.includes('artifact__diff')
 )
-check('每行都有「预览」入口', artifactsHtml.includes('artifact__preview') && artifactsHtml.includes('预览'))
+check('折叠头那颗整卡箭头还在（收起整卡是用户要的动作）', artifactsHtml.includes('artifacts__caret'))
 check(
   '没有产物时整张卡不渲染',
   mod.renderArtifactsEmpty().length === 0,

@@ -880,8 +880,7 @@ select {
   color: var(--text-faint);
 }
 
-.artifacts__caret,
-.artifact__caret {
+.artifacts__caret {
   display: inline-flex;
   align-items: center;
   flex: none;
@@ -889,8 +888,7 @@ select {
   transition: transform 0.15s;
 }
 
-.artifacts__caret[data-open='true'],
-.artifact__caret[data-open='true'] {
+.artifacts__caret[data-open='true'] {
   transform: rotate(180deg);
 }
 
@@ -922,6 +920,12 @@ select {
   gap: 8px;
   color: var(--accent);
   text-align: left;
+  cursor: pointer;
+}
+
+.artifact__path:hover .artifact__name {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .artifact__name {
