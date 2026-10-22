@@ -46,6 +46,8 @@ export { WorkspaceMentionService } from '@core/service/WorkspaceMentionService'
 export { preferences as kitPreferences, secretStorageState, bindSafeStorage, __setUndecryptableForTest } from '@core/platform/kit/ArkData'
 // 子代理提示词组装（项目指令要一起带下去）
 export { SubagentService } from '@core/service/SubagentService'
+// 界面消息切分：裸围栏算不算界面是纯逻辑，直接对生产实现下断言
+export { GuncatUiParts } from '@core/common/GuncatUiParts'
 `
 )
 
@@ -4562,6 +4564,56 @@ check(
 )
 
 console.log(`\n跨轮上下文验证：通过 ${passed} 项（累计）`)
+
+// ===== 22. 界面消息切分：裸代码围栏不能被当成界面程序 =====
+//
+// 用户报的现象：工作模式每条最终回答后面拖着一串「界面程序为空」。
+// 根因不在渲染层，在切分：GuncatUiFences.isUiFence 把**没有语言标记的裸 ``` 围栏**也算界面围栏
+// （交互模式确实常把程序直接塞进裸围栏），于是工作/聊天模式回答里的工具回显、公式、命令示例
+// 每一个都变成一个解析不出根节点的界面片段，各画一个空块。
+const passedBeforeUiSplit = passed
+console.log('\n22. 界面消息切分与「界面程序为空」空块')
+
+const uiSegsOf = (content) => mod.GuncatUiParts.build(content, true).segments.filter((s) => s.type === 'ui')
+const BARE_NON_PROGRAM = [
+  '当然，给你一个最美的：\n\n```\ne^(iπ) + 1 = 0\n```\n\n搞定。',
+  '先看结果：\n\n```\n[run_command] 退出码 0 · 用时 0.1s\n(没有输出)\n```\n\n结论如上。',
+  'a\n\n```\nx = 1\n```\n\nb\n\n```\ny = 2\n```\n\nc\n\n```\nz = 3\n```'
+]
+check(
+  '裸围栏里的公式块/工具回显按普通代码块渲染，不产生界面片段（空块串的根因）',
+  BARE_NON_PROGRAM.every((c) => uiSegsOf(c).length === 0),
+  BARE_NON_PROGRAM.filter((c) => uiSegsOf(c).length > 0).map((c) => c.slice(0, 24)).join(' | ')
+)
+check(
+  '裸围栏改判成代码块时正文一个字都不能丢（围栏要原样回到 Markdown 文本里）',
+  (() => {
+    const only = mod.GuncatUiParts.build(BARE_NON_PROGRAM[1], true).textOnly
+    return only.includes('```') && only.includes('[run_command] 退出码 0') && only.includes('结论如上')
+  })()
+)
+check(
+  '写明 guncat-ui / openui-lang 的围栏仍然算界面（不能因为修裸围栏把显式意图一起废掉）',
+  uiSegsOf('```guncat-ui\nroot = Card([Text("hi", "t")])\n```').length === 1 &&
+    mod.GuncatUiParts.build('```guncat-ui\nroot = Card([Text("hi", "t")])\n```', true).hasUi &&
+    uiSegsOf('```openui-lang\nroot = Card([Text("hi", "t")])\n```').length === 1
+)
+check(
+  '裸围栏里真的写着界面程序时照样当界面（交互模式的另一种交付形态不能被打断）',
+  uiSegsOf('```\nroot = Card([Text("hi", "t")])\nlead = TextContent("x", "t")\n```').length === 1 &&
+    mod.GuncatUiParts.build('```\nroot = Card([Text("hi", "t")])\nlead = TextContent("x", "t")\n```', true).hasUi
+)
+check(
+  '显式声明界面却解析不出根节点时空片段要保留（此时「界面程序为空」是诊断，不是噪声）',
+  uiSegsOf('```guncat-ui\n这只是里面写了点散文\n```').length === 1 &&
+    uiSegsOf('```guncat-ui\n这只是里面写了点散文\n```')[0].empty === true
+)
+check(
+  '非围栏形态的整段程序仍然算界面（推荐形态，与参考项目一致）',
+  mod.GuncatUiParts.build('root = Card([Text("hi", "t")])\nlead = TextContent("x", "t")', true).hasUi
+)
+
+console.log(`\n界面消息切分验证：通过 ${passed - passedBeforeUiSplit} 项`)
 
 // 后台命令的进程刚刚被杀，Windows 上还压着「目录被占用」的句柄，立刻整树删除会 EPERM。
 function rmrfRetry(target, tries = 8) {

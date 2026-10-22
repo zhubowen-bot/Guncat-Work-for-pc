@@ -3111,6 +3111,13 @@ export class GuncatUiFences {
     return false;
   }
 
+  // 是否为**写明**了语言的界面围栏（不含空 info）。
+  // 空 info 的裸围栏是不是界面，得看内容像不像程序，不能只看围栏本身（见 GuncatUiParts）。
+  static isExplicitUiFence(info: string): boolean {
+    let lower: string = info.toLowerCase();
+    return lower === GuncatUiLang.FENCE_LANG || lower === GuncatUiLang.FENCE_LANG_ALT;
+  }
+
   // 已闭合的界面程序文本
   static extractPrograms(content: string): string[] {
     let out: string[] = [];

@@ -5,6 +5,8 @@
 //   1. 非围栏(推荐, 与参考项目一致): 整条消息就是一份界面程序, 模型可在程序前写 1~2 句引导文字;
 //   2. 围栏: ```guncat-ui (或 ```openui-lang) 包裹程序, 围栏外是正文;
 // 其它语言的围栏(```json/```python …)一律按普通 Markdown 代码块渲染, 不当作界面。
+// 裸围栏(``` 不带语言标记)要看内容: 像程序才算界面, 不像就照代码块渲染
+//   —— 工作/聊天模式的回答里全是裸代码块, 一律当界面会在正文后面拖出一串空块(见 isUiProgramFence)。
 //
 // 关键约定:
 //   - **永远至少产出一个文本片段**(没有界面程序时就是一个纯文本片段)。历史事故: 调用方
@@ -83,7 +85,7 @@ export class GuncatUiParts {
     for (let i: number = 0; i < fragments.length; i++) {
       let f: UiFragment = fragments[i];
       if (f.fence) {
-        if (GuncatUiFences.isUiFence(f.info)) {
+        if (GuncatUiParts.isUiProgramFence(f)) {
           pending = GuncatUiParts.flushText(parts, pending);
           GuncatUiParts.appendProgram(parts, f.text, f.complete, finalized, true);
         } else {
@@ -141,6 +143,22 @@ export class GuncatUiParts {
     seg.text = pending;
     parts.segments.push(seg);
     return '';
+  }
+
+  /**
+   * 这个围栏该当界面程序，还是当普通代码块交回 Markdown 渲染。
+   *
+   * 写明 `guncat-ui` / `openui-lang` 的一律算界面（模型明确表了意图，解析不出来也要给诊断）。
+   * 裸围栏（没有语言标记）不能只看围栏本身：交互模式确实常把程序直接塞进 ``` 里，
+   * 但工作/聊天模式的回答里满是裸代码块 —— 工具回显、公式、命令示例，每一个都会变成一个
+   * 解析不出根节点的界面片段，正文后面就拖出一串「界面程序为空」的空块。
+   * 所以按内容判：和非围栏路径用的是同一把尺子（looksLikeProgram），不像程序就当代码块。
+   */
+  private static isUiProgramFence(f: UiFragment): boolean {
+    if (GuncatUiFences.isExplicitUiFence(f.info)) {
+      return true;
+    }
+    return f.info.trim() === '' && GuncatUiParts.looksLikeProgram(f.text);
   }
 
   // 一段文本是否像界面程序: 需要至少 2 行语句, 或 1 行且含 root
