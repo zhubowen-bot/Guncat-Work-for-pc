@@ -639,6 +639,32 @@ check(
   mdFeatureHtml.includes('code-block__pre')
 )
 
+// mermaid 有时不渲染：模型把箭头写成 Unicode 长箭头，mermaid 判语法错，整张图退回源码
+const ARROW_R = '\u27f6'
+const ARROW_L = '\u2190'
+const ARROW_LR = '\u2194'
+const LABEL_ARROW = '\u2192'
+check(
+  'Unicode 箭头修成 mermaid 认的写法（图不再退回源码）',
+  mod.mermaidSourceFixed(`A ${ARROW_R} B`) === 'A --> B' &&
+    mod.mermaidSourceFixed(`A ${ARROW_L} B`) === 'A <-- B' &&
+    mod.mermaidSourceFixed(`A ${ARROW_LR} B`) === 'A <--> B'
+)
+check(
+  '已经是 ASCII 箭头的源码逐字不变（幂等，不能把好的图改坏）',
+  mod.mermaidSourceFixed('A --> B\n  C<-->D') === 'A --> B\n  C<-->D'
+)
+check(
+  '标签文字里的箭头不许动（那是用户要看的正文，不是语法）',
+  mod.mermaidSourceFixed(`A["结论 ${LABEL_ARROW} 覆盖有洞"] --> B["下一步"]`) ===
+    `A["结论 ${LABEL_ARROW} 覆盖有洞"] --> B["下一步"]`
+)
+check(
+  'init 指令行与图类型行原样保留（只换箭头，不重排源码）',
+  mod.mermaidSourceFixed('%%{init: {"flowchart": {"nodeSpacing": 50}}}%%\nflowchart TD\n  A' + ARROW_R + 'B') ===
+    '%%{init: {"flowchart": {"nodeSpacing": 50}}}%%\nflowchart TD\n  A-->B'
+)
+
 // --- 工作区面板：上传入口必须看得见（用户报障「找不到入口」） ---
 console.log('\n21. 工作区面板（上传入口 / 文件分类图标）')
 const wsHtml = mod.renderWorkspacePanel()

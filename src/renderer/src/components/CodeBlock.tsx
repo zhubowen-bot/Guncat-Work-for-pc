@@ -163,6 +163,31 @@ export function CodeBlock({ language, code }: { language: string; code: string }
   )
 }
 
+/**
+ * 修模型写的图里那些「看起来对、mermaid 读不懂」的写法。
+ *
+ * 实测到的一类不渲染：模型把箭头写成 Unicode 长箭头/粗箭头（U+2192 一类）而不是 `-->`，
+ * mermaid 直接语法报错，于是整张图退回源码。这类字符和 ASCII 箭头在视觉上几乎一样，
+ * 模型混用是稳定复现的，不是偶发手滑 —— 退回源码对用户没有任何信息量。
+ * 只替换引号之外的部分：`A["结论 → 覆盖有洞"]` 里的箭头属于标签文字，动了就把内容改错。
+ */
+export function normalizeMermaidSource(source: string): string {
+  const parts: string[] = source.split(/("[^"]*"|'[^']*')/g)
+  for (let i = 0; i < parts.length; i += 2) {
+    parts[i] = parts[i]
+      .replace(/[\u27f7\u2194]/g, '<-->')
+      .replace(/[\u27f6\u2192\u21d2\u279c\u27a1]/g, '-->')
+      .replace(/[\u27f5\u2190\u21d0\u2b05]/g, '<--')
+  }
+  return parts.join('')
+}
+
+// mermaid 的 render 会在 body 里按 id 塞临时节点，**不是可重入的**：一条消息里有两张图、
+// 或流式输出时同一段围栏被反复重绘，并发跑就会互相踩（后一张拿到前一张的节点、或直接报错退回源码）。
+// 所以渲染排队串行；id 也必须全局唯一，原先用的是组件内 ref + 毫秒时间戳，同帧挂载的两块会撞同一个 id。
+let mermaidSeq = 0
+let renderSlot: Promise<unknown> = Promise.resolve()
+
 /** 跟随系统深浅色（应用主题就是 prefers-color-scheme，见 styles.css）。
  *  无头渲染（SSR 冒烟验证）里没有 window，这里必须能安全降级为浅色。 */
 function prefersDark(): boolean {
@@ -200,12 +225,11 @@ export function MermaidBlock({ code }: { code: string }): React.ReactElement {
   const dark = useDarkMode()
   const [svg, setSvg] = useState('')
   const [error, setError] = useState('')
-  const seq = useRef(0)
 
   useEffect(() => {
     let cancelled = false
-    seq.current += 1
-    const id = `guncat-mermaid-${seq.current}-${Date.now()}`
+    const id = `guncat-mermaid-${++mermaidSeq}`
+    const source = normalizeMermaidSource(code)
     // mermaid 在渲染期间会往 body 里塞临时节点（`#d<id>` / `#<id>`），
     // 失败时**不一定清干净** —— 用户看到页面最底下冒出一串
     // 「Syntax error in text / mermaid version 11.17.2」就是这些残留节点。
@@ -215,7 +239,11 @@ export function MermaidBlock({ code }: { code: string }): React.ReactElement {
         document.getElementById(stray)?.remove()
       }
     }
-    void (async () => {
+    const run = async (): Promise<void> => {
+      // 排队期间这段围栏已被更新的 token 顶掉（流式输出每变一次就重绘一回）：不再白跑
+      if (cancelled) {
+        return
+      }
       try {
         const mermaid = (await import('mermaid')).default
         mermaid.initialize({
@@ -230,13 +258,13 @@ export function MermaidBlock({ code }: { code: string }): React.ReactElement {
         })
         // 先解析再渲染：语法不过关时根本不要走 render（render 报错就会留下上面那些节点）
         const parsed = await mermaid
-          .parse(code, { suppressErrors: true })
-          .then(() => true)
+          .parse(source, { suppressErrors: true })
+          .then((ok) => ok !== false)
           .catch(() => false)
         if (!parsed) {
           throw new Error('语法检查未通过')
         }
-        const result = await mermaid.render(id, code)
+        const result = await mermaid.render(id, source)
         cleanupNodes()
         if (!cancelled) {
           setSvg(result.svg)
@@ -249,7 +277,9 @@ export function MermaidBlock({ code }: { code: string }): React.ReactElement {
           setError(e instanceof Error ? e.message : String(e))
         }
       }
-    })()
+    }
+    // 串行闸门：上一张图画完才轮到这一张（见 renderSlot 的说明）
+    renderSlot = renderSlot.then(run, run)
     return () => {
       cancelled = true
       cleanupNodes()

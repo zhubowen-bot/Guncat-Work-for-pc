@@ -48,6 +48,7 @@ import { AgentItem, ConvItem, Sidebar } from '@renderer/components/Sidebar'
 import { GroupedTurn, Timeline, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
 import { safeUrlTransform } from '@renderer/components/Markdown'
+import { normalizeMermaidSource } from '@renderer/components/CodeBlock'
 import { Composer } from '@renderer/components/Composer'
 import {
   detectMention,
@@ -668,6 +669,14 @@ export function renderMarkdownFeatures(): string {
     ''
   ].join('\n')
   return renderToStaticMarkup(createElement(Markdown, { text }))
+}
+
+/**
+ * 送进 mermaid 之前的源码修复。模型经常把箭头写成 Unicode 长箭头（视觉上几乎一样），
+ * mermaid 读不懂就整张退回源码 —— 替换规则与「标签内的箭头不许动」都在这儿断言。
+ */
+export function mermaidSourceFixed(source: string): string {
+  return normalizeMermaidSource(source)
 }
 
 /**
