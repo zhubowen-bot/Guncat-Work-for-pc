@@ -11,12 +11,16 @@
 // 取向：**宁可多问一次，不可漏判一次**（漏判的代价是用户的数据）；
 // 但硬禁表保持克制 —— 只放真正不可逆的系统级操作，否则「什么都禁」等于没有安全。
 //
-// 三层独立规则，缺一不可（AI 实测出 7 类绕过之后整理出来的结构）：
-//   关键词表（FORBIDDEN/RISKY）—— 但要**先看原文，再看还原转义后的文本**：
-//     cmd 的 ^、拆词的引号、POSIX 的反斜杠在执行时都会消失，只看原文等于让 shut^down 绕过硬禁表。
-//   意图读不出（OPAQUE）—— 解释器内联代码、Base64 载荷、命令替换、系统自带下载器。
-//     这类命令文本里天生就没有危险词，靠关键词永远追不上，所以按「决定权交给了谁」一刀切。
-//   位置越界（绝对路径 / .. 上跳）—— 写法无关，实测连 ^ 变体也拦得住，是这三层里最硬的一层。
+// 三层独立规则，缺一不可（两轮 AI 实测出的十几类绕过整理出来的结构）：
+//   关键词表（FORBIDDEN/RISKY）—— 但要**先看原文，再看还原后的文本**：cmd 的 ^、拆词的引号、
+//     POSIX 的反斜杠在执行时都会消失，@ 前缀只是「别回显」，%ComSpec% 就是 cmd.exe 本身，
+//     括号里那段是另起一次执行 —— 只看原文等于给每一种间接写法发一张免检票。
+//   意图读不出（OPAQUE）—— 解释器内联代码、管道喂给解释器的 stdin、Base64 载荷、命令替换、
+//     系统自带下载器。这类命令文本里天生就没有危险词，靠关键词永远追不上，所以按「决定权交给了谁」一刀切。
+//   位置越界（绝对路径 / .. 上跳 / 环境变量展开出的路径）—— 写法无关，是这三层里最硬的一层。
+//
+// 归一化只做「去掉伪装」，从不补全或改写语义，所以派生文本只可能**多出**命中；
+// 判定用的始终是「原文 ∪ 还原文 ∪ 拆出来的内层命令」，任何一层失配都还有另外两层兜着。
 
 export class GuardVerdict {
   forbidden: boolean = false
@@ -63,9 +67,16 @@ export class CommandGuard {
     { re: /\b(?:Set-Content|Out-File|Add-Content)\b/i, why: 'PowerShell 覆盖写文件' },
     // Remove-Item 的官方别名是 ri/rmi，只收 rm/del/erase/rd 会漏掉它们（实测：ri -Recurse -Force 静默删整棵树）
     { re: /\b(?:powershell|pwsh)\b[^\n]*?\b(?:ri|rmi|rm|del|erase|rd|rmdir|ac|sc|si)\b/i, why: 'PowerShell 删除/改写别名' },
+    // 走 .NET / 反射的写法不叫「del」也不叫「Remove-Item」，关键词表对它完全无感
+    // （实测：@powershell -c "[IO.File]::WriteAllText(...)" 真实写出又删掉了一个文件）。
+    { re: /\[(?:IO|System\.IO)\.(?:File|Directory|FileStream|Compression|Path)\]::|\[Scriptblock\]::Create|\bAdd-Type\b|\bNew-Object\b|\[Reflection\./i,
+      why: '用 .NET/反射 API 读写文件或执行代码（危险动作不写在关键词里）' },
     { re: /\b(?:git|svn)\b[^\n|;]*(?:clean|reset\s+--hard|checkout|restore|filter-branch|push|rebase|ci|commit)/i, why: '版本库改写或对外推送' },
     { re: /\b(?:setx|reg|schtasks|crontab|systemctl|service)\b/i, why: '改系统配置/计划任务/服务' },
-    { re: /\bnet\s+(?:user|localgroup|share|start|stop|config)\b/i, why: '改账号/共享/网络配置' },
+    // sc 是服务控制命令的正式名字，net stop 有规则而它没有（实测：sc stop 静默执行）。
+    // 只认「动词在后面」的调用形态，避免把 sc 这个词从路径或文件名里捞出来。
+    { re: /(?:^|[\s;&|(/])sc(?:\.exe)?\s+(?:stop|start|delete|create|config|control|failure|description|pause|resume|qa|query)\b/i, why: '改系统服务（sc）' },
+    { re: /\bnet\s+(?:user|localgroup|share|start|stop|config)\b|\bnetsh\b/i, why: '改账号/共享/网络配置' },
     { re: /\b(?:taskkill|killall|pkill)\b|Stop-Process|kill\s+-9/i, why: '杀进程' },
     { re: /\b(?:chmod|chown|icacls|takeown|cacls|runas|sudo|doas)\b/i, why: '改权限或以他人身份运行' },
     { re: /\b(?:npm|pnpm|yarn|bun|pip|pip3|gem|cargo)\b[^\n|;]*(?:-g|--global|install|uninstall|link)\b|\b(?:npx|choco|winget|brew)\b/i, why: '安装或运行外部包（会写到工作区之外）' },
@@ -85,8 +96,12 @@ export class CommandGuard {
   // 上面的关键词表对它们必然失配（实测：powershell -enc、node -e、python -c、run.bat 全部免审批直通）。
   // 所以像工作区越界那样单独立一条独立规则层：判定读不出这条命令到底做什么，就按危险处理。
   private static readonly OPAQUE: Rule[] = [
-    { re: /(?:^|[\s;&|(])(?:cmd|command)(?:\.exe|\.com)?\s*\/[ck]/i, why: '让 cmd 再解释一层命令（内层可以用 ^ 拆词）' },
+    { re: /(?:^|[\s;&|(/\\])(?:cmd|command)(?:\.exe|\.com)?\s*\/[ck]/i, why: '让 cmd 再解释一层命令（内层可以用 ^ 拆词）' },
     { re: /(?:^|[\s;&|(])(?:powershell|pwsh)(?:\.exe)?\s/i, why: '交给 PowerShell 解释执行（别名与内联代码读不出真实意图）' },
+    // 管道右边是解释器时，执行的是**上游那段文本**：命令行里既没有解释器的开关，也没有动作，
+    // 关键词表无从下手（实测：echo ([IO.File]::Delete(…)) | @powershell - 静默删掉了文件）。
+    { re: /\|\s*(?:sudo\s+)?@?\s*(?:cmd|command)(?:\.exe|\.com)?\b|\|\s*(?:sudo\s+)?@?\s*(?:node|python\d?|perl|ruby|php|lua|deno|bun)(?:\.exe)?\b/i, why: '把上游内容当代码交给解释器执行' },
+    { re: /\b(?:cmd|command|powershell|pwsh|sh|bash|zsh|dash|ksh|node|python\d?|perl|ruby|php|lua)\s+-\s*(?:$|[;&|])/i, why: '解释器从标准输入读代码执行（内容不在命令行里）' },
     { re: /\b(?:sh|bash|zsh|dash|ksh)(?:\.exe)?\b[^\n|;&]*?\s-\w*c\b/i, why: '交给 shell 内联执行一段代码' },
     { re: /\b(?:node|iojs|deno|bun)(?:\.exe)?\b[^\n|;&]*?\s-(?:e|p)\b|\b(?:node|iojs|deno|bun)(?:\.exe)?\b[^\n|;&]*?\s--(?:eval|print)\b/i, why: '交给 JS 运行时内联执行代码' },
     { re: /\b(?:python|python\d|pypy|py)(?:\.exe)?\b[^\n|;&]*?\s-(?:c|m)\b/i, why: '交给 Python 内联执行代码' },
@@ -158,26 +173,26 @@ export class CommandGuard {
     }
     // 原文与「还原转义后的文本」都过一遍：cmd 的 ^、拆词的引号、POSIX 的反斜杠在执行时会消失，
     // 只看原文就等于让 shut^down、de^l、form^at 用一个字符绕过硬禁表（实测缺口，见 unobfuscate）。
+    // 再把括号/反引号包裹的内层命令单独拎出来 —— 段首锚定的规则看不见 for /f 里的解释器。
     let norm: string = CommandGuard.unobfuscate(trimmed)
-    let forbidden: string[] = CommandGuard.matched(trimmed, CommandGuard.FORBIDDEN)
-    let risky: string[] = CommandGuard.matched(trimmed, CommandGuard.RISKY)
-      .concat(CommandGuard.matched(trimmed, CommandGuard.OPAQUE))
+    let sources: string[] = [trimmed, norm].concat(CommandGuard.extractInnerCommands(trimmed))
+    let forbidden: string[] = CommandGuard.matchedAll(sources, CommandGuard.FORBIDDEN)
+    let risky: string[] = CommandGuard.matchedAll(sources, CommandGuard.RISKY)
+      .concat(CommandGuard.matchedAll(sources, CommandGuard.OPAQUE))
     // 语言 API 只作危险项：脚本里写文件是常态，硬禁表留给真正不可逆的系统级操作
     if (script) {
-      risky = risky.concat(CommandGuard.matched(trimmed, CommandGuard.CODE))
+      risky = risky.concat(CommandGuard.matchedAll(sources, CommandGuard.CODE))
     }
-    // 还原后的文本只可能**追加**命中（unobfuscate 只会去字符），所以危险档位按追加后的结果定：
-    // 形如 shut^down 的写法必须照样落进硬禁表，不能降级成「问一句就跑」。
-    let freshForbidden: string[] = norm === trimmed ? [] :
-      CommandGuard.onlyMissing(CommandGuard.matched(norm, CommandGuard.FORBIDDEN), forbidden)
-    let freshRisky: string[] = norm === trimmed ? [] : CommandGuard.onlyMissing(
-      CommandGuard.matched(norm, CommandGuard.RISKY)
-        .concat(script ? CommandGuard.matched(norm, CommandGuard.CODE) : []), risky)
-    if (freshForbidden.length > 0 || freshRisky.length > 0) {
-      forbidden = forbidden.concat(freshForbidden)
-      risky = risky.concat(freshRisky)
+    // 只在还原文/内层命令里出现的命中，说明写命令的人绕了一段路 —— 档位按追加后的结果定
+    // （形如 shut^down 的写法必须照样落进硬禁表，不能降级成「问一句就跑」），并额外说明原因。
+    let rawForbidden: string[] = CommandGuard.matched(trimmed, CommandGuard.FORBIDDEN)
+    let rawRisky: string[] = CommandGuard.matched(trimmed, CommandGuard.RISKY)
+      .concat(CommandGuard.matched(trimmed, CommandGuard.OPAQUE))
+    if (script) {
+      rawRisky = rawRisky.concat(CommandGuard.matched(trimmed, CommandGuard.CODE))
     }
-    let obfuscated: boolean = freshForbidden.length > 0 || freshRisky.length > 0
+    let obfuscated: boolean = CommandGuard.onlyMissing(forbidden, rawForbidden).length > 0 ||
+      CommandGuard.onlyMissing(risky, rawRisky).length > 0
     for (let i: number = 0; i < forbidden.length; i++) {
       verdict.forbidden = true
       CommandGuard.pushReason(verdict, forbidden[i])
@@ -208,20 +223,48 @@ export class CommandGuard {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '命令里有 .. 上跳，读写位置在工作区之外：' + up)
     }
+    // 字面路径规则只认 `C:\` 与 `..`，而 cmd 里 `%TEMP%\x`、PowerShell 里 `$env:TEMP + '\x'`
+    // 展开后同样出圈（实测：type %SystemRoot%\win.ini 读系统文件全程静默）。
+    let envOut: string = CommandGuard.firstEnvPathOutside(trimmed)
+    if (envOut !== '') {
+      verdict.risky = true
+      CommandGuard.pushReason(verdict, '命令里的环境变量路径展开后在工作区之外：' + envOut)
+    }
     return verdict
   }
 
   private static readonly OBFUSCATED_WHY: string =
-    '命令被转义/拆词混淆过，还原后才看得出危险'
+    '命令被间接写法遮过（转义拆词 / @ 前缀 / 环境变量 / 括号包裹），还原后才发现危险'
 
-  // 还原 shell 的转义与拆词写法。只做「把字符去掉」，不做展开，所以结果只会**多出**命中，
-  // 不会让原本判危险的命令变干净 —— 判定用的始终是「原文 ∪ 还原文」。
+  // 还原 shell 的转义、拆词、间接调用与变量写法。只做「把字符去掉 / 换成等价写法」，
+  // 所以结果只会**多出**命中，不会让原本判危险的命令变干净 —— 判定用的始终是「原文 ∪ 还原文」。
   private static unobfuscate(text: string): string {
     let out: string = text
+    out = CommandGuard.expandEnvRefs(text)
     out = out.replace(/\^\^/g, ' ')          // cmd: ^^ 是字面意义的 ^，先隔离开
     out = out.replace(/\^([^\s])/g, '$1')    // cmd: ^x 执行时就是 x（shell:true 走的就是 cmd）
     out = out.replace(/\\([A-Za-z_])/g, '$1') // POSIX: \x 执行时就是 x
     out = out.replace(/["']/g, '')           // 拆词: d"e"l 执行时就是 del
+    // cmd 的 @ 前缀只是「别回显这一行」，语法位置与不带 @ 完全一样（实测：@cmd /c、@powershell -c
+    // 因为解释器规则锚在段首而整条免审批直通）。剥掉它，@ 开头的写法与裸写法走同一条判定。
+    out = out.replace(/(^|[;&|(\s]\s*)@(cmd|command|powershell|pwsh|sh|bash|zsh|node|python|dotnet)\b/gi,
+      '$1$2')
+    return out
+  }
+
+  // 系统自带解释器的环境变量写法换成实际路径 —— 换出来的都是工作区外的绝对路径，
+  // 所以这一步只会让「再解释一层」这一类命中浮出来，不会洗掉任何东西。
+  // （变量指到哪个目录由 firstEnvPathOutside 单独管，它按名字判断，不需要真的展开路径。）
+  private static expandEnvRefs(text: string): string {
+    let out: string = text
+    // %ComSpec% 就是 cmd.exe 本身（实测：%ComSpec% /c 免审批直通）；%SystemRoot%/%Windir% 是 Windows 目录
+    out = out.replace(/%ComSpec%/gi, 'C:/Windows/System32/cmd.exe')
+    out = out.replace(/%(?:SystemRoot|Windir)%/gi, 'C:/Windows')
+    out = out.replace(/\$\{?env:ComSpec\}?/gi, 'C:/Windows/System32/cmd.exe')
+    // PowerShell 里 $env:X 拼出来的字符串读不出值，换成 cmd 的名字让管道/解释器规则按同一把尺子判
+    out = out.replace(/\$\{?env:\w+\}?\s*(?:\+\s*)?['"]?\s*-{1,2}c\b/gi, 'cmd -c')
+    // 把剩下的 %NAME% 引用改成裸名，好让切片规则（%\w+:）之外的写法也有名字可查
+    out = out.replace(/%([A-Za-z_][A-Za-z0-9_]*)%/g, ' $1')
     return out
   }
 
@@ -234,6 +277,53 @@ export class CommandGuard {
     }
     return hits
   }
+
+  /** 对若干份等价文本（原文 / 还原 / 拆出来的内层命令）取命中并集 */
+  private static matchedAll(texts: string[], rules: Rule[]): string[] {
+    let hits: string[] = []
+    for (let i: number = 0; i < texts.length; i++) {
+      let found: string[] = CommandGuard.matched(texts[i], rules)
+      for (let j: number = 0; j < found.length; j++) {
+        if (hits.indexOf(found[j]) === -1) {
+          hits.push(found[j])
+        }
+      }
+    }
+    return hits
+  }
+
+  // 括号与反引号里的内容：cmd 的 for /f ... in ('…')、POSIX 的 `…` 都是「另起一段执行」。
+  // 解释器规则锚在段首，包一层就看不见（实测：for /f %a in ('powershell -c …') 免审批直通），
+  // 所以把内层单独拎出来走同一套判定，而不是把锚点放宽到任意位置（那会误伤带路径的文件名）。
+  private static readonly INNER_GROUP_RE: RegExp = /\(([^()\n]{1,240})\)|`([^`\n]{1,240})`/g
+  private static readonly MAX_INNER: number = 6
+
+  private static extractInnerCommands(text: string): string[] {
+    let out: string[] = []
+    let re: RegExp = new RegExp(CommandGuard.INNER_GROUP_RE.source, 'g')
+    let match: RegExpExecArray | null = re.exec(text)
+    while (match !== null && out.length < CommandGuard.MAX_INNER) {
+      let inner: string = (match[1] !== undefined ? match[1] : match[2]).trim()
+      // cmd 的循环变量（%a / %%a）换成空，免得把 `%a` 当成变量引用；单引号包的整体也算一段
+      inner = inner.replace(/%%?[A-Za-z]\b/g, ' ').trim()
+      if (inner !== '') {
+        out.push(inner)
+      }
+      match = re.exec(text)
+    }
+    return out
+  }
+
+  // 已知必然落在工作区之外的环境变量名（临时目录、系统目录、用户目录那一类）。
+  private static readonly ENV_OUTSIDE_NAMES: RegExp =
+    /^(?:temp|tmp|systemroot|windir|comspec|userprofile|homepath|homeDrive|allusersprofile|public|appdata|localappdata|programdata|programfiles(?:\(?x86\)?)?|programfilesx86|systemdrive|os|cmdcmdline|windowsdirectory|homeshare)$/i
+
+  // %NAME%\… 或 $env:NAME（含 PowerShell 的 $env:X + '\y' 拼接）——名字查得出就按越界处理，
+  // 查不出但后面紧跟分隔符的也按越界：值我们读不出来，就不能假定它还在工作区里。
+  private static readonly ENV_TOKEN_RE: RegExp =
+    /%([A-Za-z_][A-Za-z0-9_]{1,})%|\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?/gi
+  // 允许夹在变量引用与分隔符之间的字符：PowerShell 用 `$env:X + '\y'` 拼路径，引号与加号都在中间
+  private static readonly ENV_SEPARATORS: string = " \t'\"+"
 
   private static onlyMissing(candidates: string[], known: string[]): string[] {
     let fresh: string[] = []
@@ -307,6 +397,29 @@ export class CommandGuard {
   // 这样 HEAD~1..HEAD、1..5、v1..v2 一类区间写法不会被冤枉，而 --prefix=../outside
   // 这种把越界挂在参数上的写法也跑不掉。
   private static readonly UP_SEGMENT_RE: RegExp = /(?:^|[\\/=])\.\.(?=$|[\\/])/
+
+  /** 找出命令里第一个「展开后必然出圈」的环境变量引用；没有则返回空串 */
+  private static firstEnvPathOutside(text: string): string {
+    let re: RegExp = new RegExp(CommandGuard.ENV_TOKEN_RE.source, 'gi')
+    let match: RegExpExecArray | null = re.exec(text)
+    while (match !== null) {
+      let name: string = match[1] !== undefined ? match[1] : match[2]
+      let rest: string = text.substring(match.index + match[0].length)
+      let at: number = 0
+      while (at < rest.length && CommandGuard.ENV_SEPARATORS.indexOf(rest.charAt(at)) !== -1) {
+        at++
+      }
+      let asPath: boolean = rest.charAt(at) === '\\' || rest.charAt(at) === '/'
+      // 认得出名字的（临时目录、系统目录、用户目录）本来就全在工作区之外，`dir %TEMP%` 不带分隔符也是越界；
+      // 认不出名字的只在「明显被当路径用」时才算，且长度小于 3 的一律放过 —— cmd 的循环变量
+      // （%f、%CD% 这类）就在工作区里，不能因为一个反斜杠打扰用户。
+      if (CommandGuard.ENV_OUTSIDE_NAMES.test(name) || (asPath && name.length >= 3)) {
+        return match[0]
+      }
+      match = re.exec(text)
+    }
+    return ''
+  }
 
   /**
    * 找出命令里第一个含「.. 上跳段」的 token；没有则返回空串。

@@ -3420,6 +3420,57 @@ check(
       CommandGuard.assess(c, cmdRoot).reasons.some((r) => r.includes('工作区之外'))
   )
 )
+// 第二轮实测：间接写法不改变语法位置，只看「段首是不是解释器名」就会漏掉整族写法
+const INDIRECT_CMDS = [
+  ['@cmd /c echo hi', '@ 前缀的 cmd'],
+  ['@powershell -c "Write-Output OK"', '@ 前缀的 PowerShell'],
+  ['&&@cmd /c echo hi', '串联后面的 @cmd'],
+  ['%ComSpec% /c echo hi', '%ComSpec% 就是 cmd.exe'],
+  ['%SystemRoot%\\System32\\cmd.exe /c echo hi', '写全路径的 cmd.exe'],
+  ['for /f %a in (\'powershell -c "get-date"\') do echo %a', 'for /f 包裹解释器'],
+  ['echo ([IO.File]::Delete("p.txt")) | @powershell -', '管道把代码喂给解释器 stdin'],
+  ['type probe\\benign.bat | @cmd', '管道把脚本内容喂给 cmd'],
+  ['echo 1 | node -', 'node 读 stdin 执行'],
+  ['[System.IO.File]::Delete("p.txt")', '.NET 删除 API'],
+  ['Add-Type -Path x.dll', '让 .NET 编译执行代码'],
+  ['[Scriptblock]::Create($s)', '反射拼出脚本块'],
+  ['powershell -c "New-Object Net.WebClient"', 'New-Object 起任意类型']
+]
+check(
+  '间接写法（@ 前缀 / %ComSpec% / 括号包裹 / 管道 stdin / .NET API）一律判危险',
+  INDIRECT_CMDS.every(([c]) => CommandGuard.assess(c, cmdRoot).risky),
+  INDIRECT_CMDS.filter(([c]) => !CommandGuard.assess(c, cmdRoot).risky).map(([c, w]) => w).join(' | ')
+)
+check(
+  '还原间接写法才看出的危险要在理由里说明（用户得知道这条为什么和裸写不一样）',
+  ['@cmd /c echo hi', '%ComSpec% /c echo hi'].every(
+    (c) => CommandGuard.assess(c, cmdRoot).reasons.some((r) => r.includes('还原'))
+  )
+)
+const ENV_ESCAPE_CMDS = [
+  'type %SystemRoot%\\win.ini',
+  'dir %SystemRoot%\\System32\\drivers\\etc',
+  'echo GUNCAT > %TEMP%\\probe.txt',
+  'dir %TEMP%',
+  'cat $env:FOO_DIR/x.txt',
+  '@powershell -c "[IO.File]::Delete($env:TEMP + \'\\p.txt\')"'
+]
+check(
+  '环境变量展开出来的路径也算工作区之外（字面 C:\\ 拦得住、%TEMP% 拦不住是同一条边界的缺口）',
+  ENV_ESCAPE_CMDS.every(
+    (c) => CommandGuard.assess(c, cmdRoot).risky &&
+      CommandGuard.assess(c, cmdRoot).reasons.some((r) => r.includes('工作区之外'))
+  ),
+  ENV_ESCAPE_CMDS.filter((c) =>
+    !CommandGuard.assess(c, cmdRoot).reasons.some((r) => r.includes('工作区之外'))).join(' | ')
+)
+check(
+  'sc 与 netsh 进危险名单（net stop 早就有、sc stop 却没有，是同一个效果的漏判）',
+  ['sc stop guncat_probe', 'sc delete guncat_probe', 'cmd /c "sc query wuauserv"',
+    'netsh advfirewall set allprofiles state off'].every(
+    (c) => CommandGuard.assess(c, cmdRoot).risky
+  )
+)
 check(
   '命令里引用到的脚本文件会被提出来（带空格的引号路径也算一个）',
   CommandGuard.scriptRefs('powershell -File "My Scripts\\clean up.ps1" && node probes/cleanup.js').length === 2 &&
@@ -3431,13 +3482,19 @@ check(
   ['npm run dev', 'npm run build', 'node scripts/build.mjs', 'grep -rn "TODO" src',
     'echo "hello world" > note.txt', 'dir *.js', 'esbuild src/a.ts --bundle --outfile=out/a.js',
     'python --version', 'node --version', 'type package.json', 'git add src/app.tsx',
-    'ls node_modules'].every(
+    'ls node_modules', 'for %f in (*.txt) do echo %f', 'type %CD%\\README.md',
+    'echo %PATH%', 'echo %DATE% %TIME%', 'if exist x (echo yes)',
+    'cat build.log | head -20', 'ls | grep node', 'npm test 2>&1 | tail -30',
+    'sort a.txt > b.txt', 'git log --oneline -5'].every(
     (c) => !CommandGuard.assess(c, cmdRoot).forbidden && !CommandGuard.assess(c, cmdRoot).risky
   ),
   ['npm run dev', 'npm run build', 'node scripts/build.mjs', 'grep -rn "TODO" src',
     'echo "hello world" > note.txt', 'dir *.js', 'esbuild src/a.ts --bundle --outfile=out/a.js',
     'python --version', 'node --version', 'type package.json', 'git add src/app.tsx',
-    'ls node_modules']
+    'ls node_modules', 'for %f in (*.txt) do echo %f', 'type %CD%\\README.md',
+    'echo %PATH%', 'echo %DATE% %TIME%', 'if exist x (echo yes)',
+    'cat build.log | head -20', 'ls | grep node', 'npm test 2>&1 | tail -30',
+    'sort a.txt > b.txt', 'git log --oneline -5']
     .filter((c) => CommandGuard.assess(c, cmdRoot).risky).join(' | ')
 )
 check(
