@@ -245,6 +245,8 @@ export class Constants {
   static readonly WORK_ASK_WAIT_TIMEOUT_MS: number = 300000;
   // 后台任务数上限 / 单个后台任务的输出缓冲上限 / job_output 单次返回的字符上限
   static readonly WORK_CMD_MAX_JOBS: number = 8;
+  // 脚本同审的读取体积上限(字节): 命令引用了更大的脚本就按「审阅不了」处理, 要人批准。
+  static readonly WORK_CMD_SCRIPT_AUDIT_MAX_BYTES: number = 64 * 1024;
   static readonly WORK_CMD_JOB_BUFFER_BYTES: number = 512 * 1024;
   static readonly WORK_CMD_JOB_OUTPUT_MAX_CHARS: number = 8000;
   // 人工等待类工具的**外层护栏**超时(毫秒)。护栏在 WorkToolRunner 外面, 默认只有

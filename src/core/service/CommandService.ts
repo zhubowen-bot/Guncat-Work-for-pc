@@ -8,10 +8,12 @@
 //   1. 工作目录锚定会话工作区, cwd 只接受工作区内的相对路径(越界拒绝);
 //   2. 环境变量按白名单净化(主进程环境里的 API Key/令牌不会透传给子进程);
 //   3. CommandGuard 硬禁表命中的命令**直接拒绝**, 不给审批入口;
-//   4. 危险命令按会话档位走 AskUserBridge 人工批准, 超时/跳过/没点选项一律按**拒绝**处理
+//   4. 命令引用到的工作区脚本读进来过同一套判定(脚本同审) —— 否则「把破坏搬进 .bat/.ps1」
+//      就是一条免检门, 命令行本身干净得不能再干净;
+//   5. 危险命令按会话档位走 AskUserBridge 人工批准, 超时/跳过/没点选项一律按**拒绝**处理
 //      (fail-closed: 没人应答就等于不许);
-//   5. 超时或被停止会杀掉整棵进程树, 不留孤儿进程;
-//   6. 输出有缓冲上限 + 头尾截断, 超长全文落 .spill/ ——「截断不丢失」。
+//   6. 超时或被停止会杀掉整棵进程树, 不留孤儿进程;
+//   7. 输出有缓冲上限 + 头尾截断, 超长全文落 .spill/ ——「截断不丢失」。
 import { fileIo } from '@kit.CoreFileKit';
 import { Constants } from '../common/Constants';
 import { AbortSignal } from '../common/Types';
@@ -54,6 +56,16 @@ class CommandJob {
   exitCode: number = -1;
   killed: boolean = false;
   startedAt: number = 0;
+}
+
+// 一个待审阅的脚本文件（命令直接引用的，以及它内部又指向的）
+class ScriptAuditItem {
+  abs: string = '';
+  /** 审批卡上给用户看的写法 */
+  label: string = '';
+  /** 这个脚本自己所在目录（相对工作区根）：它内部的相对引用按这里解析，而不是按命令的 cwd */
+  baseRel: string = '';
+  depth: number = 0;
 }
 
 export class CommandService {
@@ -143,6 +155,13 @@ export class CommandService {
         return CommandService.fail('cwd 不是工作区里已存在的目录: ' + cwdRel);
       }
       cwd = resolved;
+    }
+    // 2.5 脚本同审: 命令文本只写了「跑哪个脚本」, 危险全在文件里(实测: run.bat 无审批删文件)。
+    //     读进来过同一套判定, 让「把破坏搬进脚本」不再是一条免检门。
+    let scriptForbidden: string = CommandService.auditScripts(command, cwdRel, root, verdict);
+    if (scriptForbidden !== '') {
+      return CommandService.fail('该命令被安全策略拒绝(' + scriptForbidden +
+        ')。这类操作不可逆, 本应用不会代为执行 —— 请把要做什么说清楚, 交给用户自己在终端里完成');
     }
     // 3. 审批(档位 + 本次任务的授权)
     let permission: string = CommandService.permissionFor(convId);
@@ -323,6 +342,124 @@ export class CommandService {
       }
     }
     CommandService.jobs = keep;
+  }
+
+  // ===== 脚本同审 =====
+
+  /**
+   * 脚本同审：把命令引用到的工作区脚本读进来，过同一套危险判定，命中就并进 verdict
+   * （审批卡上写明是「哪个文件的哪一项」，用户才知道自己在批什么）。
+   * 返回脚本内容里命中的**硬禁**项 —— 这类操作不给审批入口，与命令行本身同一口径。
+   *
+   * 会跟进脚本内部的相对引用（`run.bat` 里只写一行 `helper.ps1` 不算把危险藏好），深度 2、
+   * 文件数 8 封顶 —— 再深就是构建脚本的正常引用网，逐层读下去只会把用户问烦。
+   */
+  private static auditScripts(command: string, cwdRel: string, root: string,
+    verdict: GuardVerdict): string {
+    let forbidden: string[] = [];
+    let queue: ScriptAuditItem[] = [];
+    let refs: string[] = CommandGuard.scriptRefs(command);
+    for (let i: number = 0; i < refs.length; i++) {
+      let abs: string | null = CommandService.resolveScript(refs[i], cwdRel, root);
+      if (abs === null) {
+        CommandService.pushRisk(verdict, '脚本 ' + refs[i] + ' 不在工作区内，内容审阅不了');
+        continue;
+      }
+      queue.push(CommandService.auditItem(abs, refs[i], 0, root));
+    }
+    let seen: string[] = [];
+    while (queue.length > 0 && seen.length < 8) {
+      let item: ScriptAuditItem = queue.shift() as ScriptAuditItem;
+      if (seen.indexOf(item.abs) !== -1) {
+        continue;
+      }
+      seen.push(item.abs);
+      if (!fileIo.accessSync(item.abs)) {
+        continue; // 文件不存在: 命令自己会失败，不用打扰用户
+      }
+      let size: number = fileIo.statSync(item.abs).size;
+      if (size > Constants.WORK_CMD_SCRIPT_AUDIT_MAX_BYTES) {
+        CommandService.pushRisk(verdict, '脚本 ' + item.label + ' 有 ' +
+          Math.round(size / 1024).toString() + ' KB，超出能逐字审阅的上限');
+        continue;
+      }
+      let body: string | null = CommandService.readScript(item.abs);
+      if (body === null) {
+        CommandService.pushRisk(verdict, '脚本 ' + item.label + ' 读不出文本（二进制或编码不符），内容审阅不了');
+        continue;
+      }
+      let inner: GuardVerdict = CommandGuard.assessScript(body, root);
+      for (let r: number = 0; r < inner.reasons.length; r++) {
+        let label: string = '脚本 ' + item.label + ' 里：' + inner.reasons[r];
+        if (inner.forbidden) {
+          forbidden.push(label);
+        }
+        CommandService.pushRisk(verdict, label);
+      }
+      if (inner.forbidden) {
+        verdict.forbidden = true;
+      }
+      if (item.depth < 2) {
+        let children: string[] = CommandGuard.scriptRefs(body);
+        for (let c: number = 0; c < children.length; c++) {
+          let childAbs: string | null = CommandService.resolveScript(children[c], item.baseRel, root);
+          if (childAbs !== null && seen.indexOf(childAbs) === -1) {
+            queue.push(CommandService.auditItem(childAbs, children[c], item.depth + 1, root));
+          }
+        }
+      }
+    }
+    return forbidden.join('、');
+  }
+
+  private static auditItem(abs: string, label: string, depth: number,
+    root: string): ScriptAuditItem {
+    let item: ScriptAuditItem = new ScriptAuditItem();
+    item.abs = abs;
+    item.label = label;
+    item.depth = depth;
+    // 脚本内部的相对引用是相对**它自己**所在的目录，不是命令的 cwd
+    item.baseRel = CommandService.relativeToRoot(abs.substring(0, abs.lastIndexOf('/')), root);
+    return item;
+  }
+
+  private static relativeToRoot(abs: string, root: string): string {
+    let nAbs: string = abs.replace(/\\/g, '/');
+    let nRoot: string = root.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (nAbs.toLowerCase().indexOf(nRoot.toLowerCase() + '/') === 0) {
+      return nAbs.substring(nRoot.length + 1);
+    }
+    return nAbs === nRoot ? '' : nAbs;
+  }
+
+  private static readScript(abs: string): string | null {
+    try {
+      return fileIo.readTextSync(abs);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** 把命令里写的脚本路径归一成工作区内的绝对路径；工作区之外（或读不出）返回 null */
+  private static resolveScript(ref: string, baseRel: string, root: string): string | null {
+    let norm: string = ref.replace(/\\/g, '/').replace(/^"+|"+$/g, '');
+    let rel: string = norm;
+    if (/^[a-zA-Z]:\//.test(norm) || norm.indexOf('/') === 0) {
+      let base: string = root.replace(/\\/g, '/').replace(/\/+$/, '');
+      if (norm.toLowerCase().indexOf(base.toLowerCase() + '/') !== 0) {
+        return null;
+      }
+      rel = norm.substring(base.length + 1);
+    }
+    let prefix: string = baseRel.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    return WorkFileService.resolveSafePublic(root, prefix === '' ? rel : prefix + '/' + rel);
+  }
+
+  private static pushRisk(verdict: GuardVerdict, why: string): void {
+    if (verdict.reasons.indexOf(why) === -1) {
+      verdict.reasons.push(why);
+    }
+    verdict.risky = true;
   }
 
   // ===== 审批 =====

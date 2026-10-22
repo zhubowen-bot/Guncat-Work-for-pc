@@ -3337,7 +3337,7 @@ check(
 )
 check(
   '无害命令判为既非硬禁也非危险（默认档不打扰用户）',
-  ['node -p 1+1', 'python --version', 'dir', 'ls -l'].every(
+  ['echo hi', 'python --version', 'dir', 'ls -l'].every(
     (c) => !CommandGuard.assess(c, cmdRoot).forbidden && !CommandGuard.assess(c, cmdRoot).risky
   )
 )
@@ -3375,6 +3375,71 @@ check(
     (c) => !CommandGuard.assess(c, cmdRoot).risky
   )
 )
+
+// —— 绕过面回归 ——
+// 这些不是推演出来的写法：AI 实测时 de^l / powershell -enc / node -e / run.bat 全部无审批直通，
+// 其中 7 条真的删掉了文件。根因是「审批器看的是命令原文」，而 shell 执行前会先把 ^、引号、
+// 反斜杠吃掉，也会把危险搬进解释器的内层代码或脚本文件里。两类根因各自钉一层。
+const OBFUSCATED_FORBIDDEN = ['shut^down /s /t 0', 'form^at C:', 'bcd^edit /create', 'ciph^er /w c:']
+check(
+  '硬禁命令被 ^ 拆词后依然硬禁、依然不给审批入口（H1：一个脱字符不能把整张表绕过去）',
+  OBFUSCATED_FORBIDDEN.every((c) => CommandGuard.assess(c, cmdRoot).forbidden),
+  OBFUSCATED_FORBIDDEN.filter((c) => !CommandGuard.assess(c, cmdRoot).forbidden).join(' | ')
+)
+const OPAQUE_CMDS = [
+  ['de^l /q victim.txt', '转义拆词'],
+  ['d"e"l /q victim.txt', '引号拆词'],
+  ['powershell -c "ri -Recurse -Force probes"', 'PowerShell 别名'],
+  ['powershell -enc SQBtAG8AcgB0ACAA', '编码载荷'],
+  ['pwsh -EncodedCommand AAAA', '编码载荷'],
+  ['node -e "require(\\"fs\\").rmSync(\\"probes\\")"', 'JS 内联代码'],
+  ['python -c "import shutil; shutil.rmtree(\\"probes\\")"', 'Python 内联代码'],
+  ['python -m http.server 8080', 'Python 模块执行'],
+  ['bash -c "echo hi"', 'shell 内联'],
+  ['cmd /c echo hi', 'cmd 内层'],
+  ['certutil -urlcache -split -f 127.0.0.1/a.exe a.exe', '系统下载组件'],
+  ['rm $(cat list.txt)', '命令替换'],
+  ['sed -i s/a/b/ notes.txt', '原地改写'],
+  ['java -jar tool.jar', '二进制包'],
+  ['npx tsx scripts/dev.ts', 'TS 直接执行'],
+  ['po%PATH:~0,5%wer /s', '变量切片拼命令']
+]
+check(
+  '解释器内联执行 / 编码载荷 / 命令替换 / 系统组件一律判危险（H2-H4、H7：文本里没危险词不等于执行时无害）',
+  OPAQUE_CMDS.every(([c]) => CommandGuard.assess(c, cmdRoot).risky),
+  OPAQUE_CMDS.filter(([c]) => !CommandGuard.assess(c, cmdRoot).risky).map(([c, w]) => w).join(' | ')
+)
+check(
+  '还原转义才看出的危险要在理由里说明白（用户得知道这条为什么和普通 del 不一样）',
+  CommandGuard.assess('de^l /q victim.txt', cmdRoot).reasons.some((r) => r.includes('还原'))
+)
+check(
+  '混淆写法不影响「位置越界」这一层：^ 拆词 + 上跳两样同时报出来',
+  ['de^l /q ..\\out.txt', 'del /q C:\\Windows\\win.ini'].every(
+    (c) => CommandGuard.assess(c, cmdRoot).risky &&
+      CommandGuard.assess(c, cmdRoot).reasons.some((r) => r.includes('工作区之外'))
+  )
+)
+check(
+  '命令里引用到的脚本文件会被提出来（带空格的引号路径也算一个）',
+  CommandGuard.scriptRefs('powershell -File "My Scripts\\clean up.ps1" && node probes/cleanup.js').length === 2 &&
+    CommandGuard.scriptRefs('git add src/app.js && echo ok').length === 1
+)
+// 新加的两层不能把手感打坏：这些是日常要静默跑过去的写法
+check(
+  '日常写法不被新规则打扰（转义还原与解释器层都只盯「读不出意图」的命令）',
+  ['npm run dev', 'npm run build', 'node scripts/build.mjs', 'grep -rn "TODO" src',
+    'echo "hello world" > note.txt', 'dir *.js', 'esbuild src/a.ts --bundle --outfile=out/a.js',
+    'python --version', 'node --version', 'type package.json', 'git add src/app.tsx',
+    'ls node_modules'].every(
+    (c) => !CommandGuard.assess(c, cmdRoot).forbidden && !CommandGuard.assess(c, cmdRoot).risky
+  ),
+  ['npm run dev', 'npm run build', 'node scripts/build.mjs', 'grep -rn "TODO" src',
+    'echo "hello world" > note.txt', 'dir *.js', 'esbuild src/a.ts --bundle --outfile=out/a.js',
+    'python --version', 'node --version', 'type package.json', 'git add src/app.tsx',
+    'ls node_modules']
+    .filter((c) => CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
 check(
   '空命令与超长命令都按硬禁处理（人无法审阅）',
   CommandGuard.assess('', cmdRoot).forbidden && CommandGuard.assess('x'.repeat(5000), cmdRoot).forbidden
@@ -3382,8 +3447,8 @@ check(
 check(
   '三档审批粒度：auto 不打扰、ask 每条都问、ask-risk 只问危险',
   CommandGuard.needsApproval(CommandGuard.assess('del x.txt', cmdRoot), CommandGuard.PERMISSION_AUTO) === false &&
-    CommandGuard.needsApproval(CommandGuard.assess('node -p 1+1', cmdRoot), CommandGuard.PERMISSION_ASK) === true &&
-    CommandGuard.needsApproval(CommandGuard.assess('node -p 1+1', cmdRoot), CommandGuard.PERMISSION_ASK_RISK) === false &&
+    CommandGuard.needsApproval(CommandGuard.assess('echo hi', cmdRoot), CommandGuard.PERMISSION_ASK) === true &&
+    CommandGuard.needsApproval(CommandGuard.assess('echo hi', cmdRoot), CommandGuard.PERMISSION_ASK_RISK) === false &&
     CommandGuard.needsApproval(CommandGuard.assess('del x.txt', cmdRoot), CommandGuard.PERMISSION_ASK_RISK) === true
 )
 check(
@@ -3440,10 +3505,10 @@ check(
   neverSet !== undefined && CommandService.permissionFor(neverSet.id) === CommandGuard.PERMISSION_ASK_RISK
 )
 
-const echoResult = await CommandService.run(convCmd.id, cmdRoot, { command: 'node -p 1+1' }, null)
+const echoResult = await CommandService.run(convCmd.id, cmdRoot, { command: 'echo hi' }, null)
 check(
   '无害命令在 auto 档直接执行并拿到输出（退出码 0、stdout 回来了）',
-  echoResult.ok === true && echoResult.output.includes('退出码 0') && echoResult.output.includes('2'),
+  echoResult.ok === true && echoResult.output.includes('退出码 0') && echoResult.output.includes('hi'),
   echoResult.output.slice(0, 120)
 )
 
@@ -3558,7 +3623,74 @@ check(
   afterClear.askEvent !== null && afterClear.result.ok === false
 )
 
+// —— 脚本同审（H5/H6：危险搬进 .bat/.js 里，命令行本身干净得不能再干净）——
+const auditDir = path.join(cmdRoot, 'guard-audit')
+fs.mkdirSync(auditDir, { recursive: true })
+fs.writeFileSync(path.join(auditDir, 'power.bat'), '@echo off\r\nshutdown /s /t 0\r\n')
+fs.writeFileSync(path.join(auditDir, 'wipe.js'), 'require("fs").rmSync("data", { recursive: true })\n')
+fs.writeFileSync(path.join(auditDir, 'safe.js'), 'console.log("audit-safe-ok")\n')
+fs.writeFileSync(path.join(auditDir, 'front.bat'), '@echo off\r\nhelper.ps1\r\n')
+fs.writeFileSync(path.join(auditDir, 'helper.ps1'), 'diskpart /s setup.txt\r\n')
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_AUTO)
+const scriptForbidden = await CommandService.run(
+  convCmd.id, cmdRoot, { command: 'guard-audit\\power.bat' }, null
+)
+events.length = 0
+check(
+  '脚本内容里的硬禁操作直接拒绝、不给审批入口（连 auto 档也拦得住，「搬进 .bat」不是一条免检门）',
+  scriptForbidden.ok === false &&
+    scriptForbidden.output.includes('安全策略拒绝') &&
+    scriptForbidden.output.includes('power.bat') &&
+    scriptForbidden.output.includes('关机') &&
+    !events.some((e) => e.type === 'ask:user'),
+  scriptForbidden.output.slice(0, 200)
+)
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_ASK_RISK)
+events.length = 0
+const auditPromise = CommandService.run(convCmd.id, cmdRoot, { command: 'node guard-audit/wipe.js' }, null)
+const auditAsk = await waitForEvent((e) => e.type === 'ask:user')
+check(
+  '脚本里的语言级删除 API（fs.rmSync）要走审批，理由写明是哪个文件的哪一项',
+  auditAsk !== null && auditAsk.question.includes('guard-audit/wipe.js') &&
+    auditAsk.question.includes('JS 删除文件'),
+  auditAsk === null ? '(没有审批卡)' : auditAsk.question.slice(0, 240)
+)
+await inv('work:answer', {
+  conversationId: convCmd.id,
+  requestId: auditAsk === null ? '' : auditAsk.requestId,
+  canceled: false,
+  selections: ['拒绝'],
+  note: ''
+})
+const auditRes = await auditPromise
+check(
+  '脚本审批被拒 → 不执行',
+  auditRes.ok === false && auditRes.output.includes('命令未执行')
+)
+events.length = 0
+const benignScript = await CommandService.run(convCmd.id, cmdRoot, { command: 'node guard-audit/safe.js' }, null)
+check(
+  '内容干净的脚本不打扰用户（默认档直接执行，同审不是「见脚本就拦」）',
+  benignScript.ok === true && benignScript.output.includes('audit-safe-ok') &&
+    !events.some((e) => e.type === 'ask:user'),
+  benignScript.output.slice(0, 160)
+)
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_AUTO)
+const chained = await CommandService.run(
+  convCmd.id, cmdRoot, { command: 'guard-audit\\front.bat' }, null
+)
+check(
+  '脚本内部再指向的脚本也跟进（把危险搬到隔壁那个文件不是新的出口）',
+  chained.ok === false && chained.output.includes('安全策略拒绝') &&
+    chained.output.includes('helper.ps1') && chained.output.includes('磁盘分区'),
+  chained.output.slice(0, 200)
+)
+fs.rmSync(auditDir, { recursive: true, force: true })
+
 // —— 后台任务 ——
+// 这一段验的是「任务注册表 + 增量读 + 杀树」，跟审批无关，所以切到 auto 档：
+// `node -e` 现在是危险项（解释器内联代码读不出真实意图），留在默认档会卡在审批上等不到答案。
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_AUTO)
 const bgRun = await CommandService.run(
   convCmd.id,
   cmdRoot,
