@@ -3349,6 +3349,32 @@ check(
   '工作区之外的绝对路径判为危险',
   CommandGuard.assess(isWin ? 'node C:\\Windows\\system.ini' : 'node /etc/hosts', cmdRoot).risky
 )
+// 真实测试里翻车的一条：绝对路径正则会拦下 C:\Windows，却看不见相对上跳 —— 同一个出圈效果
+// 不能因为写法不同就一路绿灯（B4/B5：echo 写到 ..\ 落进父目录、dir .. 直接列父目录）
+const UP_CMDS = isWin
+  ? ['echo escape > ..\\escape_cmd.txt', 'dir .. /b', 'type ..\\..\\Windows\\win.ini', 'del /q "..\\out.txt"']
+  : ['echo escape > ../escape_cmd.txt', 'ls -la ..', 'cat ../../etc/passwd', 'rm -f "../out.txt"']
+check(
+  '命令里的 .. 上跳（相对路径出圈）判为危险 —— 与绝对路径同一把尺子',
+  UP_CMDS.every((c) => CommandGuard.assess(c, cmdRoot).risky),
+  UP_CMDS.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
+check(
+  '上跳的理由写进审批卡文案（用户要看得见「出圈到哪儿」才有的放矢）',
+  CommandGuard.assess(UP_CMDS[0], cmdRoot).reasons.some((r) => r.includes('..') && r.includes('工作区之外'))
+)
+check(
+  '工作区之内的相对路径不被 .. 规则打扰（否则等于什么都要批）',
+  ['dir src\\components', 'type .\\a.md', 'python ./build.py'].every(
+    (c) => !CommandGuard.assess(c, cmdRoot).risky
+  )
+)
+check(
+  '.. 的子串写法不算上跳（git 区间 HEAD~1..HEAD、v1..v2 是正常用法）',
+  ['git diff HEAD~1..HEAD', 'git log v1.0..v2.0', 'git diff HEAD^..HEAD'].every(
+    (c) => !CommandGuard.assess(c, cmdRoot).risky
+  )
+)
 check(
   '空命令与超长命令都按硬禁处理（人无法审阅）',
   CommandGuard.assess('', cmdRoot).forbidden && CommandGuard.assess('x'.repeat(5000), cmdRoot).forbidden

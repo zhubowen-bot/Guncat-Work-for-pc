@@ -118,6 +118,13 @@ export class CommandGuard {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '触及工作区之外的路径 ' + outside)
     }
+    // 绝对路径那套正则看不见「相对上跳」：dir .. / echo x > ..\y.txt 同样是出圈，
+    // 同一个越界效果不能因为写法不同就一路绿灯（实测缺口，见 firstUpTraversal 的说明）。
+    let up: string = CommandGuard.firstUpTraversal(text)
+    if (up !== '') {
+      verdict.risky = true
+      CommandGuard.pushReason(verdict, '命令里有 .. 上跳，读写位置在工作区之外：' + up)
+    }
     return verdict
   }
 
@@ -171,6 +178,35 @@ export class CommandGuard {
         continue
       }
       return token
+    }
+    return ''
+  }
+
+  // 一个命令行 token：空白与引号、重定向、管道、括号都做分隔（引号会把 token 切开，
+  // 正好是我们想要的 —— "..\x" 里的 .. 一样得上跳）
+  private static readonly TOKEN_RE: RegExp = /[^\s"'`;|&)<>]+/g
+
+  // 「..」要真的是一段路径的开头才算上跳：前面是 token 开头或 \ / = 之一，后面是结尾或分隔符。
+  // 这样 HEAD~1..HEAD、1..5、v1..v2 一类区间写法不会被冤枉，而 --prefix=../outside
+  // 这种把越界挂在参数上的写法也跑不掉。
+  private static readonly UP_SEGMENT_RE: RegExp = /(?:^|[\\/=])\.\.(?=$|[\\/])/
+
+  /**
+   * 找出命令里第一个含「.. 上跳段」的 token；没有则返回空串。
+   *
+   * 为什么单独立一条：工作区是命令唯一的活动范围，但 shell 里的相对路径不受任何约束 ——
+   * `dir ..`、`echo x > ..\y.txt` 直接读写了工作区的父目录，而绝对路径正则（ABS_PATH_RE）
+   * 只认「带盘符或系统目录开头」的写法，对这类上跳完全无感。实测过一次静默越界：
+   * 同一条 `dir .. /b` 无审批直接列出了父目录，而 `type C:\Windows\win.ini` 却被拦下问人。
+   */
+  private static firstUpTraversal(text: string): string {
+    let re: RegExp = new RegExp(CommandGuard.TOKEN_RE.source, 'g')
+    let match: RegExpExecArray | null = re.exec(text)
+    while (match !== null) {
+      if (CommandGuard.UP_SEGMENT_RE.test(match[0])) {
+        return match[0]
+      }
+      match = re.exec(text)
     }
     return ''
   }
