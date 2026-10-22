@@ -8,6 +8,7 @@
 // UI 状态与循环驱动；桌面端把循环驱动留在主进程，UI 状态由渲染进程的 store 负责，
 // 因此这里只保留「业务」那一半。
 import { appContext } from '@core/platform/kit/AbilityKit'
+import { secretStorageState } from '@core/platform/kit/ArkData'
 import fs from 'node:fs'
 import path from 'node:path'
 import { StorageManager } from '@core/data/StorageManager'
@@ -282,7 +283,8 @@ export class SessionManager {
       currentApiProfileId: currentId,
       multimodalConfig: SessionManager.toMultimodalDto(multimodalConfig),
       flags: {},
-      prefs: await this.loadStringPrefs()
+      prefs: await this.loadStringPrefs(),
+      credentialState: secretStorageState()
     }
   }
 

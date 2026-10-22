@@ -301,6 +301,19 @@ export interface AppSettingsDto {
   flags: Record<string, boolean>
   /** 字符串型偏好（朗读音色/语速等） */
   prefs: Record<string, string>
+  /**
+   * 凭据落盘的真实状态（见 core/platform/kit/ArkData 的落盘加密说明）。
+   * available=false 时密钥是明文写在配置文件里的，设置面板必须如实显示 ——
+   * 不能让用户以为「设置里填了 Key」就等于「Key 被保护了」。
+   */
+  credentialState: CredentialStateDto
+}
+
+export interface CredentialStateDto {
+  /** 本机是否提供安全存储（Windows DPAPI / macOS Keychain / Linux 钥匙串） */
+  available: boolean
+  /** 解不开的配置项（换过机器 / 钥匙串被清空），形如 default/guncat_api_config */
+  undecryptable: string[]
 }
 
 // ===== 智能体 =====

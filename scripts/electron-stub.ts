@@ -339,3 +339,33 @@ export const nativeImage = {
     throw new Error('测试替身不提供像素解码')
   }
 }
+
+/**
+ * safeStorage 测试替身。默认关闭 = 照旧明文落盘（现有检查都按这个口径跑通），
+ * 凭据加密那一节里显式打开。'broken' 模拟「平台说可用、但密钥已经不在了」
+ * （换过机器 / 钥匙串被清空）—— 这是真实会发生的状态，必须能断言降级行为。
+ */
+let safeStorageMode: 'off' | 'on' | 'broken' = 'off'
+
+export function __setSafeStorage(mode: 'off' | 'on' | 'broken'): void {
+  safeStorageMode = mode
+}
+
+export const safeStorage = {
+  isEncryptionAvailable(): boolean {
+    return safeStorageMode !== 'off'
+  },
+  encryptString(text: string): Buffer {
+    if (safeStorageMode === 'off') {
+      throw new Error('测试替身：安全存储未开启')
+    }
+    return Buffer.from('gk:' + text, 'utf8')
+  },
+  decryptString(cipher: Buffer): string {
+    const raw: string = cipher.toString('utf8')
+    if (safeStorageMode === 'broken' || !raw.startsWith('gk:')) {
+      throw new Error('测试替身：密钥不在了')
+    }
+    return raw.slice(3)
+  }
+}

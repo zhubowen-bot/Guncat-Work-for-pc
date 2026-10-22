@@ -1465,6 +1465,52 @@ check(
   )
 )
 
+// --- 凭据落盘加密的用户口径（说错一个词，用户的安全假设就整个反过来） ---
+const credOn = mod.credentialCopy({ available: true, undecryptable: [] })
+const credOff = mod.credentialCopy({ available: false, undecryptable: [] })
+const credLostOn = mod.credentialCopy({ available: true, undecryptable: ['guncat/apiKey'] })
+const credLostOff = mod.credentialCopy({ available: false, undecryptable: ['guncat/apiKey'] })
+const credUnknown = mod.credentialCopy(undefined)
+check(
+  '保险库可用：明说加密保存，且不谎称存在明文',
+  credOn.includes('加密保存') &&
+    credOn.includes('不含明文密钥') &&
+    !credOn.includes('明文存在配置文件')
+)
+check(
+  '保险库不可用：如实写「明文」，不能拿「仅存本机」糊过去',
+  credOff.includes('明文存在配置文件') &&
+    !credOff.includes('不含明文密钥') &&
+    credOff.includes('没有可用的凭据保险库')
+)
+check(
+  '保险库不可用也给出去路（配好钥匙串会自动转加密，不是让用户自己改代码）',
+  credOff.includes('会自动改为加密保存')
+)
+check(
+  '解不开的项要点名到具体键，否则用户只知道「Key 无效」不知道该重填哪一项',
+  credLostOn.includes('guncat/apiKey') &&
+    credLostOn.includes('解不开') &&
+    credLostOff.includes('guncat/apiKey') &&
+    credLostOff.includes('解不开')
+)
+check(
+  '没有解不开的项时不提「解不开」（不能把一次性事故写成常驻警告）',
+  !credOn.includes('解不开') && !credOff.includes('解不开')
+)
+check(
+  '状态还没读到（首帧/旧进程）时退回中性文案，不宣称加密',
+  credUnknown === '仅保存在本机应用数据目录，不会上传'
+)
+check(
+  '两种状态都强调不上传（用户最怕的是密钥出境）',
+  credOn.includes('不会上传') && credOff.includes('明文存在配置文件里（只有这台机器能读到）')
+)
+check(
+  '设置面板首帧就把中性文案渲染出来（SSR 下 settings 还没到）',
+  decode(mod.renderSettings()).includes('仅保存在本机应用数据目录，不会上传')
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

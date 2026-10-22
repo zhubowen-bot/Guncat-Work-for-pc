@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ApiConfigDto, MultimodalConfigDto, SearchEngineDto } from '@ipc/contract'
+import type {
+  ApiConfigDto,
+  CredentialStateDto,
+  MultimodalConfigDto,
+  SearchEngineDto
+} from '@ipc/contract'
 // 多模态默认地址/模型与主进程 MultimodalConfig.default() 用的是同一份常量。
 // 面板保存时若把这两个字段存成空串，会把默认的智谱地址与 glm-4.6v-flash 冲掉，
 // 「先行解析附件」随即失效 —— 所以规整时要能拿到这里的默认值（见 normalizeMultimodal）。
@@ -81,6 +86,35 @@ export function searchEngineHint(engine: string): string {
     default:
       return '在对应平台获取 API Key 后填入。'
   }
+}
+
+/**
+ * API Key 的存储说明。措辞必须跟着主进程报上来的真实状态走：
+ * 「仅保存在本机」不等于「加密保存」—— 系统没有凭据保险库时它就是明文躺在配置文件里，
+ * 这时候写一句漂亮话等于替用户做了一个错的安全假设。解不开的项（换过机器、钥匙串被清空）
+ * 也要点名，否则用户只会看到「Key 无效」却不知道该重新填。
+ */
+export function credentialHint(state: CredentialStateDto | undefined): string {
+  if (state === undefined) {
+    return '仅保存在本机应用数据目录，不会上传'
+  }
+  const lost: string =
+    state.undecryptable.length > 0
+      ? `有几项配置在这台机器上解不开（换过机器或系统钥匙串被清空）：${state.undecryptable.join(
+          '、'
+        )}，需要重新填写。`
+      : ''
+  if (!state.available) {
+    return (
+      lost +
+      '注意：本机系统没有可用的凭据保险库，密钥目前明文存在配置文件里（只有这台机器能读到）。' +
+      '配好系统的钥匙串/凭据管理器后会自动改为加密保存。'
+    )
+  }
+  return (
+    lost +
+    '用本机系统的凭据保险库加密保存（与这台机器的登录账户绑定），配置文件里不含明文密钥，也不会上传；换到新机器需要重新填写密钥。'
+  )
 }
 
 /**
@@ -532,7 +566,7 @@ export function SettingsDialog({ open: openOverride }: SettingsDialogProps = {})
               placeholder="sk-…"
               onChange={(e) => update('apiKey', e.target.value)}
             />
-            <div className="field__hint">仅保存在本机应用数据目录，不会上传</div>
+            <div className="field__hint">{credentialHint(settings?.credentialState)}</div>
           </div>
 
           <div className="field">

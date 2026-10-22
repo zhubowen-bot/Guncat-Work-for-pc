@@ -59,6 +59,7 @@ import {
 import { AttachmentBar } from '@renderer/components/AttachmentBar'
 import {
   SettingsDialog,
+  credentialHint,
   normalizeApiConfig,
   normalizeMultimodal,
   providerCopy,
@@ -81,7 +82,12 @@ import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
 import { AssistantBody, marqueeText } from '@renderer/components/MessageView'
 import { EmptyState } from '@renderer/components/EmptyState'
 import { AgentGlyph } from '@renderer/components/AgentGlyph'
-import type { MessageDto, PickedAttachmentDto, WorkspaceEntryDto } from '@ipc/contract'
+import type {
+  CredentialStateDto,
+  MessageDto,
+  PickedAttachmentDto,
+  WorkspaceEntryDto
+} from '@ipc/contract'
 
 /** 导出文件名推导 —— 纯函数，可直接断言 */
 export { docxFileName }
@@ -571,6 +577,15 @@ export function settingsCopy(
 }
 
 export { normalizeApiConfig, normalizeMultimodal, providerCopy, searchEngineHint }
+
+/**
+ * 密钥存储说明的文案。安全口径必须能被断言：保险库可用时才是「加密保存」，
+ * 不可用时要如实写出「明文」，解不开的项要点名 —— 这三种形态差一个词，
+ * 用户对「Key 存在哪、安不安全」的判断就整个反过来。
+ */
+export function credentialCopy(state: CredentialStateDto | undefined): string {
+  return credentialHint(state)
+}
 
 /**
  * 输入区。附件入口（回形针）只在聊天模式给 —— 工作/交互模式的素材入口是工作区，

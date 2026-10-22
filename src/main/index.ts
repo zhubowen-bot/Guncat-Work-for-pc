@@ -5,10 +5,11 @@
 //
 // 每个里程碑都写一行启动日志（见 bootlog.ts）：一旦用户机器上「启动即退」，
 // 日志能指出它走到了哪一步，而不是只有「打不开」。
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, BrowserWindow, dialog, safeStorage } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { initAppPaths, clearTempDir } from '@core/platform/appPaths'
+import { bindSafeStorage } from '@core/platform/kit/ArkData'
 import { installPdfJsBackend } from '@core/platform/native/pdfBackend'
 import { registerElectronPicker } from './picker'
 import { registerIpcHandlers } from './ipc'
@@ -243,6 +244,12 @@ if (!gotLock) {
       initAppPaths(paths)
       clearTempDir()
       bootLog('应用路径已初始化')
+
+      // 配置的落盘加密要在这里定下来：API Key 之类凭据在第一次读配置之前就得知道本机
+      // 有没有凭据保险库（Windows DPAPI / macOS Keychain / Linux 钥匙串）。
+      // 注入而不是让平台层自己 require('electron')，见 core/platform/kit/ArkData 的说明。
+      bindSafeStorage(safeStorage)
+      bootLog(`凭据保险库=${safeStorage.isEncryptionAvailable() ? '可用' : '不可用（明文落盘）'}`)
 
       registerElectronPicker()
       bootLog('文件选择器已注册')

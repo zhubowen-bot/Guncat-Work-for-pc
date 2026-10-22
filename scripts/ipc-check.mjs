@@ -22,7 +22,7 @@ fs.writeFileSync(
 export { SessionManager } from '@main/session/SessionManager'
 export { collectFileArgs } from '@main/intake'
 export { resolveTranscriptionUrl, loadAsrConfig, transcribeAudio } from '@main/asr'
-export { __invoke, __channels, __events, __calls, __setOpenDialog, __setMessageBox, __reset } from 'electron'
+export { __invoke, __channels, __events, __calls, __setOpenDialog, __setMessageBox, __setSafeStorage, safeStorage as stubSafeStorage, __reset } from 'electron'
 export { initAppPaths, clearTempDir } from '@core/platform/appPaths'
 export { LocalWebSearch, SearchEngineSettings } from '@core/service/LocalWebSearch'
 export { ContextBudget } from '@core/common/ContextBudget'
@@ -42,6 +42,8 @@ export { WorkspaceInstructionsService } from '@core/service/WorkspaceInstruction
 export { FileObservation } from '@core/common/FileObservation'
 // @文件引用：扫描是纯逻辑，读取与预算走生产实现
 export { WorkspaceMentionService } from '@core/service/WorkspaceMentionService'
+// 配置落盘加密：读盘/回读要直接打在平台层实现上（端口代码本来也不该知道加密这回事）
+export { preferences as kitPreferences, secretStorageState, bindSafeStorage, __setUndecryptableForTest } from '@core/platform/kit/ArkData'
 // 子代理提示词组装（项目指令要一起带下去）
 export { SubagentService } from '@core/service/SubagentService'
 `
@@ -4137,6 +4139,93 @@ menServer.closeAllConnections?.()
 menServer.close()
 
 console.log(`\n@文件引用验证：通过 ${passed} 项（累计）`)
+
+console.log('\n25. 凭据落盘加密（safeStorage）')
+
+const PREFS_FILE = path.join(dataRoot, 'files', 'preferences', 'guncat_preferences.json')
+const PREF_NAME = 'guncat_preferences'
+const Kit = mod.kitPreferences
+const CRED_KEY = 'cred_probe'
+const LEGACY_KEY = 'legacy_plain_probe'
+const CRED_VALUE = 'sk-plain-probe-value'
+const readPrefsFile = () =>
+  fs.existsSync(PREFS_FILE) ? fs.readFileSync(PREFS_FILE, 'utf8') : ''
+// 绕开内存缓存，强制从磁盘重新读一遍：加密的口径只能在「落盘 + 回读」上验
+const reloadPref = async (key) => {
+  await Kit.removePreferencesFromCache({}, PREF_NAME)
+  const pref = await Kit.getPreferences({}, PREF_NAME)
+  return await pref.get(key, '')
+}
+
+// 真机由 main/index.ts 注入 Electron 的 safeStorage；这里注入替身，让同一份落盘逻辑
+// 在无头环境里也被真验证（而不是只在有 DPAPI 的那台机器上碰巧跑对）
+mod.bindSafeStorage(mod.stubSafeStorage)
+
+await inv('settings:saveString', CRED_KEY, CRED_VALUE)
+check(
+  '平台没有凭据保险库时照旧明文落盘（不静默失败，也别假装加密成功）',
+  readPrefsFile().includes(CRED_VALUE) && !readPrefsFile().includes('enc:v1:') &&
+    mod.secretStorageState().available === false
+)
+
+mod.__setSafeStorage('on')
+await inv('settings:saveString', CRED_KEY, CRED_VALUE)
+const encryptedFile = readPrefsFile()
+check(
+  '开启后配置文件里不再出现明文密钥，值带 enc:v1: 标记',
+  !encryptedFile.includes(CRED_VALUE) && encryptedFile.includes('enc:v1:')
+)
+check(
+  '端口代码拿到的仍是明文（加密只是落盘那一层的事，业务代码一行都不用改）',
+  (await reloadPref(CRED_KEY)) === CRED_VALUE
+)
+
+// 探针值是个纯字符串，但真实凭据走的是 settings:saveApiConfig —— 整份配置 JSON.stringify
+// 之后作为一个字符串值存进去。这一条才是本次改动的目的本身：用户的 API Key 不再明文躺在目录里。
+const LIVE_KEY = 'sk-live-probe-9f3c2a'
+await inv('settings:saveApiConfig', { ...cfg, apiKey: LIVE_KEY })
+const liveFile = readPrefsFile()
+check(
+  '真凭据落盘：配置文件里读不到 API Key 明文，设置回读仍是原值',
+  !liveFile.includes(LIVE_KEY) &&
+    liveFile.includes('enc:v1:') &&
+    (await inv('settings:load')).apiConfig?.apiKey === LIVE_KEY
+)
+
+// 历史明文文件要照读：升级前存下的配置不能因为这次改动变成「读不到」
+const legacyParsed = JSON.parse(encryptedFile)
+legacyParsed[LEGACY_KEY] = 'legacy-value'
+fs.writeFileSync(PREFS_FILE, JSON.stringify(legacyParsed), 'utf8')
+check(
+  '同一份文件里「加密的新值 + 明文的老值」都能读回',
+  (await reloadPref(CRED_KEY)) === CRED_VALUE && (await reloadPref(LEGACY_KEY)) === 'legacy-value'
+)
+
+// 换机器 / 钥匙串被清空：平台说可用但解不开，只能丢掉那一项，不能整份配置报废
+mod.__setSafeStorage('broken')
+const afterBroken = await reloadPref(CRED_KEY)
+const lostState = mod.secretStorageState()
+check(
+  '解不开的键被单独剔除并登记（其余配置照常可读，用户看到的是「重新填这一项」）',
+  afterBroken === '' && lostState.undecryptable.includes(PREF_NAME + '/' + CRED_KEY) &&
+    (await reloadPref(LEGACY_KEY)) === 'legacy-value'
+)
+check(
+  '状态经 settings:load 上报给界面（面板那句提示的真假就看它）',
+  (await inv('settings:load')).credentialState.available === true &&
+    (await inv('settings:load')).credentialState.undecryptable.length > 0
+)
+
+mod.__setSafeStorage('off')
+mod.__setUndecryptableForTest([])
+await inv('settings:saveString', CRED_KEY, CRED_VALUE)
+check(
+  '退回无保险库的环境后仍然写得进读得出（加密是增强项，不是启动前提）',
+  (await reloadPref(CRED_KEY)) === CRED_VALUE && !readPrefsFile().includes('enc:v1:')
+)
+mod.bindSafeStorage(null)
+
+console.log(`\n凭据加密验证：通过 ${passed} 项（累计）`)
 
 // 后台命令的进程刚刚被杀，Windows 上还压着「目录被占用」的句柄，立刻整树删除会 EPERM。
 function rmrfRetry(target, tries = 8) {
