@@ -6,6 +6,7 @@ import { common } from '@kit.AbilityKit';
 import { AgentLoopService, LoopMessage, LoopTurnCallbacks, LoopTurnResult,
   ToolImageAttachment } from './AgentLoopService';
 import { WorkFileService, ToolExecResult } from './WorkFileService';
+import { WorkspaceInstructionsService } from './WorkspaceInstructionsService';
 import { SpillStore } from './SpillStore';
 import { ToolCallRecord } from '../model/ToolCallRecord';
 import { ApiConfig } from '../model/ApiConfig';
@@ -67,9 +68,15 @@ export class SubagentService {
   // 子代理系统提示词: 复用主提示词, 追加子代理职责与收尾纪律
   // outputDir 为产出目录(工作区相对路径, 如 subagents/sa_1): 强制子代理所有产出写进该目录,
   // 避免并行子代理互相覆盖同名文件。
-  private static buildSubagentPrompt(outputDir: string): string {
+  // instructionsSection 为工作区项目指令整段: 主代理每轮从运行时快照拿到它, 但子代理没有快照
+  // (消息只有 system + 一条子任务), 不显式带上就会做出「主代理守约定、子代理不守」的分裂结果。
+  private static buildSubagentPrompt(outputDir: string, instructionsSection: string): string {
     let base: string = AgentLoopService.buildWorkSystemPrompt();
     let extra: string[] = [];
+    if (instructionsSection !== '') {
+      extra.push('');
+      extra.push(instructionsSection);
+    }
     extra.push('');
     extra.push('# 子代理模式(当前生效)');
     extra.push('- 你是一个被主代理派生的子代理, 正在独立完成一个分配的子任务; 用户看不到你的过程。');
@@ -186,7 +193,11 @@ export class SubagentService {
       }, 100);
     }
     let messages: LoopMessage[] = [];
-    messages.push(LoopMessage.system(SubagentService.buildSubagentPrompt(effectiveOutputDir)));
+    // 子代理与主任务同工作区, 因此同样带上项目指令整段(读不到文件时为空串, 不加这一段)
+    let instructionsSection: string =
+      WorkspaceInstructionsService.render(WorkFileService.workspaceRoot(context, convId)).section;
+    messages.push(LoopMessage.system(
+      SubagentService.buildSubagentPrompt(effectiveOutputDir, instructionsSection)));
     messages.push(LoopMessage.user('【子任务】' + description + '\n\n【执行指令】\n' + prompt));
     let finalText: string = '';
     let stepsUsed: number = 0;

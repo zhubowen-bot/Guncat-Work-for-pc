@@ -670,6 +670,21 @@ check(
   })()
 )
 
+// 项目指令行：界面向用户承诺「放这几个文件就会生效」，清单必须和内核读盘的那份同源
+const instrRow = mod.instructionRowCopy()
+check(
+  '面板的项目指令文案逐个列出了内核真正读取的候选文件（不承诺 README.md 这类不生效的名字）',
+  instrRow.files.length > 0 && instrRow.files.every((f) => instrRow.hint.includes(f))
+)
+check(
+  '候选清单第一项是业界通用名 AGENTS.md（在别的工具里写过的约定搬过来直接生效）',
+  instrRow.files[0] === 'AGENTS.md'
+)
+check(
+  '指令未设置时的提示同时说明「谁会用、怎么用」（不能只写一个「无」）',
+  instrRow.hint.includes('每轮') && instrRow.hint.includes('遵守')
+)
+
 const wsIcons = mod.renderWorkspaceFileIcons()
 const iconOf = (name) => wsIcons[name]
 check('图片 / PDF / 压缩包 / 源码 / 视频 / 音频各用各的图标', (() => {

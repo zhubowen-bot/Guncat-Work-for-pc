@@ -13,6 +13,7 @@ import type {
   WorkspaceEntryDto,
   WorkspaceInfoDto
 } from '@ipc/contract'
+import { Constants } from '@core/common/Constants'
 import { useStore } from '../store'
 import { CodeBlock, normalizeLanguage } from './CodeBlock'
 import { Markdown } from './Markdown'
@@ -672,6 +673,35 @@ export function WorkspacePanel() {
         </div>
       ) : null}
 
+      {/* 项目指令：放在工作区根目录的 AGENTS.md / CLAUDE.md / GUNCAT.md 会被逐轮读给智能体
+          （见 core/service/WorkspaceInstructionsService，随运行时快照注入）。
+          这一行的意义是「可见」——用户必须能确认自己写的约定真的生效了，而不是靠猜。 */}
+      {rootInfo !== null ? (
+        <div className="workspace__instr">
+          <span className="workspace__perm-label">项目指令</span>
+          {rootInfo.instructionFiles.length > 0 ? (
+            rootInfo.instructionFiles.map((name) => (
+              <button
+                key={name}
+                className="file-item__name file-item__name--link workspace__instr-file"
+                disabled={running}
+                title={`已生效：智能体每轮都会读入 ${name} 并遵守其中的项目约定（点击看内容）`}
+                onClick={() => void preview.open(name)}
+              >
+                {name}
+              </button>
+            ))
+          ) : (
+            <span
+              className="workspace__instr-none"
+              title={instructionSetupHint()}
+            >
+              未设置
+            </span>
+          )}
+        </div>
+      ) : null}
+
       {/* 本轮统计卡（对齐原版 DetailsPanelView.ets:143-157）。
           任务用时用「会话工作秒数」这个每秒 +1 的计数（原版 workElapsedSec 同口径），
           所以它会**逐秒走字**；速度/命中取最后一条 assistant；
@@ -825,6 +855,17 @@ export const COMMAND_PERMISSIONS: { value: string; label: string; hint: string }
     hint: '命令不再逐个批准。毁灭性操作（格式化磁盘、关机等）在任何档位下都会被直接拒绝'
   }
 ]
+
+/**
+ * 项目指令未设置时的提示文案。
+ *
+ * 文件名清单**必须**取自 core 的 Constants.WORK_INSTRUCTION_FILES（渲染进程只允许引用
+ * @core/common，所以这里引的是常量而不是那个会读盘的服务）——界面不能承诺「放任何说明文件都算」，
+ * 而内核其实只认根目录这几个名字。
+ */
+export function instructionSetupHint(): string {
+  return `在工作区根目录放一份 ${Constants.WORK_INSTRUCTION_FILES.join(' / ')}（也可以直接让智能体帮你写），智能体每轮都会读入并遵守里面的项目约定`
+}
 
 export function useWorkspacePreview(activeId: string | null) {
   const pushNotice = useStore((s) => s.pushNotice)

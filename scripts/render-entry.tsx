@@ -6,6 +6,7 @@ import { GuncatUiBlock } from '@renderer/guncat-ui/GuncatUiBlock'
 import { ToolCallRow } from '@renderer/components/Disclosure'
 import { GuncatUiParts } from '@core/common/GuncatUiParts'
 import { CommandGuard } from '@core/service/CommandGuard'
+import { Constants } from '@core/common/Constants'
 import { docxFileName } from '@renderer/fileName'
 import {
   WORK_AGENT_ID,
@@ -63,6 +64,7 @@ import {
   WorkspacePanel,
   formatElapsedSec,
   formatWorkTime,
+  instructionSetupHint,
   workspaceFileIcon
 } from '@renderer/components/WorkspacePanel'
 import { LightboxView } from '@renderer/components/ImageLightbox'
@@ -244,6 +246,15 @@ export function commandPermissionRows(): {
   guardPermissions: string[]
 } {
   return { rows: COMMAND_PERMISSIONS, guardPermissions: CommandGuard.PERMISSIONS }
+}
+
+/**
+ * 项目指令行的文案，连同 core 的候选文件名清单一起返回：钉住「界面告诉用户哪些文件会被读」
+ * 与「内核实际读的那几个名字」严格同源 —— 抄两份字面量，迟早会漂成界面写着 README.md、
+ * 内核根本不认，用户按界面写完发现没生效。
+ */
+export function instructionRowCopy(): { hint: string; files: string[] } {
+  return { hint: instructionSetupHint(), files: Constants.WORK_INSTRUCTION_FILES }
 }
 
 /** 工作区文件行的扩展名图标：返回「扩展名 → 渲染出来的 SVG」映射，供断言分类是否生效 */

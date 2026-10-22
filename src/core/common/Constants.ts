@@ -254,6 +254,14 @@ export class Constants {
   // 「等待上限 + 真正的执行上限 + 余量」。
   static readonly WORK_CMD_TOOL_GUARD_TIMEOUT_MS: number = 660000;  // 300000 审批 + 300000 命令 + 60000 余量
   static readonly WORK_ASK_TOOL_GUARD_TIMEOUT_MS: number = 360000;  // 300000 等待 + 60000 余量
+  // 工作区项目指令(AGENTS.md 等)注入总量上限(字符)。指令文件每轮都随快照进上下文,
+  // 不设上限时一份被误写成日志/数据dump 的 AGENTS.md 会把整个上下文窗口吃光。
+  static readonly WORK_INSTRUCTIONS_MAX_CHARS: number = 12000;
+  // 单个指令文件的读取体积上限(字节): 超过这个体量的文件不可能是「说明」, 只按开头一段取。
+  static readonly WORK_INSTRUCTIONS_MAX_FILE_BYTES: number = 256 * 1024;
+  // 项目指令的候选文件名(按优先级, 只认工作区根目录这几个)。放在这里而不是 service 里,
+  // 是因为渲染进程只允许引用 @core/common(不能把 node:fs 打进浏览器包), 面板的文案要跟同一份清单。
+  static readonly WORK_INSTRUCTION_FILES: string[] = ['AGENTS.md', 'CLAUDE.md', 'GUNCAT.md'];
   // 工具并发执行的滚动池大小(对齐 dsh 的 maxParallelToolCalls, 只作用于只读并行段)
   static readonly WORK_MAX_PARALLEL_TOOLS: number = 4;
   static readonly WORK_ALLOW_PARALLEL_TOOLS: boolean = true;  // 子代理并行派发: 是否把 subagent 归入并行组 + 全局最大并发子代理数(与只读池一致取 4)

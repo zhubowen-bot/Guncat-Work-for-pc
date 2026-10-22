@@ -495,6 +495,12 @@ export interface WorkspaceInfoDto {
    * 'auto' 也只是「不弹审批卡」—— CommandGuard 的硬禁表照样直接拒绝。
    */
   commandPermission: string
+  /**
+   * 工作区根目录下真实存在的项目指令文件（AGENTS.md / CLAUDE.md / GUNCAT.md，按优先级）。
+   * 这些内容每轮随运行时快照注入（core/service/WorkspaceInstructionsService），
+   * 面板据此如实显示「这个目录有没有约定要交给代理」，没有则是空数组。
+   */
+  instructionFiles: string[]
 }
 
 // ===== 事件（主进程 → 渲染进程） =====

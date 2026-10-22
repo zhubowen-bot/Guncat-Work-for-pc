@@ -1553,13 +1553,13 @@ export class AgentLoopService {
     return AgentLoopService.cachedWorkPrompt;
   }
 
-  // 运行时快照消息的识别前缀(尾部状态快照: 日期/文件树/任务清单)
+  // 运行时快照消息的识别前缀(尾部状态快照: 日期/文件树/项目指令/任务清单)
   static readonly RUNTIME_SNAPSHOT_PREFIX: string = '【运行时上下文】';
 
   // 构建运行时快照内容: 易变状态作为 user 消息追加到历史末尾(取代系统提示词内嵌),
   // 内容逐字节确定(无时间戳), 仅在工作区/清单/目标真正变化时才会变化。
   static buildRuntimeSnapshot(tree: string, todoText: string,
-    goalText: string = '', scheduleText: string = ''): string {
+    goalText: string = '', scheduleText: string = '', instructionsText: string = ''): string {
     let lines: string[] = [];
     lines.push(AgentLoopService.RUNTIME_SNAPSHOT_PREFIX +
       '本消息为最新状态快照，取代此前所有运行时上下文快照；与旧快照冲突时以本条为准。');
@@ -1569,6 +1569,11 @@ export class AgentLoopService {
     lines.push('<workspace_files>');
     lines.push(tree);
     lines.push('</workspace_files>');
+    // 工作区项目指令(AGENTS.md 等)：紧接文件树, 与它同属「这个目录里的约定」。
+    // 内容没变时整份快照逐字节相同、不会重发, 所以这段的成本只在文件被改动的那一轮。
+    if (instructionsText !== '') {
+      lines.push(instructionsText);
+    }
     if (todoText !== '') {
       lines.push('- 当前任务清单（随 todo_write 更新）:');
       lines.push('<task_todo>');

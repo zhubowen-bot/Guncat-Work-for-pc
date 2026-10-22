@@ -2487,6 +2487,27 @@ select {
   opacity: 0.55;
 }
 
+/* 项目指令行：与命令审批同一节奏（标签在左、内容在右）。
+   文件名用等宽，一眼看得出「这是磁盘上的一个文件」而不是界面装饰。 */
+.workspace__instr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 11px;
+}
+
+.workspace__instr-file {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.workspace__instr-none {
+  color: var(--text-faint);
+}
+
 .workspace__stats {
   display: flex;
   gap: 10px;

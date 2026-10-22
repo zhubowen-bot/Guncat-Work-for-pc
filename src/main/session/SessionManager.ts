@@ -59,6 +59,7 @@ import { CommandGuard } from '@core/service/CommandGuard'
 import { CommandService } from '@core/service/CommandService'
 import { ScheduleService } from '@core/service/ScheduleService'
 import { GoalService } from '@core/service/GoalService'
+import { WorkspaceInstructionsService } from '@core/service/WorkspaceInstructionsService'
 import {
   WorkArtifactFile,
   WorkArtifactSummary,
@@ -1816,7 +1817,7 @@ export class SessionManager {
   /**
    * 追加运行时快照（移植原版 ChatViewModel.appendRuntimeSnapshotIfNeeded, 2984-3000）。
    *
-   * 快照=「今天日期 + 工作区文件树 + 任务清单 + 自主目标 + 定时提醒」，作为 **user 消息**
+   * 快照=「今天日期 + 工作区文件树 + 项目指令 + 任务清单 + 自主目标 + 定时提醒」，作为 **user 消息**
    * 追加到历史末尾（不进系统提示词）。它是模型跨轮、跨会话知道「现在是什么状态」的唯一来源：
    * 系统提示词是静态的（改它会让整段前缀的 KV 缓存失效），而这些状态每轮都可能变。
    *
@@ -1842,7 +1843,11 @@ export class SessionManager {
     // renderList 在空清单时返回「(无提醒)」而不是空串 —— 与原版一致，
     // 于是 <session_schedules> 段落总是存在（没有提醒时显式告诉模型"没有"）
     const scheduleText: string = ScheduleService.renderList(ScheduleService.list(root))
-    const snapshot: string = AgentLoopService.buildRuntimeSnapshot(tree, todoText, goalText, scheduleText)
+    // 工作区项目指令（AGENTS.md / CLAUDE.md / GUNCAT.md）：只在有文件时产出这一段，
+    // 没有时为空串 → 快照里整段省略，也就不会因为「多了一行空段」而破坏相邻轮的字节一致性。
+    const instructionsText: string = WorkspaceInstructionsService.render(root).section
+    const snapshot: string = AgentLoopService.buildRuntimeSnapshot(
+      tree, todoText, goalText, scheduleText, instructionsText)
     if (LoopDecisions.shouldAppendSnapshot(AgentLoopService.findLastSnapshot(messages), snapshot)) {
       messages.push(LoopMessage.user(snapshot))
     }
@@ -2035,21 +2040,24 @@ export class SessionManager {
     return WorkFileService.workspaceRoot(this.ctx(), conversationId)
   }
 
-  /** 面板展示用：当前工作区根目录、是否为自定义、目录是否仍然存在、命令审批档位 */
+  /** 面板展示用：当前工作区根目录、是否为自定义、目录是否仍然存在、命令审批档位、项目指令文件 */
   workspaceInfo(conversationId: string): WorkspaceInfoDto {
     const custom: string | null = WorkFileService.getWorkspaceOverride(conversationId)
     const root: string = this.workspaceRoot(conversationId)
     const commandPermission: string = CommandService.permissionFor(conversationId)
+    // 目录失效时 listFiles 自然返回空数组（探测失败即视为不存在），不需要额外分支
+    const instructionFiles: string[] = WorkspaceInstructionsService.listFiles(root)
     if (custom !== null) {
       // 目录失效时**不**自动 mkdir 一个空壳冒充用户的目录 —— 界面要如实报「已失效」
       return {
         root,
         isCustom: true,
         exists: fs.existsSync(custom) && fs.statSync(custom).isDirectory(),
-        commandPermission
+        commandPermission,
+        instructionFiles
       }
     }
-    return { root, isCustom: false, exists: true, commandPermission }
+    return { root, isCustom: false, exists: true, commandPermission, instructionFiles }
   }
 
   /**
