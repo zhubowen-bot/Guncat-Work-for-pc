@@ -1989,6 +1989,26 @@ export class SessionManager {
     return WorkFileService.listWorkspaceTree(this.ctx(), conversationId)
   }
 
+  /** 侧栏文件树懒加载：只列 relPath 这一层的直接子项（'' = 工作区根） */
+  listWorkspaceDir(conversationId: string, relPath: string): Array<{
+    name: string
+    path: string
+    isDirectory: boolean
+    size: number
+    modifiedAt: number
+  }> {
+    const ctx: Context = this.ctx()
+    WorkFileService.ensureWorkspace(ctx, conversationId)
+    const items = WorkFileService.listDir(ctx, conversationId, relPath)
+    return items.map((item) => ({
+      name: item.path.replace(/\/$/, '').split('/').pop() ?? item.path,
+      path: item.path,
+      isDirectory: item.isDir,
+      size: item.size,
+      modifiedAt: 0
+    }))
+  }
+
   workspaceRoot(conversationId: string): string {
     return WorkFileService.workspaceRoot(this.ctx(), conversationId)
   }

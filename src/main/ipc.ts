@@ -15,6 +15,7 @@ import type {
   MultimodalConfigDto,
   PickedAttachmentDto,
   RendererStage,
+  WorkspaceBinaryDto,
   WorkAnswerRequest,
   WorkRunRequest
 } from '../ipc/contract'
@@ -158,17 +159,14 @@ export function registerIpcHandlers(session: SessionManager): void {
   ipcMain.handle(INVOKE.workspaceList, async (_e, conversationId: string) =>
     session.listWorkspace(conversationId)
   )
+  ipcMain.handle(INVOKE.workspaceListDir, async (_e, conversationId: string, relPath: string) =>
+    session.listWorkspaceDir(conversationId, relPath ?? '')
+  )
   ipcMain.handle(INVOKE.workspaceTreeText, async (_e, conversationId: string) =>
     session.workspaceTreeText(conversationId)
   )
   ipcMain.handle(INVOKE.workspaceRead, async (_e, conversationId: string, relPath: string) => {
-    // 注意：workspaceRoot 是用 '/' 拼出来的（与鸿蒙侧一致），
-    // 必须先 path.resolve 归一化再比较，否则 Windows 上 '\' 与 '/' 的差异会让合法路径被误判越界。
-    const root: string = path.resolve(session.workspaceRoot(conversationId))
-    const full: string = path.resolve(root, relPath)
-    if (full !== root && !full.startsWith(root + path.sep)) {
-      throw new Error('路径越界')
-    }
+    const full: string = resolveWorkspaceFile(session, conversationId, relPath)
     if (!fs.existsSync(full)) {
       throw new Error('文件不存在')
     }
@@ -181,11 +179,52 @@ export function registerIpcHandlers(session: SessionManager): void {
     }
     return { text: fs.readFileSync(full, 'utf8'), truncated: false }
   })
+  ipcMain.handle(
+    INVOKE.workspaceReadBinary,
+    async (_e, conversationId: string, relPath: string): Promise<WorkspaceBinaryDto> => {
+      const full: string = resolveWorkspaceFile(session, conversationId, relPath)
+      if (!fs.existsSync(full)) {
+        throw new Error('文件不存在')
+      }
+      const stat = fs.statSync(full)
+      if (stat.isDirectory()) {
+        throw new Error('该路径是目录')
+      }
+      // 内置预览走 data URL（整份进内存再 base64），上限必须比文本预览更克制
+      if (stat.size > 16 * 1024 * 1024) {
+        throw new Error('文件超过 16MB，请用外部程序打开')
+      }
+      const bytes: Buffer = fs.readFileSync(full)
+      const mimeType: string = mimeTypeForFile(full)
+      return {
+        dataUrl: `data:${mimeType};base64,${bytes.toString('base64')}`,
+        mimeType,
+        size: stat.size
+      }
+    }
+  )
+  ipcMain.handle(INVOKE.workspaceOpenFile, async (_e, conversationId: string, relPath: string) => {
+    const full: string = resolveWorkspaceFile(session, conversationId, relPath)
+    if (!fs.existsSync(full)) {
+      throw new Error('文件不存在')
+    }
+    const error: string = await shell.openPath(full)
+    if (error !== '') {
+      throw new Error(`系统未能打开该文件: ${error}`)
+    }
+  })
+  ipcMain.handle(INVOKE.workspaceReveal, async (_e, conversationId: string, relPath: string) => {
+    const full: string = resolveWorkspaceFile(session, conversationId, relPath)
+    if (!fs.existsSync(full)) {
+      throw new Error('文件不存在')
+    }
+    shell.showItemInFolder(full)
+  })
   ipcMain.handle(INVOKE.workspaceDelete, async (_e, conversationId: string, relPath: string) => {
+    const full: string = resolveWorkspaceFile(session, conversationId, relPath)
     const root: string = path.resolve(session.workspaceRoot(conversationId))
-    const full: string = path.resolve(root, relPath)
-    if (full === root || !full.startsWith(root + path.sep)) {
-      throw new Error('路径越界')
+    if (full === root) {
+      throw new Error('不能删除工作区根目录')
     }
     fs.rmSync(full, { recursive: true, force: true })
     send({ type: 'workspace:changed', conversationId })
@@ -437,6 +476,53 @@ export function registerIpcHandlers(session: SessionManager): void {
 
 /** 同一步骤只记一次（React 严格模式下 effect 会跑两遍，重复会把日志刷满） */
 const reportedStages = new Set<string>()
+
+/**
+ * 把工作区相对路径解析成绝对路径, 并做越界校验。
+ * 此前 read/delete 各自内联了一份 root+sep 前缀比较, 新增的 readBinary/openFile/reveal
+ * 再各写一遍迟早漂移。集中到这里, 所有走工作区的读/打开/定位共用同一把尺子。
+ *
+ * 注意：workspaceRoot 是用 '/' 拼出来的（与鸿蒙侧一致）, 必须先 path.resolve 归一化
+ * 再比较, 否则 Windows 上 '\' 与 '/' 的差异会让合法路径被误判越界。
+ */
+function resolveWorkspaceFile(
+  session: SessionManager,
+  conversationId: string,
+  relPath: string
+): string {
+  const root: string = path.resolve(session.workspaceRoot(conversationId))
+  const full: string = path.resolve(root, relPath)
+  if (full !== root && !full.startsWith(root + path.sep)) {
+    throw new Error('路径越界')
+  }
+  return full
+}
+
+/** 常见扩展名 → MIME。图片之外的类型给 octet-stream（预览层本就不渲染它们）。 */
+function mimeTypeForFile(filePath: string): string {
+  const ext: string = path.extname(filePath).toLowerCase()
+  switch (ext) {
+    case '.png':
+      return 'image/png'
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.gif':
+      return 'image/gif'
+    case '.webp':
+      return 'image/webp'
+    case '.bmp':
+      return 'image/bmp'
+    case '.svg':
+      return 'image/svg+xml'
+    case '.ico':
+      return 'image/x-icon'
+    case '.avif':
+      return 'image/avif'
+    default:
+      return 'application/octet-stream'
+  }
+}
 
 function markReported(key: string, marker: string, message: string): void {
   if (reportedStages.has(key)) {

@@ -19,6 +19,7 @@ import type {
   TableOcrResultDto,
   WorkArtifactsDto,
   SearchEngineDto,
+  WorkspaceBinaryDto,
   WorkspaceEntryDto,
   WorkAnswerRequest,
   WorkRunRequest
@@ -71,8 +72,16 @@ export interface GuncatApi {
   }
   workspace: {
     list(conversationId: string): Promise<WorkspaceEntryDto[]>
+    /** 单层目录列举（懒加载文件树）；path 为空串 = 工作区根 */
+    listDir(conversationId: string, path: string): Promise<WorkspaceEntryDto[]>
     treeText(conversationId: string): Promise<string>
     read(conversationId: string, path: string): Promise<{ text: string; truncated: boolean }>
+    /** 按字节读取（data URL），图片等二进制的内置预览用 */
+    readBinary(conversationId: string, path: string): Promise<WorkspaceBinaryDto>
+    /** 用系统默认程序打开工作区文件 */
+    openFile(conversationId: string, path: string): Promise<void>
+    /** 在文件管理器中定位该文件 */
+    reveal(conversationId: string, path: string): Promise<void>
     remove(conversationId: string, path: string): Promise<void>
     /** 清空工作区；主进程会先弹原生确认框，用户取消时返回 cleared:false */
     clear(conversationId: string): Promise<{ cleared: boolean }>

@@ -253,6 +253,58 @@ export class WorkFileService {
     }
   }
 
+  // 列出工作区某一层的直接子项(不递归; 目录后缀 '/', 目录优先按名称排序, 与 walk 口径一致)。
+  // 侧栏文件树懒加载用: 全量先序遍历(listWorkspace)在深层目录/海量文件下既慢又没法展开。
+  static listDir(context: common.UIAbilityContext, convId: string, rel: string): WorkspaceFileInfo[] {
+    let result: WorkspaceFileInfo[] = [];
+    try {
+      let root: string = WorkFileService.workspaceRoot(context, convId);
+      let dir: string | null = WorkFileService.resolveSafe(root, rel);
+      if (dir === null || !fileIo.accessSync(dir) || !fileIo.statSync(dir).isDirectory()) {
+        return result;
+      }
+      let names: string[] = fileIo.listFileSync(dir);
+      let dirs: string[] = [];
+      let files: string[] = [];
+      for (let i: number = 0; i < names.length; i++) {
+        let abs: string = dir + '/' + names[i];
+        try {
+          if (fileIo.statSync(abs).isDirectory()) {
+            dirs.push(names[i]);
+          } else {
+            files.push(names[i]);
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      dirs.sort();
+      files.sort();
+      for (let i: number = 0; i < dirs.length; i++) {
+        let info: WorkspaceFileInfo = new WorkspaceFileInfo();
+        info.path = WorkFileService.toRelative(root, dir + '/' + dirs[i]) + '/';
+        info.isDir = true;
+        info.size = 0;
+        result.push(info);
+      }
+      for (let i: number = 0; i < files.length; i++) {
+        let absFile: string = dir + '/' + files[i];
+        let info: WorkspaceFileInfo = new WorkspaceFileInfo();
+        info.path = WorkFileService.toRelative(root, absFile);
+        info.isDir = false;
+        try {
+          info.size = fileIo.statSync(absFile).size;
+        } catch (e) {
+          info.size = 0;
+        }
+        result.push(info);
+      }
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'listDir failed: %{public}s', JSON.stringify(e));
+    }
+    return result;
+  }
+
   // 工作区文件树文本(注入运行时快照, 每轮工具调用后刷新); .spill/ 溢出暂存目录不进入快照
   static listWorkspaceTree(context: common.UIAbilityContext, convId: string): string {
     WorkFileService.ensureWorkspace(context, convId);

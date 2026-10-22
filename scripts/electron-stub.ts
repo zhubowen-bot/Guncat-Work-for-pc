@@ -278,8 +278,12 @@ export function __setOpenDialog(result: { canceled: boolean; filePaths: string[]
 
 export const shell = {
   async openExternal(): Promise<void> {},
-  async openPath(): Promise<string> {
+  async openPath(target: string): Promise<string> {
+    calls.push({ fn: 'shell.openPath', args: [target] })
     return ''
+  },
+  showItemInFolder(target: string): void {
+    calls.push({ fn: 'shell.showItemInFolder', args: [target] })
   }
 }
 

@@ -14,6 +14,7 @@ import type {
   GuncatEvent,
   MultimodalConfigDto,
   RendererStage,
+  WorkspaceBinaryDto,
   WorkspaceEntryDto,
   WorkAnswerRequest,
   WorkRunRequest
@@ -98,10 +99,18 @@ const api = {
   workspace: {
     list: (conversationId: string): Promise<WorkspaceEntryDto[]> =>
       ipcRenderer.invoke(INVOKE.workspaceList, conversationId),
+    listDir: (conversationId: string, path: string): Promise<WorkspaceEntryDto[]> =>
+      ipcRenderer.invoke(INVOKE.workspaceListDir, conversationId, path),
     treeText: (conversationId: string): Promise<string> =>
       ipcRenderer.invoke(INVOKE.workspaceTreeText, conversationId),
     read: (conversationId: string, path: string): Promise<{ text: string; truncated: boolean }> =>
       ipcRenderer.invoke(INVOKE.workspaceRead, conversationId, path),
+    readBinary: (conversationId: string, path: string): Promise<WorkspaceBinaryDto> =>
+      ipcRenderer.invoke(INVOKE.workspaceReadBinary, conversationId, path),
+    openFile: (conversationId: string, path: string): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.workspaceOpenFile, conversationId, path),
+    reveal: (conversationId: string, path: string): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.workspaceReveal, conversationId, path),
     remove: (conversationId: string, path: string): Promise<void> =>
       ipcRenderer.invoke(INVOKE.workspaceDelete, conversationId, path),
     clear: (conversationId: string): Promise<{ cleared: boolean }> =>

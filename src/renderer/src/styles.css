@@ -2591,6 +2591,23 @@ select {
   font-size: 12.5px;
 }
 
+/* 懒加载文件树（WorkspacePanel.renderTreeRows）：缩进由行内 padding-left 控制 */
+.file-item__chevron {
+  width: 12px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+}
+
+.file-item--dir {
+  cursor: pointer;
+}
+
+.file-item--dir .file-item__name {
+  font-weight: 600;
+}
+
 .file-item:hover {
   background: var(--item-hover);
 }
@@ -2846,6 +2863,68 @@ select {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 工作区打开器的正文容器：图片/Markdown/代码/信息卡都渲染在这里（见 WorkspacePanel） */
+.preview__content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview__image-wrap {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 16px;
+  background: var(--code-bg);
+}
+
+.preview__image {
+  max-width: 100%;
+  max-height: 100%;
+  cursor: zoom-in;
+  border-radius: var(--radius-sm);
+}
+
+.preview__rich {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+  background: var(--bg-elevated);
+}
+
+.preview__rich--code {
+  padding: 12px 14px;
+  background: var(--code-bg);
+}
+
+.preview__info {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  background: var(--bg-elevated);
+}
+
+.preview__info-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.preview__info-actions {
+  display: flex;
+  gap: 10px;
 }
 
 .workspace__foot {

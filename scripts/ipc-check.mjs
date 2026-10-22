@@ -120,8 +120,12 @@ const required = [
   'work:run',
   'work:abort',
   'workspace:list',
+  'workspace:listDir',
   'workspace:treeText',
   'workspace:read',
+  'workspace:readBinary',
+  'workspace:openFile',
+  'workspace:reveal',
   'workspace:delete',
   'workspace:clear',
   'workspace:openInFolder',
@@ -561,6 +565,34 @@ check('工作区变更事件已推送', events.some((e) => e.type === 'workspace
 
 const readBack = await inv('workspace:read', conv3.id, '素材.txt')
 check('导入内容可读回', readBack.text === 'hello intake', JSON.stringify(readBack.text))
+
+// --- 工作区文件打开链路（树懒加载 / 二进制预览 / 外部打开 / 显示位置） ---
+const dirItems = await inv('workspace:listDir', conv3.id, '')
+check(
+  'workspace:listDir 单层列出导入的两个文件',
+  dirItems.length === 2 && dirItems.every((it) => it.isDirectory === false),
+  dirItems.map((it) => it.path).join(', ')
+)
+check(
+  'workspace:listDir 的 name 是纯文件名',
+  dirItems.every((it) => !it.name.includes('/'))
+)
+const traversalItems = await inv('workspace:listDir', conv3.id, '../../../Windows')
+check('workspace:listDir 拒绝目录穿越（一个都不列出来）', Array.isArray(traversalItems) && traversalItems.length === 0)
+const bin = await inv('workspace:readBinary', conv3.id, '素材.txt')
+check('workspace:readBinary 返回 data URL 与 MIME', bin.dataUrl.startsWith('data:') && bin.dataUrl.includes('base64,') && bin.size > 0)
+check('workspace:readBinary 字节可还原', Buffer.from(bin.dataUrl.split('base64,')[1], 'base64').toString('utf8') === 'hello intake')
+await inv('workspace:openFile', conv3.id, '素材.txt')
+check('workspace:openFile 走通（替身 shell.openPath）', mod.__calls().some((c) => c.fn === 'shell.openPath'))
+await inv('workspace:reveal', conv3.id, '素材.txt')
+check('workspace:reveal 走通（替身 shell.showItemInFolder）', mod.__calls().some((c) => c.fn === 'shell.showItemInFolder'))
+let openMissing = ''
+try {
+  await inv('workspace:openFile', conv3.id, '不存在.txt')
+} catch (e) {
+  openMissing = String(e.message ?? e)
+}
+check('workspace:openFile 对不存在路径报错', openMissing.includes('不存在'), openMissing.slice(0, 60))
 
 // --- 工作区「上传」按钮：弹系统文件选择框并导入 ---
 // 用户报障「工作区上传文件找不到入口」——原版 WorkspaceBar 头部有可见的「上传」按钮，

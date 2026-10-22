@@ -71,6 +71,8 @@ export const INVOKE = {
 
   /** 沙箱工作区 */
   workspaceList: 'workspace:list',
+  /** 单层目录列举（侧栏懒加载文件树；path 为空串表示根目录） */
+  workspaceListDir: 'workspace:listDir',
   workspaceTreeText: 'workspace:treeText',
   workspaceUpload: 'workspace:upload',
   workspaceRead: 'workspace:read',
@@ -78,6 +80,16 @@ export const INVOKE = {
   workspaceClear: 'workspace:clear',
   workspaceExportZip: 'workspace:exportZip',
   workspaceOpenInFolder: 'workspace:openInFolder',
+  /** 用系统默认程序打开工作区内的某个文件（越界校验与 read 同一条路） */
+  workspaceOpenFile: 'workspace:openFile',
+  /** 在文件管理器中定位工作区内的某个文件（shell.showItemInFolder） */
+  workspaceReveal: 'workspace:reveal',
+  /**
+   * 按字节读取工作区文件（返回 data URL），给图片等二进制内容的内置预览用。
+   * 此前 workspace:read 只会按 utf8 读文本，图片一律「读取二进制失败」，
+   * 面板里点开一张图只能看到报错 —— 「打开」而不是「看源码」是用户的基本预期。
+   */
+  workspaceReadBinary: 'workspace:readBinary',
 
   /** 应用信息 */
   appInfo: 'app:info',
@@ -447,6 +459,14 @@ export interface WorkspaceEntryDto {
   isDirectory: boolean
   size: number
   modifiedAt: number
+}
+
+/** workspace:readBinary 的返回体（图片等二进制的内置预览） */
+export interface WorkspaceBinaryDto {
+  /** 直接可进 <img src> 的 data URL */
+  dataUrl: string
+  mimeType: string
+  size: number
 }
 
 // ===== 事件（主进程 → 渲染进程） =====
