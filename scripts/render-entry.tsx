@@ -49,6 +49,13 @@ import { GroupedTurn, Timeline, WorkTurn } from '@renderer/components/Timeline'
 import { Markdown } from '@renderer/components/Markdown'
 import { safeUrlTransform } from '@renderer/components/Markdown'
 import { Composer } from '@renderer/components/Composer'
+import {
+  detectMention,
+  MentionPopup,
+  MENTION_MAX_ROWS,
+  rankMentionCandidates,
+  type MentionQuery
+} from '@renderer/components/MentionPopup'
 import { AttachmentBar } from '@renderer/components/AttachmentBar'
 import {
   SettingsDialog,
@@ -74,7 +81,7 @@ import { WorkArtifactsCard } from '@renderer/components/WorkArtifactsCard'
 import { AssistantBody, marqueeText } from '@renderer/components/MessageView'
 import { EmptyState } from '@renderer/components/EmptyState'
 import { AgentGlyph } from '@renderer/components/AgentGlyph'
-import type { MessageDto, PickedAttachmentDto } from '@ipc/contract'
+import type { MessageDto, PickedAttachmentDto, WorkspaceEntryDto } from '@ipc/contract'
 
 /** 导出文件名推导 —— 纯函数，可直接断言 */
 export { docxFileName }
@@ -255,6 +262,25 @@ export function commandPermissionRows(): {
  */
 export function instructionRowCopy(): { hint: string; files: string[] } {
   return { hint: instructionSetupHint(), files: Constants.WORK_INSTRUCTION_FILES }
+}
+
+/**
+ * @ 引用的输入态判定：界面「哪些字符算一个还没敲完的文件引用」必须与内核
+ * WorkspaceMentionService.extract 同一口径，否则会出现界面弹了候选、发出去内核却不认，
+ * 或反过来（用户看着 @a.md 打完了，模型收到的只是原文）。
+ */
+export function mentionDetect(text: string, caret: number): MentionQuery | null {
+  return detectMention(text, caret)
+}
+
+/** @ 候选排序（界面侧的过滤逻辑，纯函数） */
+export function mentionRank(files: WorkspaceEntryDto[], query: string): string[] {
+  return rankMentionCandidates(files, query, MENTION_MAX_ROWS)
+}
+
+/** @ 引用弹层的静态渲染（供断言行、高亮项、说明行都在） */
+export function renderMentionPopup(paths: string[], active: number): string {
+  return renderToStaticMarkup(createElement(MentionPopup, { paths, active, onPick: () => {} }))
 }
 
 /** 工作区文件行的扩展名图标：返回「扩展名 → 渲染出来的 SVG」映射，供断言分类是否生效 */

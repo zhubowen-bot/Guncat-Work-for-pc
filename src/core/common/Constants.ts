@@ -268,6 +268,13 @@ export class Constants {
   // 文件版本指纹里参与哈希的字节数(只取开头这么多)。指纹只用于判断「文件有没有被改动过」，
   // 不承担完整性校验，所以不必覆盖全文；取开头一段是因为绝大多数改动都落在文件里。
   static readonly WORK_FS_VERSION_HASH_BYTES: number = 8192;
+  // 用户消息里 @文件 引用：单轮最多附上几份文件。@ 十份大文件等于一次性把半个仓库
+  // 塞进上下文，超出部分只在正文里点名，不静默丢弃。
+  static readonly WORK_MENTION_MAX_FILES: number = 8;
+  // 单个 @ 引用附上的正文字符上限(超出即截断，且该文件不再算「模型已经见过」)
+  static readonly WORK_MENTION_MAX_FILE_CHARS: number = 24000;
+  // 本轮所有 @ 引用合计的字符预算(兜住整条消息的体量)
+  static readonly WORK_MENTION_TOTAL_MAX_CHARS: number = 60000;
   // 工具并发执行的滚动池大小(对齐 dsh 的 maxParallelToolCalls, 只作用于只读并行段)
   static readonly WORK_MAX_PARALLEL_TOOLS: number = 4;
   static readonly WORK_ALLOW_PARALLEL_TOOLS: boolean = true;  // 子代理并行派发: 是否把 subagent 归入并行组 + 全局最大并发子代理数(与只读池一致取 4)

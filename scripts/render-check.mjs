@@ -1383,6 +1383,88 @@ check(
   )
 )
 
+console.log('\n32. @文件引用（输入框的候选弹层）')
+
+const wsFile = (p) => ({ name: p, path: p, isDirectory: false, size: 10, modifiedAt: 0 })
+const wsDir = (p) => ({ name: p, path: p, isDirectory: true, size: 0, modifiedAt: 0 })
+
+check(
+  '正在敲的 @ 片段会被识别（@ 的位置 + 已敲的路径片段）',
+  JSON.stringify(mod.mentionDetect('改一下 @src/a.t', 12)) ===
+    JSON.stringify({ start: 4, caret: 12, query: 'src/a.t' })
+)
+check(
+  '刚敲下 @ 也算引用起点（此时列工作区里的文件供挑选）',
+  mod.mentionDetect('参考 @', 4)?.query === ''
+)
+check(
+  '@ 已经敲完（后面跟了空格）就不再打扰：引用结束，弹层该收起来',
+  mod.mentionDetect('@a.md 改一下', 11) === null
+)
+check(
+  '邮箱与 URL 里的 @ 不弹层（与内核同一口径，界面弹了内核也不认）',
+  mod.mentionDetect('联系 someone@example.com', 24) === null &&
+    mod.mentionDetect('见 https://x.io/@y', 17) === null
+)
+check(
+  '光标移到引用之后（或句子中间）就不再弹（引用已经敲完了）',
+  mod.mentionDetect('改一下 @a.md 和', 13) === null && mod.mentionDetect('改一下', 3) === null
+)
+check(
+  '候选排序：文件名前缀 > 文件名包含 > 路径包含；目录不进候选（内核不附目录正文）',
+  JSON.stringify(
+    mod.mentionRank(
+      [wsFile('my_report.md'), wsFile('report.md'), wsFile('reporting/data.csv'), wsDir('report')],
+      'report'
+    )
+  ) === JSON.stringify(['report.md', 'my_report.md', 'reporting/data.csv'])
+)
+check(
+  '空查询按层级由浅到深给，浅的在前（刚敲 @ 时最想要的就在最上面）',
+  JSON.stringify(mod.mentionRank([wsFile('deep/a/b.md'), wsFile('top.md')], '')) ===
+    JSON.stringify(['top.md', 'deep/a/b.md'])
+)
+
+const mentionPaths = ['src/a.ts', 'src/b.ts', 'README.md']
+const popupHtml = mod.renderMentionPopup(mentionPaths, 1)
+check(
+  '弹层列出候选路径，高亮项就是键盘当前位置',
+  popupHtml.includes('src/a.ts') && popupHtml.includes('src/b.ts') &&
+    popupHtml.includes('README.md') && popupHtml.includes('mention__row--active') &&
+    popupHtml.split('mention__row--active').length === 2
+)
+check(
+  '弹层把键盘用法写在脸上（不写用户只会以为 @ 是打进去的字）',
+  decode(popupHtml).includes('Enter/Tab 插入') && decode(popupHtml).includes('Esc 关闭')
+)
+check(
+  '没有匹配候选时整层不渲染（空框比「什么都没有」的弹层更让人困惑）',
+  mod.renderMentionPopup([], 0) === ''
+)
+check(
+  '候选行数有上限（工作区几千个文件时不能把屏幕铺满）',
+  (mod.renderMentionPopup(Array.from({ length: 40 }, (_, i) => 'f' + i + '.md'), 0).match(
+    /class="mention__row/g
+  ) || []).length === 8
+)
+
+const workComposer = mod.renderComposer('work')
+check(
+  '工作/交互模式的占位文案告诉用户能 @（这是个发现性问题，不写就等于没有）',
+  workComposer.includes('@ 引用工作区文件') &&
+    mod.renderComposer('interactive').includes('@ 引用工作区文件')
+)
+check(
+  '聊天模式不提 @（那边没有工作区语义，素材入口是附件直传）',
+  !mod.renderComposer('chat').includes('@ 引用工作区文件')
+)
+check(
+  '弹层产物里没有 emoji / 装饰符号',
+  !/[\u2190-\u21ff\u2300-\u23ff\u2460-\u24ff\u25a0-\u25ff\u2600-\u27bf\u2b00-\u2bff\ufe0f\u{1f000}-\u{1faff}]/u.test(
+    popupHtml
+  )
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

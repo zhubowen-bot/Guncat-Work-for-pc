@@ -194,6 +194,11 @@ export class WorkFileService {
     return WorkFileService.resolveSafe(root, rel);
   }
 
+  // 文件版本指纹的公共包装(@文件引用把整份正文交给模型之后, 也要按同一口径登记「已见过」)
+  static fsVersionOfPublic(abs: string): string {
+    return WorkFileService.fsVersionOf(abs);
+  }
+
   // read_file 的公共包装(str_replace_editor 的 view 分支复用行分页逻辑)
   static async toolReadPublic(root: string, rel: string, cacheDir: string,
     offset: number, limit: number): Promise<ToolExecResult> {
@@ -1941,7 +1946,8 @@ export class WorkFileService {
     return textExts.indexOf(ext) !== -1;
   }
 
-  private static looksBinary(bytes: Uint8Array): boolean {
+  // 纯逻辑嗅探(只扫开头 4KB 的 NUL)，@文件引用也要用它，所以对外开放
+  static looksBinary(bytes: Uint8Array): boolean {
     let scan: number = bytes.length < 4096 ? bytes.length : 4096;
     for (let i: number = 0; i < scan; i++) {
       if (bytes[i] === 0) {

@@ -60,6 +60,7 @@ import { CommandService } from '@core/service/CommandService'
 import { ScheduleService } from '@core/service/ScheduleService'
 import { GoalService } from '@core/service/GoalService'
 import { WorkspaceInstructionsService } from '@core/service/WorkspaceInstructionsService'
+import { WorkspaceMentionService } from '@core/service/WorkspaceMentionService'
 import {
   WorkArtifactFile,
   WorkArtifactSummary,
@@ -1360,7 +1361,7 @@ export class SessionManager {
 
     const messages: LoopMessage[] = [
       LoopMessage.system(AgentLoopService.buildWorkSystemPromptFor(request.mode)),
-      LoopMessage.user(taskText)
+      LoopMessage.user(this.expandMentions(conv.id, taskText))
     ]
 
     const mode: string = request.mode === 'interactive' ? 'interactive' : 'work'
@@ -1400,7 +1401,7 @@ export class SessionManager {
           // 插话在**轮与轮之间**注入（对齐原版 workSteerQueue 的时机）：
           // 放这里而不是打断当前请求，模型能带着上一轮的工具结果一起看到新要求。
           for (const steerText of this.drainSteer(conv.id)) {
-            messages.push(LoopMessage.user(steerText))
+            messages.push(LoopMessage.user(this.expandMentions(conv.id, steerText)))
           }
 
           // 每一轮在 UI 上是一条 assistant 消息（思考 → 工具 → 正文）
@@ -1812,6 +1813,28 @@ export class SessionManager {
     anchor.tokens = 0
     anchor.chars = 0
     return notes
+  }
+
+  /**
+   * 把用户消息里的 @文件引用展开成正文附在该消息之后。
+   *
+   * 为什么展开在「本轮消息」而不是运行时快照：快照要靠逐字节判重才能保住 KV 缓存前缀，
+   * 而 @ 出来的内容本来就是每条消息各不相同的一次性上下文 —— 它天然属于这条 user 消息，
+   * 下一轮不会再有第二条一模一样的快照被它影响。
+   *
+   * 用户在 UI 上看到的就是自己原本那句 `改一下 @a.md`（存的是原文），展开只发生在发给模型的
+   * 这一份里；解析、体积预算与越界拒绝都在 WorkspaceMentionService 内部收口。
+   */
+  private expandMentions(convId: string, text: string): string {
+    if (text.indexOf('@') < 0) {
+      return text;
+    }
+    const render = WorkspaceMentionService.render(
+      WorkFileService.workspaceRoot(this.ctx(), convId), text)
+    if (render.section === '') {
+      return text;
+    }
+    return text + '\n\n' + render.section
   }
 
   /**

@@ -1,10 +1,17 @@
-﻿import { useEffect, useRef, useState } from 'react'
-import type { PickedAttachmentDto } from '@ipc/contract'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import type { PickedAttachmentDto, WorkspaceEntryDto } from '@ipc/contract'
 import { useAutoResize } from '../hooks/useAutoResize'
 import { useVoiceInput } from '../speech/useVoiceInput'
 import { useStore } from '../store'
 import { MODE_HINT } from '../conversations'
 import { AttachmentBar } from './AttachmentBar'
+import {
+  detectMention,
+  MentionPopup,
+  MENTION_MAX_ROWS,
+  rankMentionCandidates,
+  type MentionQuery
+} from './MentionPopup'
 import { IconMic, IconPaperclip, IconRefresh, IconSend, IconSteer, IconStop, IconStopCircle } from '../icons'
 
 interface Props {
@@ -24,12 +31,19 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
   // 真正的解析结果由主进程的 attachment:parsed 事件推进（见下面的订阅）。
   // 附件仍然只放在这里，不进 store —— 它只在这个组件里被消费。
   const [attachments, setAttachments] = useState<PickedAttachmentDto[]>([])
+  // @ 文件引用的输入态：null = 当前没有正在敲的引用
+  const [mention, setMention] = useState<MentionQuery | null>(null)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [wsFiles, setWsFiles] = useState<WorkspaceEntryDto[]>([])
+  // 选完文件要把光标放回插入点之后，setText 之后在 effect 里落地（那时 DOM 才是新值）
+  const pendingCaret = useRef<number | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
   useAutoResize(ref, text)
 
   const pendingDraft = useStore((s) => s.pendingDraft)
   const consumeDraft = useStore((s) => s.consumeDraft)
   const pushNotice = useStore((s) => s.pushNotice)
+  const activeId = useStore((s) => s.activeId)
 
   // 消息操作行的「编辑 / 重新编辑」把文本塞进这里，并聚焦回输入框
   useEffect(() => {
@@ -68,7 +82,76 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
   useEffect(() => {
     setText('')
     setAttachments([])
+    setMention(null)
   }, [mode])
+
+  // @ 引用只在有工作区的形态给：聊天模式的素材入口是附件直传，跟工作区文件不是一条路
+  const mentionEnabled = mode !== 'chat'
+  const mentionStart = mention === null ? -1 : mention.start
+  const mentionRows = useMemo(
+    () => (mention === null ? [] : rankMentionCandidates(wsFiles, mention.query, MENTION_MAX_ROWS)),
+    [mention, wsFiles]
+  )
+
+  // 一次 @ 只打一次 IPC：列出这个会话工作区里的文件作为候选（不随每次按键重拉）
+  useEffect(() => {
+    if (mentionStart < 0 || activeId === null) {
+      return
+    }
+    let alive = true
+    window.guncat.workspace
+      .list(activeId)
+      .then((list) => {
+        if (alive) {
+          setWsFiles(list)
+        }
+      })
+      .catch(() => {
+        if (alive) {
+          setMention(null)
+        }
+      })
+    return () => {
+      alive = false
+    }
+  }, [mentionStart, activeId])
+
+  // 插入文件名之后把光标放回引用串末尾，用户可以直接接着打字
+  useEffect(() => {
+    const target = pendingCaret.current
+    if (target === null) {
+      return
+    }
+    pendingCaret.current = null
+    const element = ref.current
+    if (element !== null) {
+      element.focus()
+      element.setSelectionRange(target, target)
+    }
+  }, [text])
+
+  /** 每次文本或光标变化都要重判：还在敲引用就开着弹层，敲完/移开就收掉 */
+  function syncMention(next: string, caret: number): void {
+    if (!mentionEnabled) {
+      setMention(null)
+      return
+    }
+    const found = detectMention(next, caret)
+    setMention(found)
+    setMentionIndex(0)
+  }
+
+  /** 把选中的路径接进文本，替换掉 @ 到光标之间已敲的片段 */
+  function applyMention(path: string): void {
+    if (mention === null) {
+      return
+    }
+    const inserted = '@' + path + ' '
+    const next = text.slice(0, mention.start) + inserted + text.slice(mention.caret)
+    pendingCaret.current = mention.start + inserted.length
+    setText(next)
+    setMention(null)
+  }
 
   async function pickAttachments(): Promise<void> {
     try {
@@ -134,18 +217,44 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    const composing: boolean = e.nativeEvent.isComposing
+    // 弹层开着时先接管导航键：这里的 Enter 是「插入选中的文件」，不是发送
+    // （输入法正在候选确认中的 Enter 不参与，交给 IME 自己吃掉）
+    if (mention !== null && mentionRows.length > 0 && !composing) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionIndex((i) => (i + 1) % mentionRows.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionIndex((i) => (i - 1 + mentionRows.length) % mentionRows.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        applyMention(mentionRows[Math.min(mentionIndex, mentionRows.length - 1)])
+        return
+      }
+    }
+    if (e.key === 'Escape' && mention !== null) {
+      e.preventDefault()
+      setMention(null)
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !composing) {
       e.preventDefault()
       submit()
     }
   }
 
+  const mentionHint = mode === 'chat' ? '' : '，@ 引用工作区文件'
   const placeholder =
-    mode === 'chat'
+    (mode === 'chat'
       ? '输入消息，Enter 发送，Shift+Enter 换行'
       : mode === 'interactive'
         ? '描述你想要的界面，例如「做一个季度销售复盘仪表盘」'
-        : '描述任务，工作模式会自主调用工具并交付产物'
+        : '描述任务，工作模式会自主调用工具并交付产物') + mentionHint
 
   return (
     <div className="composer">
@@ -153,6 +262,14 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
         attachments={attachments}
         onRemove={(target) => setAttachments((prev) => prev.filter((a) => a.path !== target))}
       />
+
+      {mention !== null && mentionRows.length > 0 ? (
+        <MentionPopup
+          paths={mentionRows}
+          active={Math.min(mentionIndex, mentionRows.length - 1)}
+          onPick={(index) => applyMention(mentionRows[index])}
+        />
+      ) : null}
 
       <div className="composer__inner">
         {/* 元素顺序逐条对齐原版 MessageInputView.build（55-66）：
@@ -185,7 +302,12 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
           ref={ref}
           value={text}
           placeholder={placeholder}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            syncMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+          }}
+          onClick={(e) => syncMention(text, e.currentTarget.selectionStart ?? text.length)}
+          onBlur={() => setMention(null)}
           onKeyDown={onKeyDown}
           rows={1}
         />
