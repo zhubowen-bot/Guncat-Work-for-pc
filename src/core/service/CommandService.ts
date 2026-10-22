@@ -69,8 +69,15 @@ class ScriptAuditItem {
   abs: string = '';
   /** 审批卡上给用户看的写法 */
   label: string = '';
-  /** 这个脚本自己所在目录（相对工作区根）：它内部的相对引用按这里解析，而不是按命令的 cwd */
-  baseRel: string = '';
+  /**
+   * 这个文件里写的相对路径**可能**按哪些目录解析（相对工作区根，空串=根）。
+   * cmd/PowerShell 执行脚本时不会把工作目录切到脚本所在目录，所以进程 cwd 是第一个候选；
+   * 脚本 `cd` 到自己所在目录、或被别的目录的调用方拉起来时，它自己的目录也是候选 ——
+   * 少试一个就等于「解析不到 → 静默跳过 → 整条链没审」（实测这样删掉了文件）。
+   */
+  bases: string[] = [];
+  /** 它自己所在的目录（相对工作区根）：%~dp0、$PSScriptRoot 这类「相对脚本自己」的写法按这里解析 */
+  ownDir: string = '';
   depth: number = 0;
 }
 
@@ -374,8 +381,13 @@ export class CommandService {
    * （审批卡上写明是「哪个文件的哪一项」，用户才知道自己在批什么）。
    * 返回脚本内容里命中的**硬禁**项 —— 这类操作不给审批入口，与命令行本身同一口径。
    *
-   * 会跟进脚本内部的相对引用（`run.bat` 里只写一行 `helper.ps1` 不算把危险藏好），深度 2、
-   * 文件数 8 封顶 —— 再深就是构建脚本的正常引用网，逐层读下去只会把用户问烦。
+   * 会跟进脚本内部的引用（`run.bat` 里只写一行 `helper.ps1` 不算把危险藏好）。跟进时两件事必须做到：
+   *   1. 相对路径按**所有可能的基准目录**试（进程 cwd 与脚本自己的目录），解析到几个就审几个 ——
+   *      只按脚本自己的目录算，外层脚本写 `audit\x.bat` 这种「相对 cwd」的引用就会找不到而被跳过；
+   *   2. 找不到的引用要**转审批**而不是静默放过。找不到只代表「我们的路径模型没覆盖到」
+   *      （`%~dp0`、PATH 上的名字、脚本里自己 cd），不代表运行时不存在 ——
+   *      实测 `%~dp0` 一条就静默删了文件。
+   * 深度 2、文件数 8 封顶；被上限挡掉的引用同样转审批，不能默默少审。
    */
   private static auditScripts(command: string, cwdRel: string, root: string,
     verdict: GuardVerdict): string {
@@ -388,17 +400,21 @@ export class CommandService {
         CommandService.pushRisk(verdict, '脚本 ' + refs[i] + ' 不在工作区内，内容审阅不了');
         continue;
       }
-      queue.push(CommandService.auditItem(abs, refs[i], 0, root));
+      queue.push(CommandService.auditItem(abs, refs[i], [cwdRel], 0, root));
     }
     let seen: string[] = [];
-    while (queue.length > 0 && seen.length < 8) {
+    while (queue.length > 0 && seen.length < CommandService.MAX_SCRIPT_FILES) {
       let item: ScriptAuditItem = queue.shift() as ScriptAuditItem;
       if (seen.indexOf(item.abs) !== -1) {
         continue;
       }
       seen.push(item.abs);
       if (!fileIo.accessSync(item.abs)) {
-        continue; // 文件不存在: 命令自己会失败，不用打扰用户
+        // 文件现在不在，**不代表命令跑起来之后不在**：同一条命令可以前半段用 writeFileSync
+        // 写出载荷、后半段执行它（写文件本身不在危险表里，这是既定口径）。所以读不到就转审批，
+        // 而不是按「命令自己会失败」静默放过。
+        CommandService.pushRisk(verdict, '脚本 ' + item.label + ' 在工作区里还不存在，内容审阅不了');
+        continue;
       }
       let size: number = fileIo.statSync(item.abs).size;
       if (size > Constants.WORK_CMD_SCRIPT_AUDIT_MAX_BYTES) {
@@ -422,27 +438,89 @@ export class CommandService {
       if (inner.forbidden) {
         verdict.forbidden = true;
       }
-      if (item.depth < 2) {
-        let children: string[] = CommandGuard.scriptRefs(body);
-        for (let c: number = 0; c < children.length; c++) {
-          let childAbs: string | null = CommandService.resolveScript(children[c], item.baseRel, root);
-          if (childAbs !== null && seen.indexOf(childAbs) === -1) {
-            queue.push(CommandService.auditItem(childAbs, children[c], item.depth + 1, root));
-          }
-        }
+      let children: string[] = CommandGuard.scriptRefs(body);
+      if (children.length === 0) {
+        continue;
       }
+      if (item.depth >= CommandService.MAX_SCRIPT_DEPTH) {
+        CommandService.pushRisk(verdict, '脚本 ' + item.label +
+          ' 里还引用了别的脚本，但已经到了审阅层级上限，更里面的内容没看');
+        continue;
+      }
+      for (let c: number = 0; c < children.length; c++) {
+        CommandService.collectChildren(children[c], item, seen, queue, verdict, root);
+      }
+    }
+    if (queue.length > 0) {
+      CommandService.pushRisk(verdict, '命令引用的脚本超过 ' +
+        CommandService.MAX_SCRIPT_FILES.toString() + ' 个，剩下的内容没读');
     }
     return forbidden.join('、');
   }
 
-  private static auditItem(abs: string, label: string, depth: number,
+  // 「相对脚本自己」的写法：cmd 的 %~dp0/%~dp1（脚本所在目录 + 尾斜杠）、PowerShell 的 $PSScriptRoot。
+  // shell 执行时会把它们换成脚本所在目录，所以这一类只按脚本自己的目录解析。
+  private static readonly OWN_DIR_RE: RegExp = /^(?:%~dp\d|%~f0|\$\{?PSScriptRoot\}?)[/\\]?/i;
+
+  private static readonly MAX_SCRIPT_FILES: number = 8;
+  private static readonly MAX_SCRIPT_DEPTH: number = 2;
+
+  /** 脚本内部的一条引用：按每一个可能的基准目录去解析，解析到几个就审几个，一个都没有就转审批 */
+  private static collectChildren(ref: string, item: ScriptAuditItem, seen: string[],
+    queue: ScriptAuditItem[], verdict: GuardVerdict, root: string): void {
+    let ownDirOnly: boolean = CommandService.OWN_DIR_RE.test(ref);
+    let clean: string = ref.replace(CommandService.OWN_DIR_RE, '');
+    let bases: string[] = ownDirOnly ? [item.ownDir] : CommandService.mergeBases(item);
+    let found: string[] = [];
+    let audited: boolean = false;
+    for (let b: number = 0; b < bases.length; b++) {
+      let abs: string | null = CommandService.resolveScript(clean, bases[b], root);
+      if (abs === null || !fileIo.accessSync(abs)) {
+        continue;
+      }
+      if (seen.indexOf(abs) !== -1) {
+        audited = true;
+        continue;
+      }
+      if (found.indexOf(abs) === -1) {
+        found.push(abs);
+      }
+    }
+    if (found.length === 0) {
+      if (!audited) {
+        CommandService.pushRisk(verdict, '脚本 ' + item.label + ' 里引用的 ' + ref +
+          ' 在工作区里定位不到（或在工作区之外），内容审阅不了');
+      }
+      return;
+    }
+    for (let f: number = 0; f < found.length; f++) {
+      queue.push(CommandService.auditItem(found[f], ref, item.bases, item.depth + 1, root));
+    }
+  }
+
+  /** 候选基准目录：继承下来的执行目录，加上脚本自己所在的目录（去重） */
+  private static mergeBases(item: ScriptAuditItem): string[] {
+    let out: string[] = [];
+    for (let i: number = 0; i < item.bases.length; i++) {
+      if (out.indexOf(item.bases[i]) === -1) {
+        out.push(item.bases[i]);
+      }
+    }
+    if (out.indexOf(item.ownDir) === -1) {
+      out.push(item.ownDir);
+    }
+    return out;
+  }
+
+  private static auditItem(abs: string, label: string, bases: string[], depth: number,
     root: string): ScriptAuditItem {
     let item: ScriptAuditItem = new ScriptAuditItem();
     item.abs = abs;
     item.label = label;
+    item.bases = bases;
     item.depth = depth;
-    // 脚本内部的相对引用是相对**它自己**所在的目录，不是命令的 cwd
-    item.baseRel = CommandService.relativeToRoot(abs.substring(0, abs.lastIndexOf('/')), root);
+    // 脚本自己所在的目录：它内部写的相对路径也可能按这里解析（脚本先 cd 到自己目录是常见写法）
+    item.ownDir = CommandService.relativeToRoot(abs.substring(0, abs.lastIndexOf('/')), root);
     return item;
   }
 

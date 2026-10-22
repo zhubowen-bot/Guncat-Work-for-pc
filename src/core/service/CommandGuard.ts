@@ -171,16 +171,24 @@ export class CommandGuard {
   // 脚本文件里做的是「编程」而不是「敲命令」，删除与外发走的是语言 API，上面那些 shell 关键词看不见。
   // 只盯「shell 那一层同样要批准」的动作：删文件、改名、联网、上跳/越界（越界由路径规则管）。
   // 写文件不进这张表 —— write_file 工具本来就不需要批准，脚本里 fs.writeFileSync 不该更严；
-  // 起子进程也不进（构建脚本天天 spawn 工具链），它内层的命令行仍然被上面两张表扫过。
+  // 起子进程也不进（构建脚本天天 spawn 工具链）：它内层的命令行仍然被上面两张表扫过。
+  // 但**拼出来的**那一段不在文本里（实测 execSync('d'+'el audit'+bs+'decoy.txt') 静默删了文件），
+  // 所以只按「参数是不是单段字面量」切一刀：读不出跑的是什么，就按危险处理。
   private static readonly CODE: Rule[] = [
     { re: /\b(?:rmSync|unlinkSync|rmdirSync|truncateSync)\s*\(|\brimraf\b/i, why: 'JS 删除文件' },
+    { re: /\b(?:fs|require\s*\(\s*['"]fs['"]\s*\))\s*\.\s*(?:promises\s*\.\s*)?(?:rm|rmdir|unlink|rename|truncate)\s*\(|\b\w+\.(?:unlink|rmdir)\s*\(|\bos\.replace\s*\(/i,
+      why: 'JS/Python 删除或改名文件（异步 API 形态）' },
     { re: /\bshutil\.(?:rmtree|move)\s*\(|os\.(?:remove|unlink|rename|kill)\s*\(/i, why: 'Python 删除/移动文件' },
     { re: /\b(?:File|Files)\.(?:delete|Delete)\s*\(|\bremoveDirectory\b/i, why: '删除目录或文件' },
     { re: /\b(?:net\.Socket|createConnection|URLSession)\b|XmlHttpRequest|\bfetch\s*\(\s*['"]https?:/i, why: '脚本自己联网外发' },
     // VB/WSH 脚本里的破坏动作不叫 del：FSO 的 DeleteFile 删文件，CreateObject("Wscript.Shell")
     // 起一个 cmd —— 关键词表对这些完全无感，只有读了内容才看得见。
     { re: /CreateObject\s*\(\s*["']?(?:Wscript|Shell|Scripting|Msxml2|Adodb)|ActiveXObject\s*\(\s*["']?(?:Wscript|Shell|Scripting|Msxml2|Adodb)/i, why: '脚本经 WSH/COM 对象操作文件或起进程' },
-    { re: /\bDelete(?:File|Folder)\b|\bKillFile\b/i, why: '脚本删除文件（FSO/API）' }
+    { re: /\bDelete(?:File|Folder)\b|\bKillFile\b/i, why: '脚本删除文件（FSO/API）' },
+    // 参数不是单段字面量（变量、拼接、模板串）或字面量后面还接了一段 —— 真正跑什么不在文本里。
+    { re: /\b(?:execSync|execFileSync|execFile|spawnSync|spawn|Popen|subprocess\.\w+|os\.system|os\.popen|child_process\.exec)\s*\(\s*(?:[A-Za-z_$][\w$]*\s*[+,)]|\$\{|`)|\b(?:execSync|execFileSync|execFile|spawnSync|spawn|Popen|subprocess\.\w+|os\.system|os\.popen)\s*\(\s*['"][^'"\n]{0,200}['"]\s*[+&]/i,
+      why: '把拼出来的字符串交给子进程执行（真正运行的命令读不出）' },
+    { re: /\beval\s*\(|\bnew\s+Function\s*\(|(?:^|[^\w.])Execute(?:Global)?\s*\(/i, why: '执行一段动态拼出来的代码（eval 一类）' }
   ]
 
   /**
@@ -207,9 +215,63 @@ export class CommandGuard {
    * 判定一段**脚本源码**（命令引用的 .ps1/.bat/.js/.py 之类的内容）。
    * 与 assess 同一套尺子，额外再过一遍语言 API —— 脚本里的 `fs.rmSync` 不像 shell 的 `rm`，
    * 但删起文件来一模一样。
+   *
+   * 文件比命令行长得多，所以不能沿用「超过 4000 字符就拒审」：那等于让任何一份正常的构建脚本
+   * 都跑不起来，而把破坏写成 4100 字符照样免检。改成**按行分片逐片审**（片与片之间取并集，
+   * 只会多出命中），大小另由 CommandService 的字节上限管住。
    */
   static assessScript(text: string, root: string = ''): GuardVerdict {
-    return CommandGuard.scan(text, root, true)
+    if (text.trim().length <= CommandGuard.MAX_SCAN) {
+      return CommandGuard.scan(text, root, true)
+    }
+    let merged: GuardVerdict = new GuardVerdict()
+    let chunks: string[] = CommandGuard.lineChunks(text, CommandGuard.MAX_SCAN)
+    for (let i: number = 0; i < chunks.length; i++) {
+      if (chunks[i].trim() === '') {
+        continue
+      }
+      let part: GuardVerdict = CommandGuard.scan(chunks[i], root, true)
+      if (part.forbidden) {
+        merged.forbidden = true
+      }
+      for (let j: number = 0; j < part.reasons.length; j++) {
+        CommandGuard.pushReason(merged, part.reasons[j])
+      }
+      merged.risky = merged.risky || part.risky
+    }
+    return merged
+  }
+
+  private static readonly MAX_SCAN: number = 4000
+
+  /** 按行切成不超过 size 的片段；单行本身超长时硬切（压缩过的 JS 也是一行的形态） */
+  private static lineChunks(text: string, size: number): string[] {
+    let out: string[] = []
+    let lines: string[] = text.split(/\r?\n/)
+    let buf: string = ''
+    for (let i: number = 0; i < lines.length; i++) {
+      let line: string = lines[i]
+      while (line.length > size) {
+        if (buf !== '') {
+          out.push(buf)
+          buf = ''
+        }
+        out.push(line.substring(0, size))
+        line = line.substring(size)
+      }
+      if (buf.length + line.length + 1 > size) {
+        if (buf !== '') {
+          out.push(buf)
+        }
+        buf = line
+      } else {
+        buf = buf === '' ? line : buf + '\n' + line
+      }
+    }
+    if (buf !== '') {
+      out.push(buf)
+    }
+    return out
   }
 
   private static scan(text: string, root: string, script: boolean): GuardVerdict {
@@ -220,16 +282,21 @@ export class CommandGuard {
       verdict.reasons.push('命令为空')
       return verdict
     }
-    if (trimmed.length > 4000) {
+    if (trimmed.length > CommandGuard.MAX_SCAN) {
       verdict.forbidden = true
-      verdict.reasons.push('命令过长（超过 4000 字符），无法逐字审阅')
+      verdict.reasons.push('命令过长（超过 ' + CommandGuard.MAX_SCAN.toString() + ' 字符），无法逐字审阅')
       return verdict
     }
     // 原文与「还原转义后的文本」都过一遍：cmd 的 ^、拆词的引号、POSIX 的反斜杠在执行时会消失，
     // 只看原文就等于让 shut^down、de^l、form^at 用一个字符绕过硬禁表（实测缺口，见 unobfuscate）。
     // 再把括号/反引号包裹的内层命令单独拎出来 —— 段首锚定的规则看不见 for /f 里的解释器。
     let norm: string = CommandGuard.unobfuscate(trimmed)
-    let sources: string[] = [trimmed, norm].concat(CommandGuard.extractInnerCommands(trimmed))
+    let folded: string = CommandGuard.foldConstants(trimmed)
+    let sources: string[] = [trimmed, norm, folded]
+    if (folded !== trimmed) {
+      sources.push(CommandGuard.unobfuscate(folded))
+    }
+    sources = sources.concat(CommandGuard.extractInnerCommands(trimmed))
     let forbidden: string[] = CommandGuard.matchedAll(sources, CommandGuard.FORBIDDEN)
     let risky: string[] = CommandGuard.matchedAll(sources, CommandGuard.RISKY)
       .concat(CommandGuard.matchedAll(sources, CommandGuard.OPAQUE))
@@ -240,9 +307,12 @@ export class CommandGuard {
     let rawProgs: string[] = CommandGuard.commandPrograms([trimmed])
     forbidden = forbidden.concat(CommandGuard.matchedPrograms(progs, CommandGuard.POSITIONAL_FORBIDDEN))
     risky = risky.concat(CommandGuard.matchedPrograms(progs, CommandGuard.POSITIONAL_RISKY))
-    // 语言 API 只作危险项：脚本里写文件是常态，硬禁表留给真正不可逆的系统级操作
+    // 语言 API 只作危险项：脚本里写文件是常态，硬禁表留给真正不可逆的系统级操作。
+    // 但只用**还留着引号**的那几份文本判：unobfuscate 会把引号去掉，execFileSync('node')
+    // 去掉引号就成了 execFileSync(node)，看起来像「参数是变量」，把正常构建脚本全冤枉了。
     if (script) {
-      risky = risky.concat(CommandGuard.matchedAll(sources, CommandGuard.CODE))
+      let quoted: string[] = [trimmed, folded].concat(CommandGuard.extractInnerCommands(trimmed))
+      risky = risky.concat(CommandGuard.matchedAll(quoted, CommandGuard.CODE))
     }
     // 只在还原文/内层命令里出现的命中，说明写命令的人绕了一段路 —— 档位按追加后的结果定
     // （形如 shut^down 的写法必须照样落进硬禁表，不能降级成「问一句就跑」），并额外说明原因。
@@ -329,6 +399,79 @@ export class CommandGuard {
     // 因为解释器规则锚在段首而整条免审批直通）。剥掉它，@ 开头的写法与裸写法走同一条判定。
     out = out.replace(/(^|[;&|(\s]\s*)@(cmd|command|powershell|pwsh|sh|bash|zsh|node|python|dotnet)\b/gi,
       '$1$2')
+    return out
+  }
+
+  // 相邻字符串字面量被连接符拼在一起：'d' + 'el'、"a" & "b"（JS/PS 用 +，VBS 用 &）
+  private static readonly CONCAT_RE: RegExp =
+    /(['"])([^'"\n]{0,160})\1\s*[+&]\s*(['"])([^'"\n]{0,160})\3/g
+  // 赋值为字符串字面量的变量：const bs = '\\'、set X=del、dim y "rd"
+  private static readonly CONST_ASSIGN_RE: RegExp =
+    /(?:var|let|const|set|dim|\blocal\b)?\s*([A-Za-z_$][\w$]{0,40})\s*=\s*(['"])([^'"\n]{0,160})\2/g
+
+  /**
+   * 常量折叠：把「拆开写的危险词」还原成一个词。
+   *
+   * 为什么要它：关键字表读的是文本，而 `'d'+'el audit'+bs+'decoy.txt'` 里根本没有 del 这个词
+   * —— 实测这样静默删掉了文件。脚本正文里做字符串拼接是天经地义的，所以不是「见拼接就拦」，
+   * 而是能算出来的先算出来，再交给原来那三层判定。
+   * 折叠结果只作为**额外**的一份文本参与判定（原文照样过），所以它只可能多出命中，不会洗掉任何东西。
+   */
+  private static foldConstants(text: string): string {
+    let out: string = CommandGuard.expandCharCodes(text)
+    for (let round: number = 0; round < 4; round++) {
+      let prev: string = out
+      out = out.replace(CommandGuard.CONCAT_RE,
+        (_m: string, q1: string, a: string, _q2: string, b: string): string => q1 + a + b + q1)
+      out = CommandGuard.substituteConsts(out)
+      if (out === prev || out.length > 16000) {
+        break
+      }
+    }
+    return out
+  }
+
+  // String.fromCharCode(100,101,108)、Chr(100)、[char]100 —— 用码点写出关键词的写法
+  private static expandCharCodes(text: string): string {
+    let out: string = text.replace(/\bString\.fromCharCode\s*\(\s*(\d{1,4}(?:\s*,\s*\d{1,4}){0,31})\s*\)/g,
+      (_m: string, csv: string): string => "'" + CommandGuard.codesToChars(csv) + "'")
+    out = out.replace(/\b(?:ChrW|Chr|Character)\s*\(\s*(\d{1,4})\s*\)/g,
+      (_m: string, csv: string): string => "'" + CommandGuard.codesToChars(csv) + "'")
+    out = out.replace(/\[char\]\s*\{?\s*(\d{1,4})\s*\}?/g,
+      (_m: string, csv: string): string => "'" + CommandGuard.codesToChars(csv) + "'")
+    return out
+  }
+
+  // 只还原可打印 ASCII：折叠是为了让关键词浮出来，控制字符对判定没有意义
+  private static codesToChars(csv: string): string {
+    let parts: string[] = csv.split(',')
+    let out: string = ''
+    for (let i: number = 0; i < parts.length; i++) {
+      let code: number = parseInt(parts[i], 10)
+      if (code >= 32 && code <= 126) {
+        out += String.fromCharCode(code)
+      }
+    }
+    return out
+  }
+
+  /** 把「变量 = 一段字符串字面量」的变量名换成它的值（同一份文本内，只看字面量赋值） */
+  private static substituteConsts(text: string): string {
+    let out: string = text
+    let re: RegExp = new RegExp(CommandGuard.CONST_ASSIGN_RE.source, 'g')
+    let match: RegExpExecArray | null = re.exec(text)
+    let count: number = 0
+    while (match !== null && count < 12) {
+      let name: string = match[1]
+      let value: string = match[3]
+      count++
+      if (value !== '' && name !== value) {
+        // 不能用 \b：PowerShell 的 $cmd 里 `$` 本身就是非词字符，词边界反而匹配不上
+        out = out.replace(new RegExp('(^|[^\\w$])' + name.replace(/\$/g, '\\$') + '($|[^\\w$])', 'g'),
+          (_m: string, head: string, tail: string): string => head + value + tail)
+      }
+      match = re.exec(text)
+    }
     return out
   }
 
@@ -536,6 +679,9 @@ export class CommandGuard {
   private static readonly SCRIPT_EXT_RE: RegExp =
     /\.(?:ps1|psm1|bat|cmd|sh|bash|zsh|vbs|js|mjs|cjs|py|pyw|rb|pl|lua|ahk|wsf)$/i
 
+  // 通配形态的「文件名」不是一个具体文件，读不了内容，也不该据此打扰用户
+  private static readonly GLOB_RE: RegExp = /[*?[\]]/
+
   // 解释器与脚本宿主：它们的第一个位置参数就是「要跑的那段代码」。
   // call 也在内 —— cmd 的 call 同样不管后缀，把 .txt 当批处理逐行执行。
   private static readonly EXEC_HOST_TOKEN_RE: RegExp =
@@ -689,6 +835,9 @@ export class CommandGuard {
    * 两条入口：常见脚本后缀（不看命令是什么），以及**脚本宿主的文件操作数**（不看后缀）。
    * 后者必须有：cscript/wscript 把 payload.txt 当代码跑一点意见都没有，只按后缀筛等于
    * 「改个扩展名就把危险藏好」（实测这样删掉了文件、读到了 C:\Windows\win.ini）。
+   *
+   * 通配形态（`*.js`、`src/?.py`）不收：那指向的是一批文件而不是某一个具体脚本，
+   * 否则 `find . -name "*.js"` 这类日常写法会被当成「引用了一个读不到的脚本」而去打扰用户。
    */
   static scriptRefs(command: string): string[] {
     let parts: string[] = []
@@ -716,6 +865,9 @@ export class CommandGuard {
     for (let i: number = 0; i < parts.length && refs.length < 8; i++) {
       let part: string = parts[i].trim().replace(/^['"]+|['"]+$/g, '')
       if (part.length === 0 || part.length > 260 || refs.indexOf(part) !== -1) {
+        continue
+      }
+      if (CommandGuard.GLOB_RE.test(part)) {
         continue
       }
       let review: boolean = CommandGuard.SCRIPT_EXT_RE.test(part)

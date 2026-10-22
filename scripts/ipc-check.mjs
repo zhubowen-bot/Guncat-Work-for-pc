@@ -4030,6 +4030,135 @@ check(
     chained.output.includes('helper.ps1') && chained.output.includes('磁盘分区'),
   chained.output.slice(0, 200)
 )
+
+// —— 跟进之后必须按「每一个可能的基准目录」找：.bat 里的相对路径是相对**执行目录**的 ——
+// 只按脚本自己的目录算，等于「外层在子目录、里面写相对根目录的路径」这一种写法直接漏审。
+fs.writeFileSync(path.join(auditDir, 'chain2.bat'), '@echo off\r\ncall guard-audit\\deep2.bat\r\n')
+fs.writeFileSync(path.join(auditDir, 'deep2.bat'), 'diskpart /s setup.txt\r\n')
+const cwdRelChain = await CommandService.run(
+  convCmd.id, cmdRoot, { command: 'guard-audit\\chain2.bat' }, null
+)
+check(
+  '链里按执行目录写的相对路径也跟进（外层在子目录不是新的出口）',
+  cwdRelChain.ok === false && cwdRelChain.output.includes('安全策略拒绝') &&
+    cwdRelChain.output.includes('deep2.bat') && cwdRelChain.output.includes('磁盘分区'),
+  cwdRelChain.output.slice(0, 200)
+)
+// %~dp0 / $PSScriptRoot 是「相对脚本自己」，shell 会换成脚本所在目录，得按那个基准解
+fs.writeFileSync(path.join(auditDir, 'dp0.bat'), '@echo off\r\ncall %~dp0dp0_payload.bat\r\n')
+fs.writeFileSync(path.join(auditDir, 'dp0_payload.bat'), '@echo off\r\nshutdown /s /t 0\r\n')
+const ownDirChain = await CommandService.run(
+  convCmd.id, cmdRoot, { command: 'guard-audit\\dp0.bat' }, null
+)
+check(
+  '%~dp0 指向同目录载荷照样跟进（换一种相对写法不算躲过去）',
+  ownDirChain.ok === false && ownDirChain.output.includes('安全策略拒绝') &&
+    ownDirChain.output.includes('dp0_payload.bat') && ownDirChain.output.includes('关机'),
+  ownDirChain.output.slice(0, 200)
+)
+
+// —— 定位不到的引用必须转审批，不能按「命令自己会失败」静默放过 ——
+// 找不到只代表我们的路径模型没覆盖（脚本里 cd、PATH 上的名字、%~dp1），不代表运行时不存在。
+await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_ASK_RISK)
+fs.writeFileSync(path.join(auditDir, 'ghost.bat'), '@echo off\r\ncall no_such_payload.bat\r\n')
+events.length = 0
+const ghostPromise = CommandService.run(convCmd.id, cmdRoot, { command: 'guard-audit\\ghost.bat' }, null)
+const ghostAsk = await waitForEvent((e) => e.type === 'ask:user')
+check(
+  '脚本里引用了工作区定位不到的脚本 → 转审批，理由写明是哪一条',
+  ghostAsk !== null && ghostAsk.question.includes('no_such_payload.bat') &&
+    ghostAsk.question.includes('审阅不了'),
+  ghostAsk === null ? '(没有审批卡)' : ghostAsk.question.slice(0, 240)
+)
+await inv('work:answer', {
+  conversationId: convCmd.id,
+  requestId: ghostAsk === null ? '' : ghostAsk.requestId,
+  canceled: false,
+  selections: ['拒绝'],
+  note: ''
+})
+const ghostRes = await ghostPromise
+check(
+  '定位不到的引用被拒 → 不执行',
+  ghostRes.ok === false && ghostRes.output.includes('命令未执行')
+)
+
+// —— 超过审阅层级同样转审批（封顶是成本考虑，但被挡掉的那一段绝不能算审过了）——
+fs.writeFileSync(path.join(auditDir, 'l1.bat'), '@echo off\r\ncall guard-audit\\l2x.bat\r\n')
+fs.writeFileSync(path.join(auditDir, 'l2x.bat'), '@echo off\r\ncall l3x.bat\r\n')
+fs.writeFileSync(path.join(auditDir, 'l3x.bat'), '@echo off\r\ncall l4x.bat\r\n')
+fs.writeFileSync(path.join(auditDir, 'l4x.bat'), '@echo off\r\nshutdown /s /t 0\r\n')
+events.length = 0
+const deepPromise = CommandService.run(convCmd.id, cmdRoot, { command: 'guard-audit\\l1.bat' }, null)
+const deepAsk = await waitForEvent((e) => e.type === 'ask:user')
+check(
+  '链再深一层超出审阅层级 → 还是要问人，卡上写明更里面的没看',
+  deepAsk !== null && deepAsk.question.includes('l3x.bat') &&
+    deepAsk.question.includes('审阅层级上限'),
+  deepAsk === null ? '(没有审批卡)' : deepAsk.question.slice(0, 240)
+)
+await inv('work:answer', {
+  conversationId: convCmd.id,
+  requestId: deepAsk === null ? '' : deepAsk.requestId,
+  canceled: false,
+  selections: ['拒绝'],
+  note: ''
+})
+await deepPromise
+
+// —— 同审不是只看字面关键字：拼接、charCode、变量赋值先还原再判 ——
+const SCRIPT_INDIRECT = [
+  "execSync('d'+'el build\\\\out.txt')",
+  "var a='r'+'d'; require('child_process').execSync(a + ' build/out /s /q')",
+  "require('child_process').execSync(String.fromCharCode(100,101,108) + ' build/out.txt')",
+  "fs.rm(buildOut, { recursive: true }, function () {})",
+  "$cmd = 'del'\n& $cmd build\\out.txt\n"
+]
+check(
+  '脚本正文里的拼接/charCode/变量写法还原后照样命中',
+  SCRIPT_INDIRECT.every((body) => {
+    let v = CommandGuard.assessScript(body, cmdRoot)
+    return v.risky === true || v.forbidden === true
+  }),
+  SCRIPT_INDIRECT
+    .filter((body) => {
+      let v = CommandGuard.assessScript(body, cmdRoot)
+      return v.risky === false && v.forbidden === false
+    })
+    .join(' | ')
+)
+// 反过来：读得出意图的正常写法不能条条进审批，否则同审只剩噪音
+const SCRIPT_BENIGN = [
+  "const {execFileSync} = require('child_process');execFileSync('node', ['build.mjs'])",
+  "const {spawn} = require('child_process');spawn('git', ['status'])",
+  "require('child_process').execSync('echo build-ok')",
+  "db.execute('select 1')"
+]
+check(
+  '读得出意图的脚本正文不多打扰（构建脚本不该条条进审批）',
+  SCRIPT_BENIGN.every((body) => CommandGuard.assessScript(body, cmdRoot).risky === false),
+  SCRIPT_BENIGN
+    .filter((body) => CommandGuard.assessScript(body, cmdRoot).risky === true)
+    .map((body) => CommandGuard.assessScript(body, cmdRoot).reasons.join(','))
+    .join(' | ')
+)
+
+// —— 长正文按行分片审：超出单次扫描长度不再是免检额度 ——
+const LONG_LINES = []
+for (let i = 0; i < 400; i++) {
+  LONG_LINES.push('echo audit-line-' + i.toString())
+}
+const longHarmless = CommandGuard.assessScript(LONG_LINES.join('\n'), cmdRoot)
+const longHidden = CommandGuard.assessScript(
+  LONG_LINES.slice(0, 300).join('\n') + '\ndel build\\out.txt', cmdRoot
+)
+check(
+  '几 KB 的脚本正文分片逐段审：干净的照放，藏在第 300 行的照样命中',
+  LONG_LINES.join('\n').length > 4000 && longHarmless.risky === false &&
+    longHidden.risky === true && longHidden.reasons.some((r) => r.includes('删除')),
+  longHarmless.reasons.join(',') + ' / ' + longHidden.reasons.join(',')
+)
+
 fs.rmSync(auditDir, { recursive: true, force: true })
 
 // —— 后台任务 ——
