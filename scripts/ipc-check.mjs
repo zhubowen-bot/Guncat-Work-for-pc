@@ -3499,6 +3499,68 @@ check(
     'sort a.txt > b.txt', 'git log --oneline -5']
     .filter((c) => CommandGuard.assess(c, cmdRoot).risky).join(' | ')
 )
+// 第三轮实测：宿主按「命令里的文件」决定执行什么，后缀只是习惯；系统管理命令族与不喊 del 的破坏都没进表
+const HOST_PAYLOAD_CMDS = [
+  ['cscript //E:vbscript //nologo _shelltest\\payload.txt', 'cscript + //E:'],
+  ['wscript //E:jscript _shelltest\\payload.txt', 'wscript + //E:'],
+  ['cscript _shelltest\\payload.txt', 'cscript 裸宿主'],
+  ['cs^cript _shelltest\\payload.txt', '转义后的 cscript'],
+  ['node _shelltest\\payload.txt', 'node 跑 .txt'],
+  ['call _shelltest\\callme.txt', 'call 跑 .txt']
+]
+check(
+  '解释器/脚本宿主执行「非代码后缀的文件」一律判危险（改扩展名不是把危险藏好）',
+  HOST_PAYLOAD_CMDS.every(([c]) => CommandGuard.assess(c, cmdRoot).risky) &&
+    ['python parse.py notes.txt', 'node scripts/build.mjs', 'node read.js notes.md'].every(
+      (c) => !CommandGuard.assess(c, cmdRoot).risky),
+  HOST_PAYLOAD_CMDS.filter(([c]) => !CommandGuard.assess(c, cmdRoot).risky)
+    .map(([c, w]) => w).join(' | ')
+)
+check(
+  '脚本同审的入口按「宿主的操作数」也认一遍：payload.txt 与 x.hta 都要交出去读',
+  CommandGuard.scriptRefs('cscript //E:vbscript //nologo _shelltest\\payload.txt').join() ===
+    '_shelltest\\payload.txt' &&
+    CommandGuard.scriptRefs('mshta _shelltest\\x.hta').join() === '_shelltest\\x.hta' &&
+    CommandGuard.scriptRefs('cscript cscript.exe //E:vbscript x.txt').join() === 'x.txt' &&
+    CommandGuard.scriptRefs('node _shelltest\\payload.txt').length === 0 &&
+    CommandGuard.scriptRefs('python parse.py data.json').join() === 'parse.py'
+)
+const SYS_ADMIN_FORBIDDEN = [
+  'format C', 'format C:', 'format /FS:NTFS D:', 'vssadmin delete shadows /for=C: /all /quiet',
+  'wbadmin delete systemstatebackup -keepVersions:0 -quiet',
+  'fsutil file setzerodata /offset:0 /length:1024 a.txt', 'fsutil usn deletejournal /D C:'
+]
+check(
+  '系统级毁灭操作进硬禁表（不给审批入口）：format 不带冒号、删卷影、删备份、抹内容/日志',
+  SYS_ADMIN_FORBIDDEN.every((c) => CommandGuard.assess(c, cmdRoot).forbidden),
+  SYS_ADMIN_FORBIDDEN.filter((c) => !CommandGuard.assess(c, cmdRoot).forbidden).join(' | ')
+)
+const SYS_ADMIN_RISKY = [
+  'vssadmin /?', 'wbadmin enable backup', 'fsutil volume diskfree C:', 'cipher /x',
+  'cipher /e:c:\\users\\me\\secrets', 'assoc .txt=txtfile', 'ftype txtfile=notepad.exe %1',
+  'ren _shelltest\\f.txt f2.txt', 'rename a.txt b.txt', 'type nul > _shelltest\\g.txt',
+  'copy nul _shelltest\\l.txt', 'copy /y a.txt b.txt', 'xcopy /y src dist',
+  'replace a.txt b.txt', 'mklink _shelltest\\link.txt a.txt', 'attrib +h a.txt',
+  'robocopy src dst /MOVE', 'powershell New-Item -ItemType SymbolicLink t l'
+]
+check(
+  '系统管理命令族与「不喊 del 的破坏」进危险名单（改名/空设备覆盖/静默复制/属性/链接/关联）',
+  SYS_ADMIN_RISKY.every((c) => CommandGuard.assess(c, cmdRoot).risky),
+  SYS_ADMIN_RISKY.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
+check(
+  '新增规则不打扰日常写法（format 这个词本身不能硬禁、nul 当输出目标无害、不带 /y 的复制照旧）',
+  ['npm run format', 'git log --format=%h -3', 'echo hello > nul', 'command > nul 2>&1',
+    'copy a.txt b.txt', 'xcopy src dist', 'attrib a.txt', 'robocopy src dist /E',
+    'node read.js notes.md', 'cat notes.md', 'type data.json'].every(
+    (c) => !CommandGuard.assess(c, cmdRoot).forbidden && !CommandGuard.assess(c, cmdRoot).risky
+  ),
+  ['npm run format', 'git log --format=%h -3', 'echo hello > nul', 'command > nul 2>&1',
+    'copy a.txt b.txt', 'xcopy src dist', 'attrib a.txt', 'robocopy src dist /E',
+    'node read.js notes.md', 'cat notes.md', 'type data.json']
+    .filter((c) => CommandGuard.assess(c, cmdRoot).forbidden ||
+      CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
 check(
   '空命令与超长命令都按硬禁处理（人无法审阅）',
   CommandGuard.assess('', cmdRoot).forbidden && CommandGuard.assess('x'.repeat(5000), cmdRoot).forbidden

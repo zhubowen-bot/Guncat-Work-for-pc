@@ -11,13 +11,18 @@
 // 取向：**宁可多问一次，不可漏判一次**（漏判的代价是用户的数据）；
 // 但硬禁表保持克制 —— 只放真正不可逆的系统级操作，否则「什么都禁」等于没有安全。
 //
-// 三层独立规则，缺一不可（两轮 AI 实测出的十几类绕过整理出来的结构）：
+// 三层独立规则，缺一不可（三轮 AI 实测出的二十来类绕过整理出来的结构）：
 //   关键词表（FORBIDDEN/RISKY）—— 但要**先看原文，再看还原后的文本**：cmd 的 ^、拆词的引号、
 //     POSIX 的反斜杠在执行时都会消失，@ 前缀只是「别回显」，%ComSpec% 就是 cmd.exe 本身，
 //     括号里那段是另起一次执行 —— 只看原文等于给每一种间接写法发一张免检票。
 //   意图读不出（OPAQUE）—— 解释器内联代码、管道喂给解释器的 stdin、Base64 载荷、命令替换、
-//     系统自带下载器。这类命令文本里天生就没有危险词，靠关键词永远追不上，所以按「决定权交给了谁」一刀切。
+//     系统自带下载器、脚本宿主（cscript/wscript/mshta）。这类命令文本里天生就没有危险词，
+//     靠关键词永远追不上，所以按「决定权交给了谁」一刀切。
 //   位置越界（绝对路径 / .. 上跳 / 环境变量展开出的路径）—— 写法无关，是这三层里最硬的一层。
+//
+// 还有一条贯穿三层的约定：**「执行哪个文件」与「文件叫什么后缀」是两件事**。
+// node/python 能跑 payload.txt，cscript 加 //E: 能把 .txt 当 VBS 跑，cmd 的 call 不认后缀 ——
+// 脚本同审若只按后缀筛，改一个扩展名就等于把危险整个搬出了审阅范围（第三轮实测的 P0）。
 //
 // 归一化只做「去掉伪装」，从不补全或改写语义，所以派生文本只可能**多出**命中；
 // 判定用的始终是「原文 ∪ 还原文 ∪ 拆出来的内层命令」，任何一层失配都还有另外两层兜着。
@@ -44,7 +49,10 @@ export class CommandGuard {
   ]
 
   private static readonly FORBIDDEN: Rule[] = [
-    { re: /\bformat\s+[a-z]:/i, why: '格式化磁盘' },
+    // 带盘符的写法早就有规则，`format C`（不带冒号）与 `format /FS:NTFS D:` 却没有 ——
+    // 实测 `format D /q` 一路直通。只认「format 后面跟着单个字母的驱动器符号」，
+    // 所以 `npm run format`、`format the diff` 这类日常写法不会被冤枉成格式化磁盘。
+    { re: /\bformat\s+(?:\/\S+\s+)*[a-z]\b/i, why: '格式化磁盘' },
     { re: /\bmkfs(\.\w+)?\b/i, why: '格式化磁盘（mkfs）' },
     { re: /\bdiskpart\b/i, why: '磁盘分区操作' },
     { re: /\bdd\b[^\n|;]*\bof=\/dev\//i, why: 'dd 直接写裸设备' },
@@ -56,7 +64,12 @@ export class CommandGuard {
     { re: /\bchmod\s+(?:-[^\s]*\s+)*777\s+\//i, why: '把系统目录改成全局可写' },
     { re: /\breg\s+delete\s+"?\s*hklm/i, why: '删除机器级注册表项' },
     { re: /\bbcdedit\b/i, why: '修改系统引导配置' },
-    { re: /\bcipher\s+\/w\b/i, why: '擦除磁盘空闲空间' }
+    { re: /\bcipher\s+\/w\b/i, why: '擦除磁盘空闲空间' },
+    // 卷影副本是「删掉就没了」的那一类：还原点、系统状态备份、USN 日志被清之后，
+    // 用户连回滚到自己没注意的那一刻都做不到（实测 vssadmin/wbadmin/fsutil 全不在表里）。
+    { re: /\bvssadmin\b[^\n]*delete\s+shadows/i, why: '删除卷影副本（还原点不可恢复）' },
+    { re: /\bwbadmin\b[^\n]*\bdelete\b/i, why: '删除系统状态备份/备份目录' },
+    { re: /\bfsutil\b[^\n]*(?:setzerodata|deletejournal|deletevolume)/i, why: '抹掉文件内容或卷日志' }
   ]
 
   private static readonly RISKY: Rule[] = [
@@ -84,7 +97,24 @@ export class CommandGuard {
     { re: /\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\|\s*(?:powershell|pwsh|iex)\b|Invoke-Expression/i, why: '把网络内容直接管道给 shell 执行' },
     { re: /\b(?:docker|podman|kubectl)\b/i, why: '操作容器/集群' },
     { re: /\b(?:chkdsk|defrag)\b/i, why: '磁盘维护' },
-    { re: /\brobocopy\b[^\n]*(?:\/MIR|\/PURGE)/i, why: '镜像同步（会删目标目录的差异文件）' },
+    // /MOVE 与 /MIR 一样会删东西（搬走=源目录里没了），只是关键词表原先只盯了后两个。
+    { re: /\brobocopy\b[^\n]*(?:\/MIR|\/PURGE|\/MOV)/i, why: '镜像同步（会删目标目录的差异文件）' },
+    // 破坏文件不一定要说「del」。改名、拿空设备覆盖、静默复制过去，效果与删一次同样不可恢复
+    // （实测 ren/type nul >/copy nul/copy /y/replace 全程无卡）。
+    { re: /(?:^|[\s;&|(/])(?:ren|rename)(?:\.exe)?\s+[-\w."']/i, why: '移动/改名文件' },
+    { re: /\b(?:type|more)\s+nul\s*>/i, why: '用空设备覆盖写文件（原内容不可恢复）' },
+    { re: /\bcopy\s+nul\b/i, why: '清空或覆盖已存在的文件' },
+    { re: /\b(?:copy|xcopy)\b[^\n]*\/y\b/i, why: '覆盖已存在的文件（静默不提示）' },
+    { re: /(?:^|[\s;&|])replace\s+\S/i, why: '替换文件（覆盖目标同名文件）' },
+    { re: /\bmklink\b|SymbolicLink|HardLink|Junction/i, why: '创建链接（可把读写引到工作区之外）' },
+    { re: /\battrib\s+[-+][rhasld]/i, why: '改文件属性（隐藏/系统/只读）' },
+    // 卷影、备份、文件系统底层管理：读帮助文档不算破坏，但这些命令的其它动词全是系统级的。
+    { re: /\b(?:vssadmin|wbadmin|fsutil)\b/i, why: '卷影副本/系统备份/文件系统底层管理' },
+    // cipher /W 是擦空闲空间（硬禁）；/E 加密、/R 与 /X 导出 EFS 恢复密钥 —— 后者等于把
+    // 「解密这台机器上所有受保护文件」的钥匙写到一个文件里（实测 cipher /x 静默执行）。
+    { re: /\bcipher\s+\/(?:e|r|x)/i, why: '加密文件或导出 EFS 恢复密钥（凭据外泄）' },
+    // 文件类型关联是教科书级的持久化手法：改完之后双击 .txt 跑的就是别人的程序。
+    { re: /(?:^|[\s;&|(/])(?:assoc|ftype)\b/i, why: '改文件类型关联（劫持打开方式）' },
     { re: /-W\s+hidden|-ExecutionPolicy\s+Bypass/i, why: '隐藏窗口执行（刻意不给用户看见）' },
     { re: /(?:^|[;&|]\s*)(?:set\b|env\b|printenv\b|Get-ChildItem\s+env:)/i, why: '导出全部环境变量' },
     { re: /(?:\.ssh\b|id_rsa|known_hosts|\.aws\b|credentials\.aws|\.npmrc|\.netrc|lsass|\.env\b)/i, why: '触及凭据/密钥文件' },
@@ -113,6 +143,11 @@ export class CommandGuard {
     { re: /\bdeno\s+run|(?:^|[\s;&|])(?:ts-node|tsx)\s/i, why: '直接执行 TypeScript 脚本（内容不在命令里）' },
     { re: /-{1,2}enc\w*\b|frombase64string|tobase64string|\bbase64\s+(?:-d|--decode)\b|\becho\s+[a-z0-9+/=]{24,}\s*\|/i, why: 'Base64 或编码载荷（解码后才知道要执行什么）' },
     { re: /\b(?:certutil|bitsadmin|mshta|rundll32|regsvr32|msiexec|wmic)\b/i, why: '系统组件下载/执行（常被用来绕过安全策略）' },
+    // Windows 脚本宿主：它唯一的作用是「把那个文件当代码跑」，而跑什么全在文件里。
+    // 更要紧的是后缀说了不算 —— cscript/wscript 加 //E:vbscript 能把 payload.txt 当 VBS 执行，
+    // 而脚本同审是按后缀决定读不读内容的，于是这条通道三道防线一个都不过（实测删了文件、读了 win.ini）。
+    { re: /(?:^|[\s;&|(])(?:cscript|wscript)(?:\.exe)?\b/i, why: '交给 Windows 脚本宿主执行脚本文件（内容不在命令行里）' },
+    { re: /\/\/E\s*[:=]|vbscript:|language\s*=\s*["']?(?:vbs|jscript)/i, why: '指定脚本引擎执行代码（//E: 、vbscript: 一类）' },
     { re: /\biex\b|\bstart-process\b|\bnew-object\b[^\n|;]*shell/i, why: 'PowerShell 执行原语' },
     { re: /\$\(|`[^`\n]+`/, why: '命令替换（$(…) 或反引号）：文本里看到的不是最终执行的那一段' },
     { re: /%\w+:[~^=]|\$\{[A-Za-z_][A-Za-z0-9_]*[:@!\\/]/, why: '变量切片展开（用字符串拼出命令名）' }
@@ -126,7 +161,11 @@ export class CommandGuard {
     { re: /\b(?:rmSync|unlinkSync|rmdirSync|truncateSync)\s*\(|\brimraf\b/i, why: 'JS 删除文件' },
     { re: /\bshutil\.(?:rmtree|move)\s*\(|os\.(?:remove|unlink|rename|kill)\s*\(/i, why: 'Python 删除/移动文件' },
     { re: /\b(?:File|Files)\.(?:delete|Delete)\s*\(|\bremoveDirectory\b/i, why: '删除目录或文件' },
-    { re: /\b(?:net\.Socket|createConnection|URLSession)\b|XmlHttpRequest|\bfetch\s*\(\s*['"]https?:/i, why: '脚本自己联网外发' }
+    { re: /\b(?:net\.Socket|createConnection|URLSession)\b|XmlHttpRequest|\bfetch\s*\(\s*['"]https?:/i, why: '脚本自己联网外发' },
+    // VB/WSH 脚本里的破坏动作不叫 del：FSO 的 DeleteFile 删文件，CreateObject("Wscript.Shell")
+    // 起一个 cmd —— 关键词表对这些完全无感，只有读了内容才看得见。
+    { re: /CreateObject\s*\(\s*["']?(?:Wscript|Shell|Scripting|Msxml2|Adodb)|ActiveXObject\s*\(\s*["']?(?:Wscript|Shell|Scripting|Msxml2|Adodb)/i, why: '脚本经 WSH/COM 对象操作文件或起进程' },
+    { re: /\bDelete(?:File|Folder)\b|\bKillFile\b/i, why: '脚本删除文件（FSO/API）' }
   ]
 
   /**
@@ -229,6 +268,16 @@ export class CommandGuard {
     if (envOut !== '') {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '命令里的环境变量路径展开后在工作区之外：' + envOut)
+    }
+    // 解释器执行「后缀不在脚本同审表里」的文件：把载荷写成 payload.txt，node/python 照样当代码跑，
+    // 而同审是按后缀决定读不读的 —— 这一段要执行的代码我们既没读也不会读，只能按危险处理。
+    let payload: string = ''
+    for (let s: number = 0; s < sources.length && payload === ''; s++) {
+      payload = CommandGuard.firstExecDataOperand(sources[s])
+    }
+    if (payload !== '') {
+      verdict.risky = true
+      CommandGuard.pushReason(verdict, '解释器执行的载荷后缀不是代码文件，内容审阅不了：' + payload)
     }
     return verdict
   }
@@ -446,10 +495,67 @@ export class CommandGuard {
   private static readonly SCRIPT_EXT_RE: RegExp =
     /\.(?:ps1|psm1|bat|cmd|sh|bash|zsh|vbs|js|mjs|cjs|py|pyw|rb|pl|lua|ahk|wsf)$/i
 
+  // 解释器与脚本宿主：它们的第一个位置参数就是「要跑的那段代码」。
+  // call 也在内 —— cmd 的 call 同样不管后缀，把 .txt 当批处理逐行执行。
+  private static readonly EXEC_HOST_TOKEN_RE: RegExp =
+    /^(?:node|iojs|deno|bun|python\d?|pypy|py|ruby|perl|php|lua|tclsh|sh|bash|zsh|dash|ksh|cscript|wscript|mshta|call)$/i
+
+  // 数据文件后缀（内容审阅够不着、又确实能被上面那些解释器当代码执行的那一批）
+  private static readonly DATA_EXT_RE: RegExp =
+    /\.(?:txt|dat|log|tmp|bak|old|new|bin|ini|cfg|conf|csv|tsv|json|jsonl|md|markdown|html?|xml|ya?ml|pdf|zip|gz|tar|7z|png|jpe?g|gif|svg|docx?|xlsx?|pptx?)$/i
+
+  // 参数开关（-c、/y、//E:vbscript、--foo=bar）。路径不会长这样，所以不用当心 /tmp/x.sh 被当成开关。
+  private static readonly SWITCH_TOKEN_RE: RegExp = /^[-/][\w:/=.+-]*$/i
+
+  // 「按命令里出现的文件字面量决定执行什么」的宿主。它们一旦出现在命令里，同审就要去读那个文件，
+  // 无论它叫什么后缀（见 scriptRefs）—— cscript 能把 payload.txt 当 VBS 跑，//E: 就是它自己声明的引擎。
+  private static readonly SCRIPT_HOST_RE: RegExp =
+    /(?:^|[\s;&|(])(?:cscript|wscript|mshta)(?:\.exe)?\b|\/\/E\s*[:=]|vbscript:/i
+
+  // 宿主的文件操作数：带后缀、不是开关、不是宿主自己
+  private static readonly HOST_OPERAND_RE: RegExp = /^[^\d\-/\\][\w.~+@:/\\-]*\.[A-Za-z][A-Za-z0-9]{0,4}$/i
+  private static readonly HOST_SELF_RE: RegExp = /^(?:cscript|wscript|mshta)\.(?:exe|com)$/i
+
   /**
-   * 取出命令里引用到的脚本文件（带引号的整段路径也算一个）。
+   * 找出「被解释器执行的、后缀不是代码文件」的那个操作数；没有则返回空串。
+   *
+   * 只看**第一个**位置参数：`python parse.py data.json` 里 data.json 是脚本自己的输入，
+   * 天天有人这么写，不该打扰用户；而 `node payload.txt` 的第一个位置参数就是代码本身。
+   */
+  private static firstExecDataOperand(text: string): string {
+    let parts: string[] = text.split(/[\s;&|<>()"'`]+/)
+    for (let i: number = 0; i < parts.length; i++) {
+      let base: string = parts[i]
+      let slash: number = Math.max(base.lastIndexOf('/'), base.lastIndexOf('\\'))
+      if (slash >= 0) {
+        base = base.substring(slash + 1)
+      }
+      if (!CommandGuard.EXEC_HOST_TOKEN_RE.test(base)) {
+        continue
+      }
+      for (let j: number = i + 1; j < parts.length; j++) {
+        let arg: string = parts[j]
+        if (arg === '' || CommandGuard.SWITCH_TOKEN_RE.test(arg)) {
+          continue
+        }
+        // 只看这一个位置参数：数据后缀就是载荷，否则这个宿主干净，继续找下一个宿主
+        if (CommandGuard.DATA_EXT_RE.test(arg)) {
+          return arg
+        }
+        break
+      }
+    }
+    return ''
+  }
+
+  /**
+   * 取出命令里需要「同审内容」的文件。
    * 判定只看命令文本，而 `run.bat` / `node cleanup.js` 的危险全在文件里 —— 这里把文件名交出去，
    * 由 CommandService 读进内容过同一套判定（见 assessScript）。
+   *
+   * 两条入口：常见脚本后缀（不看命令是什么），以及**脚本宿主的文件操作数**（不看后缀）。
+   * 后者必须有：cscript/wscript 把 payload.txt 当代码跑一点意见都没有，只按后缀筛等于
+   * 「改个扩展名就把危险藏好」（实测这样删掉了文件、读到了 C:\Windows\win.ini）。
    */
   static scriptRefs(command: string): string[] {
     let parts: string[] = []
@@ -473,10 +579,18 @@ export class CommandGuard {
       match = bareRe.exec(rest)
     }
     let refs: string[] = []
+    let byHost: boolean = CommandGuard.SCRIPT_HOST_RE.test(command)
     for (let i: number = 0; i < parts.length && refs.length < 8; i++) {
       let part: string = parts[i].trim().replace(/^['"]+|['"]+$/g, '')
-      if (part.length > 0 && part.length <= 260 && CommandGuard.SCRIPT_EXT_RE.test(part) &&
-        refs.indexOf(part) === -1) {
+      if (part.length === 0 || part.length > 260 || refs.indexOf(part) !== -1) {
+        continue
+      }
+      let review: boolean = CommandGuard.SCRIPT_EXT_RE.test(part)
+      if (!review && byHost && !CommandGuard.HOST_SELF_RE.test(part) &&
+        CommandGuard.HOST_OPERAND_RE.test(part)) {
+        review = true
+      }
+      if (review) {
         refs.push(part)
       }
     }
