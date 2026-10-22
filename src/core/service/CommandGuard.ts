@@ -107,6 +107,9 @@ export class CommandGuard {
     { re: /\b(?:copy|xcopy)\b[^\n]*\/y\b/i, why: '覆盖已存在的文件（静默不提示）' },
     { re: /(?:^|[\s;&|])replace\s+\S/i, why: '替换文件（覆盖目标同名文件）' },
     { re: /\bmklink\b|SymbolicLink|HardLink|Junction/i, why: '创建链接（可把读写引到工作区之外）' },
+    // POSIX 那一侧的「参数即能力」：find 自带删除器与执行器，动词表对它完全无感。
+    // cp/truncate/ln/chattr 走命令位判定（见 POSITIONAL_RISKY），因为它们同时是很常见的参数内容。
+    { re: /\bfind\b[^\n]*(?:-delete|-exec(?:dir)?|-ok(?:dir)?)/i, why: 'find 自带删除器/执行器（-delete、-exec）' },
     { re: /\battrib\s+[-+][rhasld]/i, why: '改文件属性（隐藏/系统/只读）' },
     // 卷影、备份、文件系统底层管理：读帮助文档不算破坏，但这些命令的其它动词全是系统级的。
     { re: /\b(?:vssadmin|wbadmin|fsutil)\b/i, why: '卷影副本/系统备份/文件系统底层管理' },
@@ -143,6 +146,12 @@ export class CommandGuard {
     { re: /\bdeno\s+run|(?:^|[\s;&|])(?:ts-node|tsx)\s/i, why: '直接执行 TypeScript 脚本（内容不在命令里）' },
     { re: /-{1,2}enc\w*\b|frombase64string|tobase64string|\bbase64\s+(?:-d|--decode)\b|\becho\s+[a-z0-9+/=]{24,}\s*\|/i, why: 'Base64 或编码载荷（解码后才知道要执行什么）' },
     { re: /\b(?:certutil|bitsadmin|mshta|rundll32|regsvr32|msiexec|wmic)\b/i, why: '系统组件下载/执行（常被用来绕过安全策略）' },
+    // WSL 是把整条命令交给另一套环境（Linux）执行：那边的 find -delete、cp、tee、truncate
+    // 一个都不在我这张表里（实测 wsl find probes -name canary.txt -delete 真的删了文件，
+    // 而 wsl -u root 直接是 root 权限）。不解析它后面的 argv，命中即按危险处理。
+    { re: /(?:^|[\s;&|(/])wsl(?:config)?(?:\.exe)?\b/i, why: '交给 WSL 里的 Linux 环境执行（词表管不到那一侧做什么）' },
+    // 外部执行/传输通道（ssh/scp/nc/telnet/adb）按命令位判，见 POSITIONAL_RISKY ——
+    // 它们同时也是路径、包名与参数里常见的词，子串匹配会把 `echo scp x` 这类写法一起拦掉。
     // Windows 脚本宿主：它唯一的作用是「把那个文件当代码跑」，而跑什么全在文件里。
     // 更要紧的是后缀说了不算 —— cscript/wscript 加 //E:vbscript 能把 payload.txt 当 VBS 执行，
     // 而脚本同审是按后缀决定读不读内容的，于是这条通道三道防线一个都不过（实测删了文件、读了 win.ini）。
@@ -218,6 +227,13 @@ export class CommandGuard {
     let forbidden: string[] = CommandGuard.matchedAll(sources, CommandGuard.FORBIDDEN)
     let risky: string[] = CommandGuard.matchedAll(sources, CommandGuard.RISKY)
       .concat(CommandGuard.matchedAll(sources, CommandGuard.OPAQUE))
+    // 命令位判定：`format` 这类「程序名本身就是毁灭操作」的词，只看它是不是那段真正要运行的程序 ——
+    // 词表只能认 `format C:` 的盘符形态，而卷标（`format MYLABEL /Q /Y`）与 `format /?` 都会真的把
+    // format.exe 跑起来；反过来，把 format 这个词无条件硬禁会误伤 `npm run format`、`git log --format=%h`。
+    let progs: string[] = CommandGuard.commandPrograms(sources)
+    let rawProgs: string[] = CommandGuard.commandPrograms([trimmed])
+    forbidden = forbidden.concat(CommandGuard.matchedPrograms(progs, CommandGuard.POSITIONAL_FORBIDDEN))
+    risky = risky.concat(CommandGuard.matchedPrograms(progs, CommandGuard.POSITIONAL_RISKY))
     // 语言 API 只作危险项：脚本里写文件是常态，硬禁表留给真正不可逆的系统级操作
     if (script) {
       risky = risky.concat(CommandGuard.matchedAll(sources, CommandGuard.CODE))
@@ -225,8 +241,10 @@ export class CommandGuard {
     // 只在还原文/内层命令里出现的命中，说明写命令的人绕了一段路 —— 档位按追加后的结果定
     // （形如 shut^down 的写法必须照样落进硬禁表，不能降级成「问一句就跑」），并额外说明原因。
     let rawForbidden: string[] = CommandGuard.matched(trimmed, CommandGuard.FORBIDDEN)
+      .concat(CommandGuard.matchedPrograms(rawProgs, CommandGuard.POSITIONAL_FORBIDDEN))
     let rawRisky: string[] = CommandGuard.matched(trimmed, CommandGuard.RISKY)
       .concat(CommandGuard.matched(trimmed, CommandGuard.OPAQUE))
+      .concat(CommandGuard.matchedPrograms(rawProgs, CommandGuard.POSITIONAL_RISKY))
     if (script) {
       rawRisky = rawRisky.concat(CommandGuard.matched(trimmed, CommandGuard.CODE))
     }
@@ -278,6 +296,13 @@ export class CommandGuard {
     if (payload !== '') {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '解释器执行的载荷后缀不是代码文件，内容审阅不了：' + payload)
+    }
+    // `~` / `$HOME` 在 cmd 里只是一个字符，在 Git-bash / WSL / PowerShell 里就是主目录 ——
+    // 字面路径规则对这种「由 shell 决定指向哪」的写法完全无感（实测 wsl ls ~ 静默列出主目录）。
+    let home: string = CommandGuard.firstHomeOperand(sources)
+    if (home !== '') {
+      verdict.risky = true
+      CommandGuard.pushReason(verdict, '命令里的 ~ / $HOME 展开后是用户主目录，在工作区之外：' + home)
     }
     return verdict
   }
@@ -515,6 +540,98 @@ export class CommandGuard {
   // 宿主的文件操作数：带后缀、不是开关、不是宿主自己
   private static readonly HOST_OPERAND_RE: RegExp = /^[^\d\-/\\][\w.~+@:/\\-]*\.[A-Za-z][A-Za-z0-9]{0,4}$/i
   private static readonly HOST_SELF_RE: RegExp = /^(?:cscript|wscript|mshta)\.(?:exe|com)$/i
+
+  // 命令位上「程序名本身就是危险动作」的那批词，判定不看参数形态。
+  // 只放词表覆盖不到的：diskpart/bcdedit/mkfs 这些词本身没有别的含义，子串匹配就够；
+  // format 不行 —— 它同时是 `npm run format`、`--format=%h` 里的普通词，必须按位置判。
+  private static readonly POSITIONAL_FORBIDDEN: Rule[] = [
+    { re: /(?:^|[\\/])format(?:\.com|\.exe)?$/, why: '格式化磁盘' }
+  ]
+  private static readonly POSITIONAL_RISKY: Rule[] = [
+    { re: /(?:^|[\\/])cp(?:\.exe)?$/, why: '覆盖写文件（cp 默认不提示）' },
+    { re: /(?:^|[\\/])install(?:\.exe)?$/, why: '安装/覆盖到指定路径' },
+    { re: /(?:^|[\\/])truncate(?:\.exe)?$/, why: '清空文件内容' },
+    { re: /(?:^|[\\/])ln(?:\.exe)?$/, why: '创建链接（可把读写引到工作区之外）' },
+    { re: /(?:^|[\\/])chattr(?:\.exe)?$/, why: '改文件不可变属性位' },
+    { re: /(?:^|[\\/])(?:ssh|scp|sftp|nc|ncat|netcat|telnet|rlogin|rsh|adb)$/, why: '外部执行/传输通道（远端那侧做什么读不出）' }
+  ]
+
+  private static readonly SEGMENT_SPLIT_RE: RegExp = /&&|\|\||[;&|\n]/
+  // 包一层的壳：它自己不是「要运行的那条」，真正危险的是它后面的命令位
+  private static readonly WRAPPER_RE: RegExp =
+    /^(?:cmd|command|powershell|pwsh|bash|sh|zsh|dash|ksh|wsl|start|sudo|nohup|runas|time|env)(?:\.exe|\.com)?$/i
+  // cmd 的单字母开关（/c、/q）与 POSIX 长开关（--exec、-n）；`/etc/passwd` 这种路径不算开关
+  private static readonly LEADING_SWITCH_RE: RegExp = /^\/[a-z](?![\w.\\/-])|^-{1,2}[\w-]+$/i
+  private static readonly TOKEN_EDGE_RE: RegExp = /^[@'"`]+|['"`]+$/g
+
+  /**
+   * 取每一段「命令位」上真正要被运行的那个程序（小写、去 @ 与引号、跳过开关与包一层的壳）。
+   * 只取每段的第一个非开关程序名，参数位一概不收 —— 这是「程序名 vs 参数内容」的区分，
+   * 词表级子串匹配做不到（`echo del x`、`npm run format` 都在参数位）。
+   */
+  private static commandPrograms(texts: string[]): string[] {
+    let out: string[] = []
+    for (let t: number = 0; t < texts.length; t++) {
+      let segments: string[] = texts[t].split(CommandGuard.SEGMENT_SPLIT_RE)
+      for (let i: number = 0; i < segments.length; i++) {
+        let toks: string[] = segments[i].trim().split(/\s+/)
+        for (let k: number = 0; k < toks.length; k++) {
+          let raw: string = toks[k].replace(CommandGuard.TOKEN_EDGE_RE, '').toLowerCase()
+          if (raw === '' || CommandGuard.LEADING_SWITCH_RE.test(raw)) {
+            continue
+          }
+          if (CommandGuard.WRAPPER_RE.test(raw)) {
+            continue
+          }
+          // 后面紧跟赋值号的是「变量名」不是「要运行的程序」：脚本同审读的是代码，
+          // Python 里 `cp = shutil.copy(...)` 这种一行不该被当成 cp 命令。
+          let next: string = k + 1 < toks.length ? toks[k + 1].replace(CommandGuard.TOKEN_EDGE_RE, '') : ''
+          if (next === '=' || next === '==' || next === '=>') {
+            break
+          }
+          if (out.indexOf(raw) === -1) {
+            out.push(raw)
+          }
+          break
+        }
+      }
+    }
+    return out
+  }
+
+  /** 命令位程序名过一遍规则表，返回命中的理由 */
+  private static matchedPrograms(programs: string[], rules: Rule[]): string[] {
+    let hits: string[] = []
+    for (let i: number = 0; i < programs.length; i++) {
+      for (let j: number = 0; j < rules.length; j++) {
+        if (rules[j].re.test(programs[i]) && hits.indexOf(rules[j].why) === -1) {
+          hits.push(rules[j].why)
+        }
+      }
+    }
+    return hits
+  }
+
+  // `~`、`~/x`、`$HOME`、`${HOME}/x` —— 由 shell 决定指向哪的写法，展开后必然是用户主目录
+  private static readonly HOME_TOKEN_RE: RegExp =
+    /^~(?:[/\\][^\s"'`;|&<>()]*)?$|^\$HOME(?:[/\\][^\s"'`;|&<>()]*)?$|^\$\{HOME\}(?:[/\\][^\s"'`;|&<>()]*)?$/i
+
+  /** 找出命令里第一个 ~ / $HOME 形态的操作数；没有则返回空串 */
+  private static firstHomeOperand(texts: string[]): string {
+    for (let t: number = 0; t < texts.length; t++) {
+      let re: RegExp = new RegExp(CommandGuard.TOKEN_RE.source, 'g')
+      let match: RegExpExecArray | null = re.exec(texts[t])
+      while (match !== null) {
+        // 前面的 @ 与引号只是伪装（unobfuscate 已去引号，这里连原文一起判）
+        let token: string = match[0].replace(CommandGuard.TOKEN_EDGE_RE, '')
+        if (CommandGuard.HOME_TOKEN_RE.test(token)) {
+          return match[0]
+        }
+        match = re.exec(texts[t])
+      }
+    }
+    return ''
+  }
 
   /**
    * 找出「被解释器执行的、后缀不是代码文件」的那个操作数；没有则返回空串。
