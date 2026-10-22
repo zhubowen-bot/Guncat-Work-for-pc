@@ -13,7 +13,7 @@ import { EmptyState } from './components/EmptyState'
 import { WorkArtifactsCard } from './components/WorkArtifactsCard'
 import { TableOcrDialog } from './components/TableOcrDialog'
 import { ImageLightbox } from './components/ImageLightbox'
-import { useWorkspacePreview } from './components/WorkspacePanel'
+import { WorkspacePreviewOverlay } from './components/WorkspacePreview'
 import { useSpeech, speechTextOf } from './speech/speechStore'
 import { IconBrain, IconGlobe, IconTable } from './icons'
 
@@ -93,9 +93,8 @@ export default function App() {
       pushNotice('error', `切换配置失败：${String(e)}`)
     }
   }
-  // 工作区面板收起时，产物卡的「预览」也要能弹出来 —— 弹层挂在 App 这一层
-  // （面板展开时由面板自己渲染，避免两份弹层同时出现）。
-  const preview = useWorkspacePreview(active?.id ?? null)
+  // 文件预览：侧栏工作区面板与对话流末尾的产物汇总卡都走这一个入口（弹层在根部渲染一份）
+  const openWorkspaceFile = useStore((s) => s.openWorkspaceFile)
   // 工作区面板由「侧栏底部的『工作区』」控制，**不再按模式隐藏**：
   // 原版 ChatPage 只判 isWide && detailsOpen、不判模式 ——
   // 聊天模式下来路（拖拽 / 命令行 / 第二实例）落进该会话工作区的文件同样要能在这里看到。
@@ -367,7 +366,7 @@ export default function App() {
                 {/* 产物汇总卡挂在对话流末尾（对齐原版 ChatPage 把 WorkArtifactsCard
                     放在时间线之后）：聊天模式没有产物概念，不给。 */}
                 {mode !== 'chat' && artifacts !== null && !running ? (
-                  <WorkArtifactsCard artifacts={artifacts} onPreview={(path) => void preview.open(path)} />
+                  <WorkArtifactsCard artifacts={artifacts} onPreview={openWorkspaceFile} />
                 ) : null}
               </>
             )}
@@ -385,8 +384,9 @@ export default function App() {
 
       {showWorkspace ? <WorkspacePanel /> : null}
 
-      {/* 产物卡与工作区面板共用同一个预览弹层（见 useWorkspacePreview） */}
-      {!showWorkspace ? preview.overlay : null}
+      {/* 文件预览弹层只渲染这一份：工作区面板与产物汇总卡点开的都是 store 里的同一个目标
+          （弹层不能挤进 300 多像素宽的面板里，正文根本读不了） */}
+      <WorkspacePreviewOverlay />
 
       <SettingsDialog />
       <TableOcrDialog />

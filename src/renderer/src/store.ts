@@ -179,6 +179,16 @@ interface State {
    */
   lightboxUrl: string
   /**
+   * 工作区预览弹层正在展示的文件（null = 没打开）。
+   *
+   * 侧栏文件列表与对话流末尾的产物汇总卡都往这里写。这份状态**必须**是共享的：
+   * 曾经两处各持一份组件本地状态、弹层又按「面板展开时只由面板渲染」二选一，
+   * 产物卡的点击落在没人渲染的那份状态上 —— 点文件名和点「预览」都没有反应。
+   * 会话 id 一起存进来，是为了让「默认程序打开 / 显示位置」始终作用在**打开那一刻**
+   * 所属的那个工作区上，而不是切换会话后的当前工作区。
+   */
+  workspacePreview: { conversationId: string; path: string } | null
+  /**
    * 自动置底的「冻结」截止时间戳。界面块里的**本地状态回传**（拖动/勾选/填表）
    * 不该把页面拽到底部 —— 原版为此专门分了两类回传：
    * `action`=需要模型重算（会滚到底）、`state`=只本地调参（不动滚动位置）。
@@ -212,6 +222,10 @@ interface State {
   openTableOcr(open: boolean): void
   /** 打开/关闭大图查看（传空串即关闭） */
   openLightbox(url: string): void
+  /** 在工作区预览弹层里打开一个文件（路径相对会话工作区根） */
+  openWorkspaceFile(path: string): void
+  /** 关闭工作区预览弹层 */
+  closeWorkspaceFile(): void
   /** 在接下来这段时间内不要自动置底（界面块的本地状态回传用） */
   freezeAutoScroll(ms: number): void
   reloadSettings(): Promise<void>
@@ -429,6 +443,7 @@ export const useStore = create<State>((set, get) => {
     workspaceOpen: true,
     tableOcrOpen: false,
     lightboxUrl: '',
+    workspacePreview: null,
     scrollFreezeUntil: 0,
     pendingDraft: null,
     pendingAsk: null,
@@ -679,6 +694,18 @@ export const useStore = create<State>((set, get) => {
 
     openLightbox(url) {
       set({ lightboxUrl: url })
+    },
+
+    openWorkspaceFile(path) {
+      const conversationId = get().activeId
+      if (conversationId === null) {
+        return
+      }
+      set({ workspacePreview: { conversationId, path } })
+    },
+
+    closeWorkspaceFile() {
+      set({ workspacePreview: null })
     },
 
     freezeAutoScroll(ms) {

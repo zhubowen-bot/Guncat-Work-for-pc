@@ -76,6 +76,7 @@ import {
   instructionSetupHint,
   workspaceFileIcon
 } from '@renderer/components/WorkspacePanel'
+import { useStore } from '@renderer/store'
 import { LightboxView } from '@renderer/components/ImageLightbox'
 import { AskUserCard, askConfirmLabel, askToggle } from '@renderer/components/AskUserCard'
 import { TableOcrPanel } from '@renderer/components/TableOcrDialog'
@@ -528,6 +529,32 @@ export function renderArtifactsEmpty(): string {
       onPreview: () => {}
     })
   )
+}
+
+/**
+ * 产物卡「点开文件」这条链路的接线检查。
+ *
+ * 事故形状：工作模式下点产物汇总卡里的文件名或「预览」没有任何反应。
+ * 根因是两个入口各持一份**组件本地**预览状态，弹层又按「面板展开时只由面板渲染」二选一 ——
+ * 产物卡的点击落在了一份没人渲染的状态上。现在目标收进 store，两处写的都是同一个动作。
+ *
+ * 这里断言状态层而不是渲染层：SSR 的 server snapshot 读的是 store 初始值，
+ * setState 打不开弹层（灯箱那边同样为此单独导出了纯展示层），所以直接调 store 动作。
+ */
+export function workspacePreviewWiring(): {
+  opened: { conversationId: string; path: string } | null
+  clearedAfterClose: boolean
+  ignoredWithoutConversation: boolean
+} {
+  useStore.setState({ activeId: 'conv-1', workspacePreview: null })
+  useStore.getState().openWorkspaceFile('reports/季度复盘.docx')
+  const opened = useStore.getState().workspacePreview
+  useStore.getState().closeWorkspaceFile()
+  const clearedAfterClose = useStore.getState().workspacePreview === null
+  useStore.setState({ activeId: null, workspacePreview: null })
+  useStore.getState().openWorkspaceFile('a.md')
+  const ignoredWithoutConversation = useStore.getState().workspacePreview === null
+  return { opened, clearedAfterClose, ignoredWithoutConversation }
 }
 
 /**

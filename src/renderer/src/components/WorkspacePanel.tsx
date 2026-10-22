@@ -15,13 +15,10 @@ import type {
 } from '@ipc/contract'
 import { Constants } from '@core/common/Constants'
 import { useStore } from '../store'
-import { CodeBlock, normalizeLanguage } from './CodeBlock'
-import { Markdown } from './Markdown'
 import {
   IconAudio,
   IconChevronDown,
   IconChevronRight,
-  IconClose,
   IconCode,
   IconDot,
   IconDownload,
@@ -344,7 +341,8 @@ export function WorkspacePanel() {
   const loadWorkspace = useStore((s) => s.loadWorkspace)
   const pickFiles = useStore((s) => s.pickWorkspaceFiles)
   const pushNotice = useStore((s) => s.pushNotice)
-  const preview = useWorkspacePreview(activeId)
+  const openWorkspaceFile = useStore((s) => s.openWorkspaceFile)
+  const previewPath = useStore((s) => s.workspacePreview?.path ?? '')
 
   // 懒加载文件树：根目录常刷，展开过的目录跟着刷，未展开的不读。
   // key 是目录相对路径（'' = 根；core 给的目录路径带尾 '/'，原样作 key）。
@@ -520,12 +518,12 @@ export function WorkspacePanel() {
             className="file-item__name file-item__name--link"
             title={`${entry.path}\n点击打开（图片/Markdown/代码会按类型渲染）`}
             disabled={running}
-            onClick={() => void preview.open(entry.path)}
+            onClick={() => openWorkspaceFile(entry.path)}
           >
             {entry.name}
           </button>
           <span className="file-item__size">
-            {preview.loading === entry.path ? '读取中…' : formatSize(entry.size)}
+            {previewPath === entry.path ? '读取中…' : formatSize(entry.size)}
           </span>
           <button
             className="icon-btn file-item__del"
@@ -686,7 +684,7 @@ export function WorkspacePanel() {
                 className="file-item__name file-item__name--link workspace__instr-file"
                 disabled={running}
                 title={`已生效：智能体每轮都会读入 ${name} 并遵守其中的项目约定（点击看内容）`}
-                onClick={() => void preview.open(name)}
+                onClick={() => openWorkspaceFile(name)}
               >
                 {name}
               </button>
@@ -781,44 +779,8 @@ export function WorkspacePanel() {
         cacheHit={lastCacheHit}
         streaming={running}
       />
-
-      {/* 预览用弹层而不是挤在面板里：工作区只有 300 多像素宽，正文根本读不了 */}
-      {preview.overlay}
     </aside>
   )
-}
-
-/**
- * 工作区文件打开器。
- *
- * 此前它对任何文件都只做一件事：按 utf8 读出来塞进 <pre> —— 图片显示成乱码报错、
- * Markdown 是一坨源码、代码没有着色。现在按扩展名分流：
- *   图片 → 内置渲染（点击进灯箱）；Markdown → 走对话流同一套渲染器；
- *   代码 → highlight.js 着色；纯文本 → 原文；其余（Office/PDF/压缩包等）→
- *   给「用默认程序打开 / 在文件管理器中显示」两个动作，不再假装有预览。
- *
- * `workspace:read` 这条 IPC 一直在（主进程侧做了 2MB 上限与越界校验），
- * 抽成 hook 是因为产物汇总卡（时间线末尾）也要能点开文件，
- * 两处各写一份弹层与读取逻辑没有意义。
- */
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif', 'svg'])
-const MARKDOWN_EXTS = new Set(['md', 'markdown', 'mdx'])
-
-type PreviewContent =
-  | { kind: 'image'; dataUrl: string }
-  | { kind: 'markdown'; text: string; truncated: boolean }
-  | { kind: 'code'; language: string; text: string; truncated: boolean }
-  | { kind: 'text'; text: string; truncated: boolean }
-  | { kind: 'info'; hint: string }
-
-interface PreviewState {
-  path: string
-  content: PreviewContent
-}
-
-function extOf(path: string): string {
-  const dot = path.lastIndexOf('.')
-  return dot >= 0 ? path.slice(dot + 1).toLowerCase() : ''
 }
 
 /** 工作区根路径的短标签：沙箱说「沙箱目录」，自选目录显示目录名（完整路径放 tooltip） */
@@ -870,172 +832,4 @@ export const COMMAND_PERMISSIONS: { value: string; label: string; hint: string }
  */
 export function instructionSetupHint(): string {
   return `在工作区根目录放一份 ${Constants.WORK_INSTRUCTION_FILES.join(' / ')}（也可以直接让智能体帮你写），智能体每轮都会读入并遵守里面的项目约定`
-}
-
-export function useWorkspacePreview(activeId: string | null) {
-  const pushNotice = useStore((s) => s.pushNotice)
-  const openLightbox = useStore((s) => s.openLightbox)
-  const [state, setState] = useState<PreviewState | null>(null)
-  const [loading, setLoading] = useState('')
-
-  async function open(path: string): Promise<void> {
-    if (activeId === null) {
-      return
-    }
-    setLoading(path)
-    const ext: string = extOf(path)
-    try {
-      if (IMAGE_EXTS.has(ext)) {
-        const binary = await window.guncat.workspace.readBinary(activeId, path)
-        setState({ path, content: { kind: 'image', dataUrl: binary.dataUrl } })
-        return
-      }
-      const result = await window.guncat.workspace.read(activeId, path)
-      if (MARKDOWN_EXTS.has(ext)) {
-        setState({
-          path,
-          content: { kind: 'markdown', text: result.text, truncated: result.truncated }
-        })
-        return
-      }
-      const language = normalizeLanguage(ext)
-      if (language !== '' && language !== 'mermaid') {
-        setState({
-          path,
-          content: { kind: 'code', language, text: result.text, truncated: result.truncated }
-        })
-        return
-      }
-      // 无扩展名/未知扩展：utf8 解码出现替换字符 ≈ 二进制文件，别把乱码端给用户
-      if (result.text.includes('\uFFFD')) {
-        setState({ path, content: { kind: 'info', hint: '该文件是二进制格式，没有内置预览。' } })
-        return
-      }
-      setState({ path, content: { kind: 'text', text: result.text, truncated: result.truncated } })
-    } catch (e) {
-      const message: string = String(e instanceof Error ? e.message : e)
-      // 读取失败不再只弹一条转瞬即逝的 toast：留在弹层里给出「打开/显示位置」的出路
-      setState({ path, content: { kind: 'info', hint: `无法在应用内预览：${message}` } })
-    } finally {
-      setLoading('')
-    }
-  }
-
-  function close(): void {
-    setState(null)
-  }
-
-  function openExternal(): void {
-    if (activeId === null || state === null) {
-      return
-    }
-    window.guncat.workspace.openFile(activeId, state.path).catch((e: unknown) => {
-      pushNotice('warn', String(e instanceof Error ? e.message : e))
-    })
-  }
-
-  function reveal(): void {
-    if (activeId === null || state === null) {
-      return
-    }
-    window.guncat.workspace.reveal(activeId, state.path).catch((e: unknown) => {
-      pushNotice('warn', String(e instanceof Error ? e.message : e))
-    })
-  }
-
-  // Esc 关闭（与灯箱一致）
-  useEffect(() => {
-    if (state === null) {
-      return
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        setState(null)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [state])
-
-  let body: React.ReactNode = null
-  if (state !== null) {
-    const c = state.content
-    if (c.kind === 'image') {
-      body = (
-        <div className="preview__image-wrap">
-          <img
-            className="preview__image"
-            src={c.dataUrl}
-            alt={state.path}
-            title="点击看大图"
-            onClick={() => openLightbox(c.dataUrl)}
-          />
-        </div>
-      )
-    } else if (c.kind === 'markdown') {
-      body = (
-        <div className="preview__rich">
-          <Markdown text={c.text} />
-        </div>
-      )
-    } else if (c.kind === 'code') {
-      body = (
-        <div className="preview__rich preview__rich--code">
-          <CodeBlock language={c.language} code={c.text} />
-        </div>
-      )
-    } else if (c.kind === 'text') {
-      body = <pre className="preview__body">{c.text}</pre>
-    } else {
-      body = (
-        <div className="preview__info">
-          <span className="preview__info-hint">{c.hint}</span>
-          <div className="preview__info-actions">
-            <button className="btn btn--sm" onClick={openExternal}>
-              用系统默认程序打开
-            </button>
-            <button className="btn btn--ghost btn--sm" onClick={reveal}>
-              <IconFolder size={13} />
-              在文件管理器中显示
-            </button>
-          </div>
-        </div>
-      )
-    }
-  }
-
-  const truncatedTag =
-    state !== null && 'truncated' in state.content && state.content.truncated ? (
-      <span className="preview__tag">已截断</span>
-    ) : null
-
-  const overlay =
-    state === null ? null : (
-      <div className="preview-overlay" onClick={close}>
-        <div className="preview" onClick={(e) => e.stopPropagation()}>
-          <div className="preview__head">
-            <strong title={state.path}>{state.path}</strong>
-            {truncatedTag}
-            <button
-              className="filecard__action"
-              title="用系统默认程序打开（Office/PDF/媒体等交给外部应用）"
-              onClick={openExternal}
-            >
-              默认程序打开
-            </button>
-            <button className="filecard__action" title="在文件管理器中定位" onClick={reveal}>
-              显示位置
-            </button>
-            <button className="icon-btn" title="关闭（Esc）" onClick={close}>
-              <IconClose size={15} />
-            </button>
-          </div>
-          <div className="preview__content">{body}</div>
-        </div>
-      </div>
-    )
-
-  return { open, close, loading, overlay }
 }

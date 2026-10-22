@@ -1009,6 +1009,17 @@ check(
   mod.renderArtifactsEmpty().length === 0,
   mod.renderArtifactsEmpty().length + ' 字节'
 )
+// 点开产物这一行必须真的打开预览（此前的形状：点了没反应）
+const previewWiring = mod.workspacePreviewWiring()
+check(
+  '产物卡的预览入口写的是共享的 store 预览目标（含所属会话，切会话后不会指向别的工作区）',
+  previewWiring.opened !== null &&
+    previewWiring.opened.path === 'reports/季度复盘.docx' &&
+    previewWiring.opened.conversationId === 'conv-1',
+  JSON.stringify(previewWiring.opened)
+)
+check('关闭预览把 store 里的目标清掉（不会留下打不开的空弹层）', previewWiring.clearedAfterClose)
+check('没有会话时不记预览目标（不会弹出一个读不到内容的空层）', previewWiring.ignoredWithoutConversation)
 
 // --- 表格提取（审计 P1-3） ---
 //
