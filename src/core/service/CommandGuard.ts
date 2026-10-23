@@ -112,6 +112,13 @@ export class CommandGuard {
     { re: /\b(?:taskkill|killall|pkill)\b|Stop-Process|kill\s+-9/i, why: '杀进程' },
     { re: /\b(?:chmod|chown|icacls|takeown|cacls|runas|sudo|doas)\b/i, why: '改权限或以他人身份运行' },
     { re: /\b(?:npm|pnpm|yarn|bun|pip|pip3|gem|cargo)\b[^\n|;]*(?:-g|--global|install|uninstall|link)\b|\b(?:npx|choco|winget|brew)\b/i, why: '安装或运行外部包（会写到工作区之外）' },
+    // npx 的别名家族：`npm exec`、`npm x`、`pnpm exec`、`pnpm dlx`、`yarn exec`、`yarn dlx`、
+    // `bun x`、`bunx`、`pnpx` 做的是同一件事 —— 从 registry 取一个包并立刻把它跑起来，代码既不在
+    // 命令行里，也没进脚本同审。上面那条只登记了 `npx` 这个**名字**，于是同一件事换个拼法就拿到
+    // 免检票（实测 npx 判危险，而 npm exec / npm x / pnpm exec / pnpm dlx / yarn dlx / bun x / bunx
+    // 七种写法全部零审批直通）。这是「命令名 vs 语义」的漏判，与 /y 和 -y 那条同源。
+    { re: /\b(?:npm|pnpm|yarn|bun)\s+(?:exec|dlx|x)\b|\b(?:bunx|pnpx)\b/i,
+      why: '从 registry 下载并直接执行包（npx 的别名：npm exec / pnpm dlx / bun x …）' },
     { re: /\b(?:curl|wget|Invoke-WebRequest|iwr)\b/i, why: '从网络下载' },
     { re: /\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\|\s*(?:powershell|pwsh|iex)\b|Invoke-Expression/i, why: '把网络内容直接管道给 shell 执行' },
     { re: /\b(?:docker|podman|kubectl)\b/i, why: '操作容器/集群' },
@@ -178,11 +185,22 @@ export class CommandGuard {
     // 的正常写法有脚本操作数挡在中间，不会被误伤。
     { re: /(?:^|[\s;&|(])(?:cmd|command|sh|bash|zsh|dash|ksh|python\d?|py|pypy|node|iojs|deno|bun|perl|ruby|php|lua|tclsh)(?:\.exe|\.com)?(?:\s+(?:\/[a-z]|-{1,2}[\w=.-]*|-))*\s*</i,
       why: '解释器从重定向进来的文件读代码执行（文件内容不在命令行里）' },
-    // `for /f ... do %i` 是 cmd 里「把文件逐行当命令执行」的标准写法：文件是 .txt 时不进脚本同审，
-    // 命令行里也没有任何危险词（实测 `do %i`、`do @%i`、`do call %i` 三种写法全部零审批直通）。
+    // `for ... do %i` 是 cmd 里「把循环变量的值当命令执行」的标准写法：命令行里既没有危险词，
+    // 被跑起来的那段代码也不在命令里（实测 `do %i`、`do @%i`、`do call %i` 三种写法全部零审批直通）。
+    // 原先这条规则要求 `for /f`，而 `/f` 只是「从文件/命令输出迭代」那一种形态 —— 少了它照样能跑：
+    //   `for %i in (*) do @%i`    遍历目录里每个匹配项逐个执行（通配形态连脚本同审都碰不到，
+    //                             scriptRefs 刻意排除了 glob，于是目录里有几个可执行文件就跑几个）
+    //   `for %i in (name) do call %i`  把 name 交给 PATHEXT 补后缀再执行
+    //   `for /r . %i in (*.bat) do %i` 递归形态
+    // 实测 `for %i in (*.bat) do @%i` 与 `for %i in (only) do call %i` 都零审批跑出了文件里的内容。
     // 只认「循环变量本身就位于命令位」的形态，`do echo %i` 这类正常用法不打扰。
-    { re: /\bfor\s+\/f\b[^\n]*?\bdo\s+\(?\s*@?(?:call\s+)?["']?%{1,2}[A-Za-z]/i,
-      why: '把文件内容当命令执行（for /f 的循环变量位于命令位）' },
+    { re: /\bfor\b[^\n]*?\bdo\s+\(?\s*@?(?:call\s+)?["']?%{1,2}[A-Za-z]/i,
+      why: '把循环变量的值当命令执行（for 的循环变量位于命令位：文件名/通配的结果会被跑起来）' },
+    // POSIX 那一侧是同一个语义的另一种拼法：`for f in *; do "$f"; done`、`while read l; do $l; done`。
+    // 命令位上一个变量名，跑的是这个变量的值 —— 与 `for %i ... do %i` 完全一样，读不出真正执行的是什么。
+    // 只认「do 后面紧跟一个裸变量（可带引号、可带 ./ 前缀）」的形态，`do echo $f` 这类照旧放行。
+    { re: /\bdo\s+(["']?)(?:\.\/)?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\1(?=\s*(?:;|$|\n))/,
+      why: '把循环变量的值当命令执行（循环变量位于命令位：文件名/通配的结果会被跑起来）' },
     { re: /\b(?:sh|bash|zsh|dash|ksh)(?:\.exe)?\b[^\n|;&]*?\s-\w*c\b/i, why: '交给 shell 内联执行一段代码' },
     { re: /\b(?:node|iojs|deno|bun)(?:\.exe)?\b[^\n|;&]*?\s-(?:e|p)\b|\b(?:node|iojs|deno|bun)(?:\.exe)?\b[^\n|;&]*?\s--(?:eval|print)\b/i, why: '交给 JS 运行时内联执行代码' },
     { re: /\b(?:python|python\d|pypy|py)(?:\.exe)?\b[^\n|;&]*?\s-(?:c|m)\b/i, why: '交给 Python 内联执行代码' },

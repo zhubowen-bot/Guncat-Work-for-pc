@@ -10,6 +10,32 @@
 
 ## 未发布
 
+### 修复：`for` 循环变量当命令执行、`npx` 换个别名就免检
+
+第十轮实测（真实 `CommandGuard.assess` + 真实 `run_command` 各跑一遍）又找到两类**零审批直通**：
+
+- **`for ... do %i` 原先只认 `for /f` 这一种形态**。`/f` 只是「从文件或命令输出迭代」的那一支，
+  少了它照样能把**循环变量的值**当命令执行：
+  - `for %i in (*) do @%i` —— 遍历目录里每个匹配项逐个执行。这一条尤其糟糕：通配形态连脚本同审
+    都碰不到（`scriptRefs` 刻意排除了 glob，否则 `find . -name "*.js"` 会天天打扰用户），
+    目录里有几个可执行文件就跑几个，而命令行里一个危险词都没有。
+  - `for %i in (name) do call %i` —— 把 name 交给 PATHEXT 补后缀再执行。
+  - `for /r . %i in (*.bat) do %i`、`for /d %i in (dirs) do @%i`、`for %%i in (x) do @%%i`。
+  实测在隔离目录里跑 `for %i in (*.bat) do @%i` 与 `for %i in (only) do call %i`，两次都零审批
+  跑出了文件里的内容（`for-loop-ran`）。现在规则不再要求 `/f`，仍只认「循环变量本身就位于命令位」
+  的形态，`do echo %i` 这类正常用法不打扰。
+- **POSIX 侧同一个语义没登记**：`for f in *; do "$f"; done`、`while read l; do $l; done < list.txt`
+  —— 命令位上一个裸变量，跑的就是这个变量的值，与 `for %i ... do %i` 完全一样。实测原先全部放行，
+  现在按同一条理由判危险；`do echo $f`、`do grep -l x "$f"` 这类照旧放行。
+- **`npx` 的别名家族全在表外**。规则表登记的是 `npx` 这个**名字**，而做同一件事的拼法还有
+  `npm exec`、`npm x`、`pnpm exec`、`pnpm dlx`、`yarn dlx`、`bun x`、`bunx`（还有 `pnpx`）——
+  它们都是从 registry 取一个包并立刻跑起来，代码既不在命令行里，也没进脚本同审。实测 `npx` 判危险，
+  而上述七种写法**全部零审批直通**。这是「命令名 vs 语义」的老毛病，与 `/y` 和 `-y` 那条同源：
+  现在按「包管理器 + 执行动词」判，不再按名字枚举。
+
+两处都补进了 `scripts/ipc-check.mjs` 的判定层：`for` 的七种执行形态必须判危险、四个正常写法不得被
+误伤；`npx` 家族八种拼法必须判危险，`npm run build` / `npm run format` / `npm ls` / `npm ci` 必须放行。
+
 ### 修复：边界层读错了文本，脚本同审漏了「没写后缀」的引用
 
 第九轮实测（跑真实 `CommandGuard.assess` / `assessScript`，不靠推演）又找到两类**零审批直通**：

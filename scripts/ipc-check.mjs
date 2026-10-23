@@ -3585,6 +3585,38 @@ check(
     .filter((c) => CommandGuard.assess(c, cmdRoot).forbidden ||
       CommandGuard.assess(c, cmdRoot).risky).join(' | ')
 )
+// 第十轮实测：`for ... do %i` 这条规则原先要求 `for /f`，而 `/f` 只是「从文件或命令输出迭代」
+// 那一种形态 —— 少了它照样能把「循环变量的值」当命令执行：`for %i in (*.bat) do @%i` 实测零审批
+// 跑出了文件里的内容（见 `.smoke/fx` 那次运行），而且通配形态连脚本同审都碰不到（scriptRefs 刻意
+// 排除了 glob）。`for %i in (name) do call %i`、`for /r . %i in (*.bat) do %i` 同理。
+// POSIX 的 `for f in *; do "$f"; done` 是同一个语义的另一种拼法，一起收。
+const LOOP_EXEC_CMDS = [
+  'for %i in (*) do @%i', 'for %i in (name) do call %i', 'for /r . %i in (*.bat) do %i',
+  'for /d %i in (dirs) do @%i', 'for %%i in (x) do @%%i',
+  'for f in *; do "$f"; done', 'while read l; do $l; done < list.txt'
+]
+check(
+  '循环变量位于命令位（for 的非 /f 形态、POSIX 的 do $var）判危险：跑的是被迭代出来的内容',
+  LOOP_EXEC_CMDS.every((c) => CommandGuard.assess(c, cmdRoot).risky) &&
+    ['for %i in (a b) do echo %i', "for /f %i in ('echo hi') do echo %i",
+      'for f in *.txt; do echo $f; done', 'for f in *; do ./build.sh "$f"; done'
+    ].every((c) => !CommandGuard.assess(c, cmdRoot).risky),
+  LOOP_EXEC_CMDS.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
+// npx 的别名家族：`npm exec`、`npm x`、`pnpm exec`、`pnpm dlx`、`yarn dlx`、`bun x`、`bunx`
+// 做的是同一件事 —— 从 registry 取一个包并立刻把它跑起来，代码既不在命令行里，也没进脚本同审。
+// 规则表原先只登记了 `npx` 这个**名字**，于是同一件事换个拼法就拿到免检票（实测七种写法全直通）。
+const REGISTRY_EXEC_CMDS = [
+  'npx some-tool', 'npm exec -- some-tool', 'npm x some-tool', 'pnpm exec some-tool',
+  'pnpm dlx some-tool', 'yarn dlx some-tool', 'bun x some-tool', 'bunx some-tool'
+]
+check(
+  'npx 的别名家族一律判危险（下载并执行 registry 里的代码）',
+  REGISTRY_EXEC_CMDS.every((c) => CommandGuard.assess(c, cmdRoot).risky) &&
+    ['npm run build', 'npm run format', 'npm ls', 'npm ci'].every(
+      (c) => !CommandGuard.assess(c, cmdRoot).risky),
+  REGISTRY_EXEC_CMDS.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
 // 无后缀的脚本名：cmd 的 PATHEXT 会补后缀，scriptRefs 只认带后缀的 token（见下一节集成用例）
 check(
   '无后缀脚本名由文本层挑出来（文件在不在交给 CommandService 查，猜会给每条命令添一问）',
