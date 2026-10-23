@@ -25,6 +25,9 @@ workspaces/
 # 无头冒烟验证的中间产物
 .smoke/
 
+# 工具输出超长时的落盘暂存（每次调用现生成，不入库）
+.spill/
+
 # esbuild 的临时目录（Windows 上系统 TEMP 会报 Access is denied，故固定到项目内）
 .tmp/
 .npm-cache/
