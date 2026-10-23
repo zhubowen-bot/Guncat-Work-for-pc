@@ -131,6 +131,11 @@ const FORBIDDEN = [
   // —— 主目录与用户
   'userdel -r alice', 'deluser --remove-home bob',
   'dscl . -delete /Users/alice', 'sysadminctl -deleteUser alice',
+  // —— 第十三轮：固件/控制器级擦除，根本不经过文件系统（blkdiscard/nvme/hdparm/cryptsetup）
+  'blkdiscard /dev/nvme0n1', 'cryptsetup luksFormat /dev/sda1',
+  'hdparm --security-erase p /dev/sda', 'nvme format /dev/nvme0n1',
+  'badblocks -w /dev/sdb', 'sdelete -p 3 -s C:\\', 'sg_format --format /dev/sdb',
+  'tmutil deletelocalsnapshots /', 'lvresize -L -1G /dev/vg0/lv0',
   // —— 灾难目标层：动词无害、落点是根/主目录/系统目录
   'del /q /s /f C:\\*', 'rd /s /q C:\\', 'del C:\\Users\\me\\*.* /q /s',
   'Remove-Item C:\\ -Recurse -Force', 'Remove-Item -Path ~ -Recurse -Force',
@@ -199,6 +204,27 @@ const RISKY = isWin
     'truncate -s 0 big.log', 'mount /dev/sdb1 /mnt/usb', 'passwd bob',
     'ssh host.example.com uptime', 'chattr +i important.txt', 'cat .git/HEAD']
 
+// —— 第十三轮：同一个破坏动作换了「子命令/产品名」就等于没登记。这些在参考项目的
+//    core.git / package_managers / secrets / platform / backup / system 包里各有独立规则，
+//    而我们的词表此前只认得它们的主干动词。
+RISKY.push(
+  'git branch --delete merged', 'git switch --discard-changes main',
+  'git read-tree -u --reset HEAD', 'git submodule deinit -f vendor/x',
+  'apt-get remove --purge nginx', 'pacman -Rns some-package', 'dpkg -r some-package',
+  'poetry remove requests', 'vault kv delete secret/x', 'op item delete "DB Password"',
+  'doppler secrets delete DATABASE_URL', 'gh release delete v1',
+  'az account clear', 'databricks catalogs delete analytics --force',
+  'railway down --yes', 'circleci context delete org ctx',
+  'kafka-topics --delete --topic payments', 'rabbitmqctl delete_vhost /prod',
+  'nats stream purge ORDERS', 'rclone sync /src remote:important-bucket',
+  'borg compact', 'rsync -a --remove-source-files /src/ /dest/',
+  'tar --remove-files -cf out.tar probes',
+  'dism /online /remove-package /packagename:Package_for_KB1',
+  'wusa /uninstall /kb:5000000', 'pnputil /delete-driver oem0.inf',
+  'Remove-VM probe-vm', 'Set-ExecutionPolicy Unrestricted', 'reagentc /disable',
+  '(Get-Item probes).Delete($true)'
+)
+
 const riskyBad = tier('2. 必拦-危险（默认档要批准）', RISKY, 'risky')
 // 「危险」档允许被更严的判定接住（硬禁也算批准不了），所以上面只要求 risky；
 // 这里补一条真正的口径：不允许有任何一条变成静默
@@ -246,6 +272,16 @@ const SILENT = isWin
     'rm -rf node_modules', 'rm -rf ./dist', 'mkdir -p out', 'touch a.txt',
     'echo hi > log.txt', 'npm run format', 'rg -n TODO src',
     'tar cf out.tar src', 'tar tzvf a.tar.gz', 'cat README.md']
+
+// 第十三轮的新规则只认「破坏动词 + 目标」，下面这些同名词出现在读形态/预览形态里，不该被打扰
+SILENT.push(
+  'vault status', 'vault kv get secret/x', 'op item get "DB Password"',
+  'doppler secrets get DATABASE_URL', 'gh repo view owner/repo',
+  'gh release view v1', 'gh issue list --search "delete"',
+  'git switch -c feature/x', 'git branch --show-current',
+  'apt list --installed', 'dpkg -l', 'rclone sync /src remote:bucket --dry-run',
+  'kafka-topics --list', 'nats stream ls', 'diskutil list'
+)
 
 tier('4. 不打扰（正常写法既不硬禁也不危险）', SILENT, 'silent')
 
@@ -327,7 +363,10 @@ const COVER = {
   FORBIDDEN: [
     'dd if=/dev/zero of=\\\\.\\PhysicalDrive0 bs=1M', 'fsutil usn deletejournal /d C:',
     'wbadmin delete catalog', 'reg delete HKLM\\System /f', 'cipher /x:C:\\out',
-    'vssadmin delete shadows /for=C:'
+    'vssadmin delete shadows /for=C:',
+    'blkdiscard /dev/sda', 'cryptsetup luksErase /dev/sda1',
+    'hdparm --security-erase p /dev/sda', 'nvme sanitize /dev/nvme0',
+    'badblocks -w /dev/sdb', 'tmutil disablelocal'
   ],
   RISKY: [
     'Remove-Item report.txt', 'powershell -c "ri C:\\temp\\a"',
@@ -343,7 +382,14 @@ const COVER = {
     'attrib +h secret.txt', 'cipher /e secret.txt', 'assoc .txt=evil', 'set',
     'cat ~/.ssh/id_rsa', 'mysql -e "DROP TABLE users"', 'git apply patch.diff',
     'git config --delete core.pager', 'Set-Disk -Number 0 -IsOffline $true',
-    'powershell -WindowStyle Hidden -c "dir"', 'rd /s /q dist', 'ren a.txt b.txt'
+    'powershell -WindowStyle Hidden -c "dir"', 'rd /s /q dist', 'ren a.txt b.txt',
+    'git branch --delete old', 'git branch -M old new', 'git switch --discard-changes main',
+    'apt-get remove nginx', 'poetry remove requests', 'vault kv delete secret/x',
+    'op item delete "DB Password"', 'aws secretsmanager delete-secret --secret-id x',
+    'gh release delete v1', 'az account clear', 'kafka-topics --delete --topic x',
+    'rclone sync /src remote:bucket', 'borg compact',
+    'rsync -a --remove-source-files /a /b', 'dism /online /remove-package /packagename:x',
+    'Remove-VM probe', '(Get-Item probes).Delete($true)'
   ],
   OPAQUE: [
     'cmd /c echo hi', 'echo "print(1)" | python', 'python - < payload.py',

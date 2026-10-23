@@ -94,7 +94,7 @@ export class CommandGuard {
     { re: /\b(?:Format-Volume|Clear-Disk|Initialize-Disk|Reset-PhysicalDisk|Remove-(?:Partition|Volume|VirtualDisk|StoragePool|PhysicalDisk|SnapShot|IscsiTarget))\b(?![\w-])/i,
       why: '磁盘/卷级销毁（PowerShell 存储 cmdlet）' },
     // 分区表与卷管理工具：写坏一次就整盘不可读，智能体没有任何正当需求要动它们（只读形态一并算进来）。
-    { re: /(?:^|[\s;&|(\\/])@?(?:wipefs|fdisk|cfdisk|sfdisk|parted|gdisk|sgdisk|mkswap|newfs|dmsetup|mdadm|lvm|lvremove|vgremove|pvremove|lvreduce|lvconvert|vgexport|pvmove)(?:\.exe)?\b/i,
+    { re: /(?:^|[\s;&|(\\/])@?(?:wipefs|fdisk|cfdisk|sfdisk|parted|gdisk|cgdisk|sgdisk|mkswap|newfs|dmsetup|mdadm|lvm|lvremove|vgremove|vgreduce|pvremove|pvcreate|lvreduce|lvresize|lvconvert|vgexport|pvmove)(?:\.exe)?\b/i,
       why: '分区表/逻辑卷管理工具（改坏即整盘不可读）' },
     { re: /\b(?:zpool\s+destroy|zfs\s+(?:destroy|rollback)|diskutil\s+(?:erase\w*|reformat|partitionDisk)|hdiutil\s+erase|btrfs\s+(?:subvolume\s+delete|filesystem\s+(?:rm|delete)|device\s+(?:delete|remove))|logical\w*\s+(?:rmdir|dlvrm))\b/i,
       why: '销毁文件系统卷/镜像（ZFS、APFS、Btrfs 侧的同一件事）' },
@@ -131,7 +131,23 @@ export class CommandGuard {
     { re: /\bwsl(?:\.exe)?\s+(?:--unregister|-u\s+--unregister)\b|\bmanage-bde\b[^\n|;]*(?:-\s*off\b|-clearkey|-disableautounlock|-protectors\s+(?:-?delete|-disablekeyprotector)|-?pause)/i,
       why: '销毁 WSL 发行版文件系统或摘除 BitLocker 保护' },
     { re: /\buserdel\b[^\n|;]*\s-r\b|\bdeluser\b[^\n|;]*(?:--remove-home|--remove-all-files)|\bdscl\b[^\n|;]*-delete\s+\/Users\/|\bsysadminctl\b[^\n|;]*-deleteUser/i,
-      why: '删除账号并连带删掉其主目录数据' }
+      why: '删除账号并连带删掉其主目录数据' },
+    // —— 第十三轮：继续拿 destructive_command_guard 的 system.disk / windows 规则包逐条比对，
+    //    补的是「根本不经过文件系统」的那一族：固件/控制器收到一条命令就把整块盘的块映射丢掉或
+    //    覆盖掉，没有回收站、没有卷影副本、没有任何恢复工具能救。词表里原先只有 POSIX 的 mkfs/dd，
+    //    换一个厂商工具名（blkdiscard / nvme / hdparm / cryptsetup）就等于没登记。
+    { re: /(?:^|[\s;&|(\\/])@?(?:blkdiscard|nwipe|sg_format|sdelete|sdelete64|wipe|scrub)(?:\.exe)?\b/i,
+      why: '物理介质级擦除（整块盘或空闲空间被覆盖，不可恢复）' },
+    { re: /\bcryptsetup\b[^\n|;]*(?:luksFormat|luksErase|luksRemoveKey|luksKillSlot|\berase\b|\bremove\b)/i,
+      why: '销毁 LUKS 加密卷头/密钥（卷内数据永久读不回）' },
+    { re: /\bhdparm\b[^\n|;]*(?:--security-erase|--security-erase-enhanced|--make-bad-sector|--write-sector)/i,
+      why: 'ATA 固件级安全擦除（整块盘不可恢复）' },
+    { re: /\bnvme(?:\.exe)?\b[^\n|;]*\b(?:format|sanitize|delete-ns|write-zeroes)\b/i,
+      why: 'NVMe 命名空间格式化/消毒（整块盘不可恢复）' },
+    { re: /\bbadblocks\b[^\n|;]*\s-[a-zA-Z]*w/i,
+      why: 'badblocks 写模式覆盖整块盘' },
+    { re: /\b(?:tmutil\s+(?:deletelocalsnapshots|disablelocal|delete)|asr\s+(?:restore|delete)|hdiutil\s+erase)/i,
+      why: '销毁 macOS 卷/快照/本地备份（不可恢复）' }
   ]
 
   private static readonly RISKY: Rule[] = [
@@ -231,7 +247,7 @@ export class CommandGuard {
     //    数据、备份、云上资源、版本库历史被清掉之后，人还能救回一部分，所以归危险档而不是硬禁。
     { re: /\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA|USER|VIEW|MATERIALIZED|COLLATION|TEMPORARY)|TRUNCATE\s+(?:TABLE|SCHEMA)|FLUSHALL|FLUSHDB|db\.dropDatabase\s*\(|DELETE\s+FROM\s+[\w."]+\s*(?:;|"|'|$)|DROP\s+KEY|\bDELETE\s+\w+\s+FROM)/i,
       why: '删除数据库/缓存里的内容（表、schema、整个键空间）' },
-    { re: /\b(?:terraform|pulumi|cdk|crossplane)\b[^\n|;]*(?:destroy|apply[^\n|;]*-destroy)|\b(?:aws|az|gcloud|gsutil|doctl|scaleway-cli|ovh-cli|s3cmd|hcloud)\b[^\n|;]*\b(?:delete|destroy|terminate|purge|prune|rm|deregister|deprovision)\b|\brclone\s+(?:purge|delete[frs]?|rm|trim|clean)\b|\b(?:helm)\s+(?:uninstall|delete|rollback)\b|\bargocd\s+app\s+delete\b|\bkubectl\s+(?:delete|drain|cordon|rollout\s+undo)\b/i,
+    { re: /\b(?:terraform|pulumi|cdk|crossplane)\b[^\n|;]*(?:destroy|apply[^\n|;]*-destroy)|\b(?:aws|az|gcloud|gsutil|doctl|scaleway-cli|ovh-cli|s3cmd|hcloud)\b[^\n|;]*\b(?:delete|destroy|terminate|purge|prune|rm|deregister|deprovision)\b(?![^\n|;]*(?:--help\b|\s-h\b))|\brclone\s+(?:purge|delete[frs]?|rm|trim|clean)\b|\b(?:helm)\s+(?:uninstall|delete|rollback)\b|\bargocd\s+app\s+delete\b|\bkubectl\s+(?:delete|drain|cordon|rollout\s+undo)\b/i,
       why: '销毁或回滚外部基础设施/集群资源（远端那侧的状态本地撤不回）' },
     { re: /\b(?:restic|borg|kopia|duplicity|burp|rdiff-backup|velero|pg_backrest|duply|rsnapshot)\b[^\n|;]*(?:\b(?:delete|forget|prune|purge|remove|destroy|expire|dropcache)\b|--prune)/i,
       why: '删除或修剪备份仓库里的快照（备份没了就没有第二次机会）' },
@@ -243,7 +259,7 @@ export class CommandGuard {
       why: 'git clean 删除工作区里未跟踪的文件（-x 连构建产物一起删）' },
     { re: /\bgit\b[^\n|;]*\bapply\b[^\n|;]|\bgit\b[^\n|;]*\bmaintenance\s+(?:start|register)\b|\bgit\b\s+config\b[^\n]*--(?:unset|delete|remove-section)/i,
       why: '用补丁改写工作区文件，或删掉 git 配置项' },
-    { re: /(?:^|[\s;/])\.(?:git|svn|hg)\/(?:HEAD|refs|objects|config|index|hooks|logs)(?:$|[\s/;])/i,
+    { re: /(?:^|[\s;/>=])\.(?:git|svn|hg)[\\/](?:HEAD|refs|objects|config|index|hooks|logs)(?:$|[\s/;\\])/i,
       why: '读写版本库内部数据（本地历史与配置被改后无从恢复）' },
     { re: /\b(?:setfacl|chacl|getfacl|setcap|getcap|chflags|xattr|fsutil\s+resource)\b/i,
       why: '改 ACL/扩展属性/能力位（可让文件对所有人可写或带上提权位）' },
@@ -277,7 +293,57 @@ export class CommandGuard {
     { re: /\bdefaults\s+write\b|(?:^|[\s;&|(])bless\s+[^\n|;]*\/Volumes|\bsoftwareupdate\b[^\n|;]*-(?:install|remove|ignore)/i,
       why: '改 macOS 系统偏好/引导卷或增卸系统更新' },
     { re: /-W\s+hidden|-WindowStyle\s+Hidden|-ExecutionPolicy\s+Bypass|\bCreateNoWindow\s*=\s*\$?true|(?:^|[\s;&|])-Hidden\b/i,
-      why: '隐藏窗口执行（刻意不给用户看见）' }
+      why: '隐藏窗口执行（刻意不给用户看见）' },
+    // —— 第十三轮：git 的「丢数据」不只在 reset --hard / clean。删分支、强制切分支、read-tree -u、
+    //    丢掉 reflog、deinit 子模块，每一种都不喊 rm，却都把未提交/未合并的那份内容变成不可达对象；
+    //    参考项目的 core.git 把它们逐条登记成 high/critical，我们原先只认 -D 这一种写法。
+    { re: /\bgit\b(?![^\n|;]*--no-delete)[^\n|;]*\bbranch\b[^\n|;]*(?:\s-[a-zA-Z]*[dD]\b|\s--delete\b)/i,
+      why: '删除 git 分支（未合并的提交与本地引用会丢）' },
+    // -M/-C 与 -m/-c 只差大小写，而 /i 分不开：这里刻意去掉 i，只认真正会覆盖已有分支的
+    // 强制重命名/强制复制，`git branch -m old new` 这种日常改名照旧静默。
+    { re: /\bgit\b[^\n|;]*\bbranch\b[^\n|;]*\s-[a-zA-Z]*(?:M|C)\b/,
+      why: '强制覆盖/复制 git 分支（目标分支原有引用会被替换）' },
+    { re: /\bgit\b[^\n|;]*(?:\bswitch\b[^\n|;]*(?:--discard-changes|--force|\s-[a-zA-Z]*f\b)|\bread-tree\b[^\n|;]*(?:--reset|\s-[a-zA-Z]*u\b)|\breset\b[^\n|;]*--merge\b|\bcheckout\b[^\n|;]*(?:--force|\s-[a-zA-Z]*f\b)|\brm\b[^\n|;]*(?:--force|\s-[a-zA-Z]*f\b)|\breflog\s+delete\b|\bsubmodule\s+deinit\b|\blfs\s+(?:migrate|uninstall)\b)/i,
+      why: '丢弃工作区/历史数据的 git 操作（强制切换、read-tree、删子模块、丢 reflog）' },
+    // 系统包管理器把「装/卸」写到了工作区之外：它改的是整台机器的依赖图，卸错一个组件
+    // （libc、sudo、ssh）之后连修都没法修。原先只登记了 npm/pip 这一族语言包管理器。
+    { re: /\b(?:apt|apt-get|dnf|yum|zypper|pacman|apk|snap|flatpak|conda|mamba|dpkg|rpm)\b[^\n|;]*(?:\b(?:install|remove|erase|purge|autoremove|uninstall|upgrade|dist-upgrade|full-upgrade)\b|\s-[a-zA-Z]*[rReE][a-zA-Z]*\b)/i,
+      why: '系统包管理器安装/卸载/升级（写到工作区之外，可能带走系统组件）' },
+    { re: /\b(?:poetry|uv|dotnet|nuget|composer|bundle|mix|stack|cabal|gem)\b[^\n|;]*(?:\b(?:uninstall|remove|delete|yank)\b)|\b(?:poetry|nuget|gem|cargo)\b[^\n|;]*\b(?:publish|push)\b/i,
+      why: '卸载项目/系统依赖或对外发布包（依赖图变了，发布出去收不回）' },
+    // 密钥管理器：删一条 secret、禁用 secrets engine、把策略删掉，拿到的不是「文件没了」而是
+    // 「之后所有依赖它的服务都起不来」，而旧值不会留下任何副本。op/doppler/vault 原先完全不在表里。
+    { re: /\bvault\b[^\n|;]*(?:\bkv\s+(?:put|patch|delete|destroy|metadata\s+delete)\b|\bsecrets\s+disable\b|\bauth\s+disable\b|\bpolicy\s+delete\b|\blease\s+revoke\b|\bdelete\b)/i,
+      why: '删除/覆盖密钥管理器里的秘密（旧值拿不回来）' },
+    { re: /\b(?:op|doppler)\b[^\n|;]*\b(?:item|document|vault|user|group|secrets|configs|projects)\b[^\n|;]*\b(?:delete|remove|archive)\b/i,
+      why: '删除密钥管理器里的条目/配置（旧值拿不回来）' },
+    { re: /\b(?:aws\s+secretsmanager|gcloud\s+secrets|az\s+keyvault\s+secret)\b[^\n|;]*(?:delete|destroy|update|put|set|purge|remove)/i,
+      why: '删除或覆盖云端密钥（旧值拿不回来）' },
+    // GitHub / 云平台上的「删除」在本地没有任何痕迹：删仓库、删 release、把仓库改私有/公开、
+    // 删 SSH key，都是一条命令之后远端就换了状态。参考项目的 platform.* 与 cloud.* 规则包按
+    // 子命令登记，而我们的通用 delete 规则只认得 terraform/aws 那一条主干。
+    { re: /\bgh\b\s+(?:repo\s+(?:delete|archive|edit\b[^\n|;]*--visibility)|\brelease\s+(?:delete|delete-asset)|\bgist\s+delete|\bissue\s+delete|\bssh-key\s+delete|\bapi\b[^\n|;]*-X\s*DELETE)(?![^\n|;]*(?:--help\b|\s-h\b))/i,
+      why: '删除/公开化 GitHub 上的远端资源（仓库、release、部署密钥）' },
+    { re: /\b(?:az\s+account\s+(?:clear|cancel|subscription\s+cancel|management-group\s+(?:delete|subscription\s+remove)|alias\s+delete|lock\s+delete)|az\s+devops\b[^\n|;]*\b(?:remove|reset)\b|databricks\b[^\n|;]*\bdelete\b|railway\b[^\n|;]*\b(?:delete|down|detach|variable\s+set)\b|\brailway\b[^\n|;]*\s--set\b|circleci\b[^\n|;]*\b(?:delete|remove-secret)\b|gitlab-runner\b[^\n|;]*\bunregister\b|wrangler\b[^\n|;]*\bdelete\b|aws\s+s3\s+rb\b|aws\s+sns\s+unsubscribe\b)/i,
+      why: '删除云端账号/仓库/资源（远端状态本地撤不回）' },
+    { re: /\b(?:kafka-[a-z-]+|rabbitmqctl|rabbitmqadmin|nats)\b[^\n|;]*(?:--delete\b|--remove\b|--delete-config\b|\bdelete\w*\b|\bpurge\b|\bclear_permissions\b)|\bkafka-delete-records\b/i,
+      why: '删除消息队列里的 topic/队列/消费组（堆积的数据直接没了）' },
+    // 备份与同步的破坏力全在「目标侧多出来的文件会被删掉」：rclone sync 默认就是镜像删除，
+    // borg compact 会把旧段彻底合并掉，rsync/tar 的 --remove-* 则在成功之后删源。
+    { re: /\brclone\b[^\n|;]*\b(?:sync|deletefile|rmdir|move|purge|delete)\b(?![^\n|;]*--dry-run)/i,
+      why: '云盘镜像/删除（目标侧与源不一致的文件会被删掉）' },
+    { re: /\bborg\b[^\n|;]*\b(?:compact|prune|delete|rdelete)\b|\brestic\b[^\n|;]*(?:--prune|\bforget\b)/i,
+      why: '压缩/删除备份仓库里的快照（备份没了就没有第二次机会）' },
+    { re: /\b(?:rsync|tar|bsdtar|gtar)\b[^\n|;]*(?:--remove-source-files|--remove-files)\b/i,
+      why: '归档/同步完成后删掉源文件（源侧数据没了）' },
+    // Windows 的系统组件卸载与恢复环境改写：移除更新/驱动/可选功能之后，系统表面还能用，
+    // 但想装回去需要联网与匹配的源；reagentc /disable 则直接让「重置/修复」入口消失。
+    { re: /\b(?:dism(?:\.exe)?\b[^\n|;]*\/(?:remove-package|remove-capability|disable-feature|apply-image|apply-unattend)|\bdism(?:\.exe)?\b[^\n|;]*\/cleanup-image[^\n|;]*\/startcomponentcleanup|\bwusa(?:\.exe)?\b[^\n|;]*\/uninstall|\bpnputil(?:\.exe)?\b[^\n|;]*\/(?:delete-driver|remove-device)|\b(?:Remove-WindowsCapability|Remove-WindowsPackage|Uninstall-WindowsFeature|Disable-WindowsOptionalFeature|Remove-SmbShare|Remove-PSDrive|Clear-ItemProperty|Clear-Item|Remove-VM|Remove-VMSnapshot|Set-ExecutionPolicy)\b|\breagentc\b[^\n|;]*\/disable)/i,
+      why: '卸载系统组件/驱动/更新或改写恢复环境（移除后难装回）' },
+    // 参考项目把 DirectoryInfo.Delete($true) 单列成 critical：它是 PowerShell 里「递归删除整棵树」
+    // 最短的写法，既没有 Remove-Item 这个词，也不经过回收站。
+    { re: /\.Delete\s*\(\s*\$?true\s*\)/i,
+      why: '.NET 递归删除目录树（不进回收站，无法恢复）' }
   ]
 
   // 「文本里没有危险词」不等于「执行时无害」。这一档不看关键词，只看**这条命令把决定权交给了谁**：

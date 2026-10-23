@@ -3954,6 +3954,72 @@ check(
     .filter(hit4).join(' | ')
 )
 
+// —— 第十三轮：继续拿 destructive_command_guard 的 system.disk / core.git / package_managers /
+//    secrets / platform / backup 规则包逐条比对。这一轮补的不是「新的动词」，而是**同一种破坏
+//    换了一个产品名或子命令**：固件擦除工具、系统包管理器、密钥管理器、云端 CLI、备份同步工具。
+//    共同根因还是第十二轮那句话 —— 词表只登记了主干写法，换名字就等于没登记。
+const R13_FORBIDDEN = [
+  'blkdiscard /dev/nvme0n1', 'nvme format /dev/nvme0n1', 'nvme sanitize /dev/nvme0',
+  'hdparm --security-erase p /dev/sda', 'badblocks -w /dev/sdb',
+  'cryptsetup luksFormat /dev/sda1', 'cryptsetup luksErase /dev/sda1',
+  'sg_format --format /dev/sdb', 'sdelete -p 3 -s C:\\',
+  'tmutil deletelocalsnapshots /', 'lvresize -L -1G /dev/vg0/lv0',
+  'vgreduce vg0 /dev/sdb'
+]
+check(
+  '第十三轮：固件/控制器级擦除与卷管理工具一律硬禁（根本不经过文件系统，没有恢复入口）',
+  R13_FORBIDDEN.every((c) => CommandGuard.assess(c, cmdRoot).forbidden),
+  R13_FORBIDDEN.filter((c) => !CommandGuard.assess(c, cmdRoot).forbidden).join(' | ')
+)
+const R13_RISKY = [
+  // git：删分支、强制切分支、read-tree -u、deinit 子模块、丢 reflog
+  'git branch --delete merged', 'git branch -M main old', 'git switch --discard-changes main',
+  'git read-tree -u --reset HEAD', 'git reflog delete', 'git submodule deinit -f vendor/x',
+  // 系统包管理器：改的是整台机器的依赖图
+  'apt-get remove --purge nginx', 'pacman -Rns some-package', 'dpkg -r some-package',
+  'poetry remove requests', 'dotnet tool uninstall -g some-tool',
+  // 密钥管理器：旧值不会留下副本
+  'vault kv delete secret/myapp/config', 'op item delete "DB Password"',
+  'doppler secrets delete DATABASE_URL',
+  'aws secretsmanager delete-secret --secret-id my/secret --force-delete-without-recovery',
+  'gcloud secrets delete my-secret',
+  // 远端平台：一条命令之后远端就换了状态
+  'gh release delete v1', 'gh repo delete owner/repo', 'gh api -X DELETE /repos/o/r',
+  'az account clear', 'az account subscription cancel --id 0000',
+  'databricks catalogs delete analytics --force', 'railway down --yes',
+  'circleci context delete org ctx', 'gitlab-runner unregister --all-runners',
+  'kafka-topics --delete --topic payments', 'rabbitmqctl delete_vhost /prod',
+  'nats stream purge ORDERS',
+  // 备份与同步：目标侧/源侧的数据会被删掉
+  'rclone sync /src remote:important-bucket', 'borg compact',
+  'rsync -a --remove-source-files /src/ /dest/', 'tar --remove-files -cf out.tar probes',
+  // Windows 组件/恢复环境
+  'dism /online /remove-package /packagename:Package_for_KB1', 'wusa /uninstall /kb:5000000',
+  'pnputil /delete-driver oem0.inf', 'Remove-VM probe-vm',
+  'Set-ExecutionPolicy Unrestricted', 'reagentc /disable',
+  '(Get-Item probes).Delete($true)', 'echo x >.git/config'
+]
+check(
+  '第十三轮：换产品名/子命令的破坏动作至少转审批（git 丢数据、包管理、密钥、云平台、备份、组件卸载）',
+  R13_RISKY.every((c) => hit4(c)),
+  R13_RISKY.filter((c) => !hit4(c)).join(' | ')
+)
+check(
+  '第十三轮的新规则不打扰读形态与预览形态（status/get/list/--dry-run/help 照旧静默）',
+  ['vault status', 'vault kv get secret/x', 'op item get "DB Password"',
+    'doppler secrets get DATABASE_URL', 'gh release view v1', 'gh repo view owner/repo',
+    'gh release delete --help', 'az account show', 'git switch -c feature/x',
+    'git branch --show-current', 'apt list --installed', 'dpkg -l',
+    'rclone sync /src remote:bucket --dry-run', 'kafka-topics --list',
+    'nats stream ls', 'diskutil list'].every((c) => !hit4(c)),
+  ['vault status', 'vault kv get secret/x', 'op item get "DB Password"',
+    'doppler secrets get DATABASE_URL', 'gh release view v1', 'gh repo view owner/repo',
+    'gh release delete --help', 'az account show', 'git switch -c feature/x',
+    'git branch --show-current', 'apt list --installed', 'dpkg -l',
+    'rclone sync /src remote:bucket --dry-run', 'kafka-topics --list',
+    'nats stream ls', 'diskutil list'].filter(hit4).join(' | ')
+)
+
 // —— 工具面：命令工具确实下发给工作模式，且被交互模式物理裁掉 ——
 WorkFileService.toolRegistrySynced()
 check(
@@ -4187,6 +4253,37 @@ for (const hole of [
   const card = await askFor(hole[0])
   check(
     '第十二轮危险项真的弹卡并拒绝执行: ' + hole[0].slice(0, 26),
+    card.askEvent !== null && card.askEvent.question.includes(hole[1]) &&
+      card.result.ok === false && card.result.output.includes('命令未执行'),
+    card.askEvent === null ? '(没有审批卡)' : card.askEvent.question.slice(0, 80)
+  )
+}
+
+// —— 第十三轮穿透项的端到端：把「换了产品名」的破坏真的送到执行层。
+//    硬禁项一律不给审批入口；危险项弹出卡、卡上写明命中理由，点拒绝后命令没有执行。
+for (const hard of [
+  ['blkdiscard /dev/nvme99n1', '物理介质级擦除'],
+  ['cryptsetup luksErase /dev/sdq1', '销毁 LUKS'],
+  ['badblocks -w /dev/sdq', 'badblocks']
+]) {
+  events.length = 0
+  const res = await CommandService.run(convCmd.id, cmdRoot, { command: hard[0] }, null)
+  check(
+    '第十三轮硬禁项直接拒绝且不给审批入口: ' + hard[0].slice(0, 30),
+    res.ok === false && res.output.includes('安全策略拒绝') &&
+      !events.some((e) => e.type === 'ask:user'),
+    events.some((e) => e.type === 'ask:user') ? '(弹了卡)' : res.output.slice(0, 100)
+  )
+}
+for (const hole of [
+  ['vault kv delete secret/probe-only', '密钥管理器'],
+  ['git branch --delete probe-only-branch', 'git 分支'],
+  ['rclone sync /src remote:probe-bucket', '云盘镜像'],
+  ['Set-ExecutionPolicy Unrestricted', '卸载系统组件']
+]) {
+  const card = await askFor(hole[0])
+  check(
+    '第十三轮危险项真的弹卡并拒绝执行: ' + hole[0].slice(0, 28),
     card.askEvent !== null && card.askEvent.question.includes(hole[1]) &&
       card.result.ok === false && card.result.output.includes('命令未执行'),
     card.askEvent === null ? '(没有审批卡)' : card.askEvent.question.slice(0, 80)
