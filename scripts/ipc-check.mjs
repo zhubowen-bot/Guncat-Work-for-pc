@@ -4708,6 +4708,93 @@ check(
     pkgOkRun.output.includes('audit-pkg-ok'),
   pkgOkRun.output.slice(0, 120)
 )
+
+// —— 复验发现的残余绕过：`--prefix` / `--dir` / `--cwd` / `-C` 把包目录换掉 ——
+// 同审原本按 cwd 往上找 package.json，`npm --prefix <dir> run x` 读到的是**根目录**那份
+// （里面没有 x），判空后静默放行：脚本照跑、全程没有审批卡（实测把 marker 删了）。
+// 参数一换位置，审的就不是要跑的那个文件了 —— 与 `ca^ll` 同一类「审的实体 != 跑的实体」。
+const pkgSubDir = path.join(auditDir, 'pkgsub')
+fs.mkdirSync(pkgSubDir, { recursive: true })
+fs.writeFileSync(path.join(pkgSubDir, 'package.json'), JSON.stringify({
+  name: 'guard-audit-subpkg',
+  private: true,
+  scripts: {
+    scour: 'del /q guard-audit\\victim.txt',
+    ok: 'echo audit-subpkg-ok'
+  }
+}, null, 2))
+
+/** 跑一条命令，等审批卡，拒绝，返回 { ask, res } */
+async function runExpectAsk(command) {
+  events.length = 0
+  const running = CommandService.run(convCmd.id, cmdRoot, { command }, null)
+  const ask = await waitForEvent((e) => e.type === 'ask:user')
+  await inv('work:answer', {
+    conversationId: convCmd.id,
+    requestId: ask === null ? '' : ask.requestId,
+    canceled: false,
+    selections: ['拒绝'],
+    note: ''
+  })
+  const res = await running
+  return { ask, res }
+}
+
+const prefixCase = await runExpectAsk('npm --prefix guard-audit\\pkgsub run scour')
+check(
+  '--prefix 换包目录后照样读真正要跑的那份 package.json',
+  prefixCase.ask !== null && prefixCase.ask.question.includes('scripts.scour') &&
+    prefixCase.ask.question.includes('删除文件'),
+  prefixCase.ask === null ? '(没有审批卡)' : prefixCase.ask.question.slice(0, 260)
+)
+check(
+  '--prefix 变体被拒 → 不执行（victim.txt 还在）',
+  prefixCase.res.ok === false && prefixCase.res.output.includes('命令未执行') &&
+    fs.existsSync(path.join(auditDir, 'victim.txt'))
+)
+
+// `=` 写法 + run-script 别名
+const prefixEqCase = await runExpectAsk('npm --prefix=guard-audit/pkgsub run-script scour')
+check(
+  '--prefix=<dir> 的等号写法同样进同审',
+  prefixEqCase.ask !== null && prefixEqCase.ask.question.includes('scripts.scour'),
+  prefixEqCase.ask === null ? '(没有审批卡)' : prefixEqCase.ask.question.slice(0, 260)
+)
+
+// yarn / pnpm 的换目录参数（--cwd / -C）
+const cwdFlagCase = await runExpectAsk('yarn --cwd guard-audit/pkgsub scour')
+check(
+  'yarn --cwd <dir> 换目录后照样进同审',
+  cwdFlagCase.ask !== null && cwdFlagCase.ask.question.includes('scripts.scour'),
+  cwdFlagCase.ask === null ? '(没有审批卡)' : cwdFlagCase.ask.question.slice(0, 260)
+)
+const dashCCase = await runExpectAsk('pnpm -C guard-audit/pkgsub run scour')
+check(
+  'pnpm -C <dir> 换目录后照样进同审',
+  dashCCase.ask !== null && dashCCase.ask.question.includes('scripts.scour'),
+  dashCCase.ask === null ? '(没有审批卡)' : dashCCase.ask.question.slice(0, 260)
+)
+
+// 不误伤：同一个 --prefix，跑的是干净 script
+events.length = 0
+const prefixOkRun = await CommandService.run(convCmd.id, cmdRoot,
+  { command: 'npm --prefix guard-audit\\pkgsub run ok' }, null)
+check(
+  '--prefix + 干净的 script 不打扰用户',
+  events.every((e) => e.type !== 'ask:user') && prefixOkRun.ok === true &&
+    prefixOkRun.output.includes('audit-subpkg-ok'),
+  prefixOkRun.output.slice(0, 140)
+)
+
+// -w / --workspace：执行目录被换到子包，手上这份 package.json 不是要跑的那份 → 转审批
+// （宁可多问一句，也不能拿另一份正文冒充「审过了」）
+const wsCase = await runExpectAsk('npm run cleanit -w somewhere')
+check(
+  '-w / --workspace 换子包时转审批（拿不准的就不冒充审过）',
+  wsCase.ask !== null && wsCase.ask.question.includes('子包'),
+  wsCase.ask === null ? '(没有审批卡)' : wsCase.ask.question.slice(0, 260)
+)
+
 fs.rmSync(auditPkgPath, { force: true })
 
 

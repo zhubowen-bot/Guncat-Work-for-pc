@@ -632,27 +632,12 @@ export class CommandService {
         if (!/^(?:npm|pnpm|yarn|bun)$/.test(pm)) {
           continue;
         }
-        let next: string = toks[i + 1].toLowerCase();
-        if (next === 'run' || next === 'run-script') {
-          let name: string = toks.length > i + 2 ? toks[i + 2] : '';
-          if (name !== '' && name.charAt(0) !== '-' && out.indexOf(name) === -1) {
-            out.push(name);
-          }
-          break;
-        }
-        if (/^(?:start|test|restart|stop)$/.test(next)) {
-          if (out.indexOf(next) === -1) {
-            out.push(next);
-          }
-          break;
-        }
-        // yarn / bun 允许省掉 run：`yarn build`、`bun dev`。只认「不是子命令」的那个词。
-        if ((pm === 'yarn' || pm === 'bun') && next.charAt(0) !== '-' &&
-          !CommandService.PKG_SUBCOMMAND_RE.test(next)) {
-          let direct: string = toks[i + 1];
-          if (out.indexOf(direct) === -1) {
-            out.push(direct);
-          }
+        // 参数可以插在包管理器与子命令之间：`npm --prefix <dir> run x`、`yarn --cwd <dir> build`。
+        // 只看紧邻的下一词，`--prefix` 就会顶掉 `run`，script 名连识别都识别不出来（实测这条路
+        // 让 `npm --prefix .tmp/pkg run scour` 整条免审）。
+        let name: string = CommandService.pkgScriptNameIn(toks.slice(i + 1), pm);
+        if (name !== '' && out.indexOf(name) === -1) {
+          out.push(name);
         }
         break;
       }
@@ -663,6 +648,59 @@ export class CommandService {
   // 包管理器自己的子命令（它们不是 script 名，别拿去找 package.json 的 scripts）
   private static readonly PKG_SUBCOMMAND_RE: RegExp =
     /^(?:add|audit|bin|cache|ci|config|create|dedupe|delete|dlx|doctor|exec|explain|fund|get|help|i|info|init|install|launch|link|list|login|logout|ls|outdated|pack|patch|pkg|prefix|prune|publish|rebuild|remove|repo|root|run|run-script|search|set|store|un|uninstall|unlink|update|upgrade|version|view|why|workspace|workspaces|whoami|x)$/i;
+
+  /** 包管理器里「后面跟一个值」的参数：跳过这些词时必须连它的值一起跳，否则值会被当成子命令 */
+  private static readonly PKG_VALUE_FLAGS: string[] = [
+    '--prefix', '--dir', '--cwd', '-c', '-w', '--workspace', '--workspaces',
+    '--filter', '-f', '--registry', '--userconfig', '--globalconfig', '--cache',
+    '--loglevel', '--omit', '--include'
+  ];
+
+  /**
+   * 从「包管理器之后的词」里找出要执行的 script 名。
+   *
+   * 顺序是：跳过参数（带值的连值一起跳）→ 遇到 run / run-script 就取它后面第一个真词；
+   * 遇到 start / test / restart / stop 就直接用这个词；yarn / bun 允许省掉 run，取第一个
+   * 非子命令的真词。认不出来返回 ''（此时调用方不会去找 package.json）。
+   */
+  private static pkgScriptNameIn(rest: string[], pm: string): string {
+    let firstReal: (from: number) => number = (from: number): number => {
+      let k: number = from;
+      while (k < rest.length) {
+        let lower: string = rest[k].toLowerCase();
+        if (CommandService.PKG_VALUE_FLAGS.indexOf(lower) !== -1) {
+          k += 2;
+          continue;
+        }
+        if (rest[k] === '--') {
+          k += 1;
+          continue;
+        }
+        if (rest[k].charAt(0) === '-') {
+          k += 1;
+          continue;
+        }
+        return k;
+      }
+      return -1;
+    };
+    let k: number = firstReal(0);
+    while (k >= 0) {
+      let lower: string = rest[k].toLowerCase();
+      if (lower === 'run' || lower === 'run-script') {
+        let n: number = firstReal(k + 1);
+        return n < 0 ? '' : rest[n];
+      }
+      if (/^(?:start|test|restart|stop)$/.test(lower)) {
+        return lower;
+      }
+      if (pm === 'yarn' || pm === 'bun') {
+        return CommandService.PKG_SUBCOMMAND_RE.test(lower) ? '' : rest[k];
+      }
+      return '';
+    }
+    return '';
+  }
 
   /** 从工作目录往上找工作区里最近的那个 package.json（npm 自己也是这么找的） */
   private static findPackageJson(cwdRel: string, root: string): string | null {
@@ -682,6 +720,62 @@ export class CommandService {
   }
 
   /**
+   * 包管理器把「包目录」从参数里改掉的写法：`npm --prefix <dir> run x`、`pnpm -C <dir>`、
+   * `yarn --cwd <dir>`、`--dir=<dir>`（含 `=` 与空格两种写法）。
+   *
+   * 这类参数一出现，scripts 就不再来自「cwd 往上最近的那个 package.json」。实测
+   * `npm --prefix .tmp/npmcheck run scour`：同审按 cwd 读到了**工作区根目录**的 package.json
+   * （里面没有 scour），判空后静默放行 —— 删除照跑、全程没有审批卡。参数换了位置，
+   * 审的就不是同一个文件了，这跟前一轮的 `ca^ll` 是同一类「审的实体 != 跑的实体」。
+   *
+   * 返回 '' = 没指定包目录；其它 = 解析出的包目录（相对工作区）；null = 指定了但落在工作区外。
+   */
+  private static packageDirHint(text: string, cwdRel: string, root: string): string | null {
+    let segments: string[] = text.split(/\r?\n|&&|\|\||[;&|]/);
+    for (let s: number = 0; s < segments.length; s++) {
+      let rawToks: string[] = segments[s].trim().split(/\s+/);
+      let toks: string[] = [];
+      for (let t: number = 0; t < rawToks.length; t++) {
+        let w: string = CommandGuard.plainToken(rawToks[t]);
+        if (w !== '') {
+          toks.push(w);
+        }
+      }
+      let isPm: boolean = false;
+      for (let i: number = 0; i < toks.length; i++) {
+        let pm: string = toks[i].replace(/^.*[\\/]/, '').replace(/\.(?:cmd|exe)$/i, '').toLowerCase();
+        if (/^(?:npm|pnpm|yarn|bun)$/.test(pm)) {
+          isPm = true;
+          break;
+        }
+      }
+      if (!isPm) {
+        continue;
+      }
+      for (let i: number = 0; i < toks.length; i++) {
+        let value: string = '';
+        let inline: RegExpMatchArray | null = toks[i].match(/^(?:--prefix|--dir|--cwd)=(.+)$/i);
+        if (inline !== null) {
+          value = inline[1];
+        } else if (/^(?:--prefix|--dir|--cwd|-C)$/.test(toks[i]) && i + 1 < toks.length) {
+          value = toks[i + 1];
+        }
+        if (value === '') {
+          continue;
+        }
+        let abs: string | null = CommandService.resolveScript(value, cwdRel, root);
+        return abs === null ? null : CommandService.relativeToRoot(abs, root);
+      }
+    }
+    return '';
+  }
+
+  /** `-w pkg` / `--workspace=pkg`：脚本在子包里。名字→目录的映射不在这里猜，交给调用方转审批。 */
+  private static hasWorkspaceFlag(text: string): boolean {
+    return /(?:^|[\s;&|])(?:-w|--workspace|--workspaces|--ws|-ws)(?:[=\s]|$)/i.test(text);
+  }
+
+  /**
    * 取出这条命令会执行的 package.json script（名字 + 正文），并且顺着 `npm run y` 再跟一层。
    *
    * 读不出 / 解析不了时**转审批**而不是静默放过 —— 与「脚本读不出文本」同一条口径：
@@ -694,7 +788,24 @@ export class CommandService {
     if (wanted.length === 0) {
       return out;
     }
-    let pkgAbs: string | null = CommandService.findPackageJson(cwdRel, root);
+    // 包目录被参数改写时只能读那一个：往上翻会读到另一份 package.json，审的就不是要跑的那个文件
+    let dirHint: string | null = CommandService.packageDirHint(command, cwdRel, root);
+    if (dirHint === null) {
+      CommandService.pushRisk(verdict,
+        '命令用 --prefix / --dir / --cwd 指定了工作区之外的包目录，里面的 scripts 审阅不了');
+      return out;
+    }
+    let pkgAbs: string | null;
+    if (dirHint !== '') {
+      pkgAbs = CommandService.resolveScript('package.json', dirHint, root);
+      if (pkgAbs === null || !fileIo.accessSync(pkgAbs)) {
+        CommandService.pushRisk(verdict, '命令指定的包目录 ' + dirHint +
+          ' 里没有 package.json（或读不到），要跑的 scripts 审阅不了');
+        return out;
+      }
+    } else {
+      pkgAbs = CommandService.findPackageJson(cwdRel, root);
+    }
     if (pkgAbs === null) {
       // 工作区里连 package.json 都没有：npm 会自己往上一层找，找不到就报错，命令根本跑不起来，
       // 所以这里不打扰用户（否则每个空目录里的 `npm test` 都要多问一次）。
@@ -751,6 +862,12 @@ export class CommandService {
           queue.push(nested[n]);
         }
       }
+    }
+    // `-w <pkg>` 把执行目录换到子包：真正要跑的 scripts 在子包自己的 package.json 里，
+    // 我们手上这份（根/上层的）不是同一个文件 —— 与其拿另一份正文去审，不如转审批。
+    if (CommandService.hasWorkspaceFlag(command)) {
+      CommandService.pushRisk(verdict,
+        '命令用 -w / --workspace 把执行目录换成了工作区子包，子包里真正要跑的 scripts 审阅不了');
     }
     return out;
   }
