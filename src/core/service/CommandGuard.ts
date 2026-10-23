@@ -393,14 +393,30 @@ export class CommandGuard {
       verdict.risky = true
       CommandGuard.pushReason(verdict, CommandGuard.OBFUSCATED_WHY)
     }
-    let outside: string = CommandGuard.firstPathOutsideWorkspace(trimmed, root)
+    // 边界检查必须和关键词表看**同一批文本**：`type C:^\Windows^\win.ini` 执行时就是
+    // C:\Windows\win.ini，而这几条检查原先只读原文（trimmed）——于是「要还原一次才看得出来
+    // 去哪」的写法把整个边界层跳了过去（实测：四种 ^ 转义写法全部零审批直通）。
+    // 关键词表那条路早就用的是原文 ∪ 还原文 ∪ 折叠文，边界层没跟上就是一处结构性缺口。
+    // 注意这里不能直接用 unobfuscate 的结果：它按 POSIX 规则把 `\W` 当转义吃掉，
+    // Windows 路径在它那里会变成 `C:Windows\win.ini`（实测），所以边界层要的是
+    // pathUnescape 那一份 —— 只去 cmd 的 ^ 与引号，反斜杠原样留着。
+    let boundary: string[] = [trimmed]
+    for (let b: number = 0; b < sources.length; b++) {
+      let one: string = CommandGuard.pathUnescape(sources[b])
+      if (boundary.indexOf(one) === -1) {
+        boundary.push(one)
+      }
+    }
+    let outside: string = CommandGuard.firstOverSources(boundary,
+      (t: string): string => CommandGuard.firstPathOutsideWorkspace(t, root))
     if (outside !== '') {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '触及工作区之外的路径 ' + outside)
     }
     // 绝对路径那套正则看不见「相对上跳」：dir .. / echo x > ..\y.txt 同样是出圈，
     // 同一个越界效果不能因为写法不同就一路绿灯（实测缺口，见 firstUpTraversal 的说明）。
-    let up: string = CommandGuard.firstUpTraversal(trimmed)
+    let up: string = CommandGuard.firstOverSources(boundary,
+      (t: string): string => CommandGuard.firstUpTraversal(t))
     if (up !== '') {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '命令里有 .. 上跳，读写位置在工作区之外：' + up)
@@ -408,14 +424,26 @@ export class CommandGuard {
     // UNC 路径是「工作区边界」上另一条没被覆盖的路：它没有盘符、没有 ..，ABS_PATH_RE 也认不全。
     // `dir \\127.0.0.1\c$\Users` 读的是本机整块 C 盘，`copy \\server\share\x .` 是往外拿数据 ——
     // 与绝对路径同一条边界，判定也归到同一档（工作区根本身在 UNC 共享上时不误伤）。
-    let unc: string = CommandGuard.firstUncPathOutside(trimmed, root)
+    let unc: string = CommandGuard.firstOverSources(boundary,
+      (t: string): string => CommandGuard.firstUncPathOutside(t, root))
     if (unc !== '') {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '命令里的 UNC/网络路径在工作区之外：' + unc)
     }
+    // 第三种「绝对路径」写法：cmd/PowerShell 里以单个反斜杠开头的是**盘根**（`\data\a.txt`
+    // 就是 `C:\data\a.txt`）。它没有盘符、没有 ..，而 ABS_PATH_RE 只认得第二段叫 Windows/Users
+    // 这类系统目录的写法 —— 于是 `type \data\a.txt`、`copy \a.txt .`、`echo x > \a.txt`
+    // 一直零审批直通（实测）。
+    let rootPath: string = CommandGuard.firstOverSources(boundary,
+      (t: string): string => CommandGuard.firstRootPathOutside(t, root))
+    if (rootPath !== '') {
+      verdict.risky = true
+      CommandGuard.pushReason(verdict, '命令里的盘根路径在工作区之外：' + rootPath)
+    }
     // 字面路径规则只认 `C:\` 与 `..`，而 cmd 里 `%TEMP%\x`、PowerShell 里 `$env:TEMP + '\x'`
     // 展开后同样出圈（实测：type %SystemRoot%\win.ini 读系统文件全程静默）。
-    let envOut: string = CommandGuard.firstEnvPathOutside(trimmed)
+    let envOut: string = CommandGuard.firstOverSources(boundary,
+      (t: string): string => CommandGuard.firstEnvPathOutside(t))
     if (envOut !== '') {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '命令里的环境变量路径展开后在工作区之外：' + envOut)
@@ -650,6 +678,94 @@ export class CommandGuard {
     if (verdict.reasons.indexOf(why) === -1) {
       verdict.reasons.push(why)
     }
+  }
+
+  /**
+   * 边界检查专用的「去掉伪装」：只去掉 cmd 的 ^ 转义与引号，**反斜杠原样留着**。
+   *
+   * 为什么不复用 unobfuscate：它按 POSIX 规则把 `\x` 当转义吃掉，`C:\Windows\win.ini`
+   * 于是变成 `C:Windows\win.ini`，盘符规则再也认不出来（实测：加完边界复检仍然直通）。
+   * 两份文本各司其职 —— 关键词表要的是 POSIX 视角，边界层要的是 Windows 视角。
+   */
+  private static pathUnescape(text: string): string {
+    let out: string = text.replace(/\^([^\s])/g, '$1')
+    out = out.replace(/["']/g, '')
+    return out
+  }
+
+  /**
+   * 在「原文 ∪ 还原文 ∪ 折叠文 ∪ 内层命令」上跑同一条边界检查，取第一个命中。
+   * 边界（盘符绝对路径 / .. 上跳 / UNC / 盘根 / 环境变量路径）原先各自只读原文，
+   * 于是 `C:^\Windows^\win.ini` 这类「还原一次才看得出要去哪」的写法整条直通 ——
+   * 关键词表早就在这几份文本上取并集了，边界层必须用同一把尺子。
+   */
+  private static firstOverSources(sources: string[],
+    probe: (text: string) => string): string {
+    for (let i: number = 0; i < sources.length; i++) {
+      let hit: string = probe(sources[i])
+      if (hit !== '') {
+        return hit
+      }
+    }
+    return ''
+  }
+
+  // 盘根路径：cmd / PowerShell 里以**单个**反斜杠开头的写法是「当前盘根」，`\data\a.txt`
+  // 就是 `C:\data\a.txt`。前缀刻意不收引号与字母数字 —— 脚本里的 `'\n\t'`、正则里的 `\d`
+  // 都长这样，收进来等于把每一份带换行字面量的脚本都判成越界。
+  private static readonly ROOT_PATH_RE: RegExp =
+    /(?:^|[\s=,;|&(<])(\\[A-Za-z0-9_.$-][^\s"'`;|&<>()]*)/g
+
+  // 转义序列的第一段：\n \t \r \0 \a \b \f \v \x \u \N —— 这些不是路径段
+  private static readonly ESCAPE_HEAD_RE: RegExp = /^[ntr0abfvuxUN]{1,2}$/
+
+  // 「第一段 + 还有后续分隔符」（\data\a.txt）或「名字.扩展名」（\a.txt）：只认这两种形状，
+  // 单个 `\x` 与孤零零的 `\` 不在此列（它们更像转义或误敲，判了只会打扰用户）。
+  private static readonly ROOT_SHAPE_A_RE: RegExp = /^\\[^\\/]+[\\/]/
+  private static readonly ROOT_SHAPE_B_RE: RegExp = /^\\[^\\/]+\.[A-Za-z0-9]{1,6}$/
+
+  /**
+   * 找出命令里第一个指向工作区之外的「盘根」路径；没有则返回空串。
+   *
+   * 为什么单独立一条：工作区边界原先只认四种写法（盘符 / `..` / UNC / 环境变量），
+   * 而 `\data\a.txt` 一条都不沾 —— 它没有盘符、没有上跳，ABS_PATH_RE 又只认得第二段恰好叫
+   * Windows/Users 这类系统目录的形态。实测 `type \data\a.txt`、`copy \a.txt .`、
+   * `echo x > \a.txt`、`dir \` 全部零审批直通，而它们读写的是**盘根**，与工作区毫无关系。
+   * 盘根落在哪一块盘由进程 cwd（即工作区）所在的盘决定，所以拿 root 的盘符去拼再比前缀，
+   * 工作区就在盘根下时不会误伤。
+   */
+  private static firstRootPathOutside(text: string, root: string): string {
+    let drive: string = ''
+    let head: RegExpExecArray | null = /^([a-zA-Z]):[\\/]/.exec(root)
+    if (head !== null) {
+      drive = head[1].toLowerCase() + ':'
+    }
+    let normRoot: string = CommandGuard.normalizePath(root).replace(/\/+$/, '')
+    let re: RegExp = new RegExp(CommandGuard.ROOT_PATH_RE.source, 'g')
+    let match: RegExpExecArray | null = re.exec(text)
+    while (match !== null) {
+      let token: string = match[1]
+      // UNC（\\server\share）由 firstUncPathOutside 管，这里不重复报
+      if (token.indexOf('\\\\') === 0 ||
+        (!CommandGuard.ROOT_SHAPE_A_RE.test(token) && !CommandGuard.ROOT_SHAPE_B_RE.test(token))) {
+        match = re.exec(text)
+        continue
+      }
+      let first: string = token.replace(/^\\+/, '').split(/[\\/]/)[0]
+      if (CommandGuard.ESCAPE_HEAD_RE.test(first)) {
+        match = re.exec(text)
+        continue
+      }
+      if (normRoot === '') {
+        return token
+      }
+      let norm: string = CommandGuard.normalizePath(drive + token).replace(/\/+$/, '')
+      if (norm !== normRoot && norm.indexOf(normRoot + '/') !== 0) {
+        return token
+      }
+      match = re.exec(text)
+    }
+    return ''
   }
 
   // 找出命令里第一个「不在工作区内」的绝对路径；没有则返回空串
@@ -930,6 +1046,60 @@ export class CommandGuard {
       }
     }
     return ''
+  }
+
+  /**
+   * 一个 token 像不像「没有扩展名的脚本名」。
+   * 判据刻意只落在**最后一段**上：目录名带点是常态（`.smoke/bt/clean`、`v1.2/bin/tool`），
+   * 而「最后一段带扩展名」才说明它指向的是一个有类型的具体文件（a.txt、parse.py 交给 scriptRefs）。
+   */
+  private static isBareScriptName(name: string): boolean {
+    if (name === '' || name.length > 120 || !/^[A-Za-z0-9_.\\/-]+$/.test(name)) {
+      return false
+    }
+    let segs: string[] = name.split(/[\\/]/)
+    let last: string = segs[segs.length - 1]
+    return /^[A-Za-z0-9_-]+$/.test(last)
+  }
+
+  // 包一层的壳：它自己不是「要跑的那个」，真正的脚本名在它后面（call clean / start build / cmd /c clean）
+  private static readonly SCRIPT_WRAPPER_RE: RegExp =
+    /^(?:cmd|command|powershell|pwsh|bash|sh|zsh|dash|ksh|call|start|exec|sudo|doas|nohup|runas|time|env|wsl|chcp)$/i
+
+  /**
+   * 取出命令里**可能**是「裸名脚本」的那些 token。
+   *
+   * 为什么需要它：cmd 的 PATHEXT 会在裸名后面补 .bat/.cmd/.ps1… 再执行，而 scriptRefs 只按后缀筛。
+   * 于是把破坏写进 `tools\clean.bat`、再用 `call tools\clean` 调起来，整个脚本同审被跳过 ——
+   * 命令行里一个危险词都没有，脚本内容一个字都没读（实测 setup / call setup / call tools\clean /
+   * start setup 四种写法全部零审批直通）。
+   *
+   * 这里只做文本侧判断（哪些 token 可能是那个裸名），文件到底在不在由 CommandService 查 ——
+   * 纯文本层不知道 cwd 下有没有 clean.bat，也不该猜；猜的结果是每条命令都多一问。
+   */
+  static bareScriptTokens(command: string): string[] {
+    let out: string[] = []
+    let segments: string[] = command.split(CommandGuard.SEGMENT_SPLIT_RE)
+    for (let s: number = 0; s < segments.length; s++) {
+      let toks: string[] = segments[s].trim().split(/\s+/)
+      for (let i: number = 0; i < toks.length; i++) {
+        let raw: string = toks[i].replace(CommandGuard.TOKEN_EDGE_RE, '')
+        if (raw === '' || CommandGuard.LEADING_SWITCH_RE.test(raw) || /^\d+$/.test(raw)) {
+          continue
+        }
+        let bare: string = raw.replace(/\.(?:exe|com)$/i, '')
+        // 包一层的壳与它自己的开关都跳过，接着往后面找真正的名字
+        if (CommandGuard.SCRIPT_WRAPPER_RE.test(bare)) {
+          continue
+        }
+        let name: string = raw.replace(/^\.\//, '').replace(/^\.\\/, '')
+        if (CommandGuard.isBareScriptName(name) && out.indexOf(name) === -1 && out.length < 8) {
+          out.push(name)
+        }
+        break
+      }
+    }
+    return out
   }
 
   /**

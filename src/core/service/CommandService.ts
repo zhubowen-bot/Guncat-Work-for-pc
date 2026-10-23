@@ -394,6 +394,10 @@ export class CommandService {
     let forbidden: string[] = [];
     let queue: ScriptAuditItem[] = [];
     let refs: string[] = CommandGuard.scriptRefs(command);
+    // cmd 会按 PATHEXT 给裸名补后缀：`call clean` 落到的就是 clean.bat，而 scriptRefs 只认带后缀的
+    // token —— 「把破坏写进 clean.bat，再用 call clean 调起来」把整个脚本同审跳了过去（实测）。
+    // 只把**工作区里真实存在**的那几个补进来，所以不会给每条命令都添一条「脚本不存在」的风险项。
+    refs = refs.concat(CommandService.bareScriptRefs(command, cwdRel, root));
     for (let i: number = 0; i < refs.length; i++) {
       let abs: string | null = CommandService.resolveScript(refs[i], cwdRel, root);
       if (abs === null) {
@@ -439,6 +443,12 @@ export class CommandService {
         verdict.forbidden = true;
       }
       let children: string[] = CommandGuard.scriptRefs(body);
+      // 裸名引用同样跟进（脚本里写 `helper` 跑的就是 helper.bat）；只收工作区里真实存在的，
+      // 否则每一份 .bat 里的 `echo`、`dir` 都会被当成「定位不到的脚本」去追问用户。
+      let childBases: string[] = CommandService.mergeBases(item);
+      for (let b: number = 0; b < childBases.length; b++) {
+        children = children.concat(CommandService.bareScriptRefs(body, childBases[b], root));
+      }
       if (children.length === 0) {
         continue;
       }
@@ -531,6 +541,38 @@ export class CommandService {
       return nAbs.substring(nRoot.length + 1);
     }
     return nAbs === nRoot ? '' : nAbs;
+  }
+
+  // 裸名可能被 PATHEXT 补成的后缀。只收「能给 shell/解释器执行」的那几个：
+  // .exe/.com 这类二进制读不出内容，把它算进来等于让「跑一个工作区里的可执行文件」每条都要批准。
+  private static readonly BARE_SCRIPT_EXTS: string[] = [
+    '.bat', '.cmd', '.ps1', '.psm1', '.vbs', '.js', '.mjs', '.cjs', '.py', '.sh', '.wsf'
+  ];
+
+  /**
+   * 「无后缀的脚本名」→ 工作区里真实存在的那份脚本。
+   *
+   * cmd 的 PATHEXT 会在裸名后面补 .bat/.cmd/.ps1… 再执行，而 CommandGuard.scriptRefs 只按后缀筛，
+   * 于是 `call tools\clean` 把 tools\clean.bat 整个跳过了同审（实测四种裸名写法全部零审批）。
+   * 这里只补**真实存在**的文件：文本层不知道 cwd 下有什么，猜的结果是每条命令都多一条
+   * 「脚本在工作区里还不存在」的风险项（那样连 `git status` 都要人点一下）。
+   */
+  private static bareScriptRefs(text: string, baseRel: string, root: string): string[] {
+    let tokens: string[] = CommandGuard.bareScriptTokens(text);
+    let refs: string[] = [];
+    for (let i: number = 0; i < tokens.length; i++) {
+      for (let e: number = 0; e < CommandService.BARE_SCRIPT_EXTS.length; e++) {
+        let rel: string = tokens[i] + CommandService.BARE_SCRIPT_EXTS[e];
+        let abs: string | null = CommandService.resolveScript(rel, baseRel, root);
+        if (abs === null || !fileIo.accessSync(abs)) {
+          continue;
+        }
+        if (refs.indexOf(rel) === -1) {
+          refs.push(rel);
+        }
+      }
+    }
+    return refs;
   }
 
   private static readScript(abs: string): string | null {

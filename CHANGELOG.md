@@ -10,6 +10,33 @@
 
 ## 未发布
 
+### 修复：边界层读错了文本，脚本同审漏了「没写后缀」的引用
+
+第九轮实测（跑真实 `CommandGuard.assess` / `assessScript`，不靠推演）又找到两类**零审批直通**：
+
+- **工作区边界只检查了「原文」**。关键词表那条路一直用的是「原文 ∪ 还原文 ∪ 折叠文」，
+  边界层（盘符绝对路径 / `..` 上跳 / UNC / 环境变量路径）却各自只读 `trimmed`。于是 cmd 的
+  caret 转义把整条边界跳了过去：`type C:^\Windows^\win.ini` 执行时就是 `C:\Windows\win.ini`，
+  `type ^.^.\secret.txt` 执行时就是 `..\secret.txt`，而文本里既没有盘符也没有 `..` —— 两条都返回
+  「放行」。现在边界检查跑在专门的一份「去伪装文本」上（`pathUnescape`：只去 `^` 与引号、
+  **不动反斜杠**）。刻意不复用 `unobfuscate`：它按 POSIX 规则把 `\W` 当转义吃掉，
+  `C:\Windows\win.ini` 会变成 `C:Windows\win.ini`，盘符规则照样认不出（实测踩过）。
+- **「盘根」写法根本不在边界模型里**。`\data\a.txt` 就是 `C:\data\a.txt`：没有盘符、没有 `..`，
+  而 `ABS_PATH_RE` 只认得第二段恰好叫 Windows/Users 这类系统目录的形态 —— 于是
+  `type \data\a.txt`、`copy \a.txt .`、`echo x > \a.txt` 全都能读写盘根。现在单独识别
+  「以单个反斜杠开头、第一段后还有分隔符或带扩展名」的 token，并按工作区所在盘拼出全路径比前缀
+  （工作区就在盘根下时不误伤）；只认两种形状，`'\n'`、`'\t'`、正则里的 `\d` 这类转义字面量不算路径。
+- **无后缀的脚本引用绕过了脚本同审**。cmd 会按 PATHEXT 给裸名补 `.bat/.cmd/.ps1…` 再执行，
+  而 `scriptRefs` 只按后缀筛 —— 把 `del /s /q …` 写进 `tools\clean.bat`、再用
+  `call tools\clean` 调起来，命令行里一个危险词都没有、脚本内容一个字都没读，整条零审批直通
+  （`setup`、`call setup`、`call tools\clean`、`start setup` 四种写法实测全部放行）。
+  现在文本层用 `bareScriptTokens` 挑出「最后一段没有扩展名」的命令位 token，由 `CommandService`
+  按 PATHEXT 候选后缀去**查真实存在的文件**再交出去同审；只收查得到的，所以 `git status`、
+  `npm run build` 这类不会凭空多出一条「脚本不存在」的风险项。脚本内部再引用裸名同样跟进。
+
+三处都补进了 `scripts/ipc-check.mjs`：判定层（越界必判危险、正常路径与转义字面量不得被误伤、
+裸名 token 的提取）与集成层（`call guard-audit\barewipe` 要弹出审批卡、拒绝后 `victim.txt` 还在）。
+
 ### 修复：两条「零审批直通」的高危通道
 
 第七轮实测（跑真实 `CommandGuard.assess`，不靠推演）发现两类命令在 auto 档下**根本不进审阅器**：

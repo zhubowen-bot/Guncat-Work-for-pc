@@ -3557,6 +3557,42 @@ check(
     CommandGuard.assess(c, cmdRoot).reasons.some((r) => r.includes('工作区之外'))),
   UNC_ESCAPE_CMDS.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
 )
+// 第九轮实测：边界层原先只读原文，而关键词表看的是「原文 ∪ 还原文」——于是 cmd 的 ^ 转义
+// （`type C:^\Windows^\win.ini` 执行时就是 C:\Windows\win.ini）把整条越界检查跳了过去。
+// 另一条是「盘根」写法（`\data\a.txt` 就是 C:\data\a.txt）：既没有盘符也没有 ..，
+// 而 ABS_PATH_RE 只认第二段叫 Windows/Users 的形态，于是读写的其实是盘根。
+const BOUNDARY_ESCAPE_CMDS = [
+  'type C:^\\Windows^\\win.ini',
+  'dir C:^\\Users',
+  'type ^.^.\\secret.txt',
+  'type \\data\\a.txt',
+  'copy \\a.txt .',
+  'echo x > \\a.txt'
+]
+check(
+  '边界层看的是「原文 ∪ 去伪装后的文本」：^ 转义与盘根写法一样算越界',
+  BOUNDARY_ESCAPE_CMDS.every((c) => CommandGuard.assess(c, cmdRoot).risky &&
+    CommandGuard.assess(c, cmdRoot).reasons.some((r) => r.includes('工作区之外'))),
+  BOUNDARY_ESCAPE_CMDS.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
+check(
+  '边界层的两条新规则不打扰正常工作区路径，也不把脚本里的转义字面量当路径',
+  ['type README.md', 'node .smoke_tmp\\x.js', 'dir src\\core', 'copy a b', 'dir /b /s'].every(
+    (c) => !CommandGuard.assess(c, cmdRoot).forbidden && !CommandGuard.assess(c, cmdRoot).risky
+  ) &&
+    !CommandGuard.assessScript("const nl = '\\n'\nconst tab = '\\t'\nconst re = /\\d+/g\n", cmdRoot).risky,
+  ['type README.md', 'node .smoke_tmp\\x.js', 'dir src\\core', 'copy a b', 'dir /b /s']
+    .filter((c) => CommandGuard.assess(c, cmdRoot).forbidden ||
+      CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
+// 无后缀的脚本名：cmd 的 PATHEXT 会补后缀，scriptRefs 只认带后缀的 token（见下一节集成用例）
+check(
+  '无后缀脚本名由文本层挑出来（文件在不在交给 CommandService 查，猜会给每条命令添一问）',
+  CommandGuard.bareScriptTokens('call guard-audit\\barewipe').join() === 'guard-audit\\barewipe' &&
+    CommandGuard.bareScriptTokens('start tools\\clean').join() === 'tools\\clean' &&
+    CommandGuard.bareScriptTokens('npm run build').join() === 'npm' &&
+    CommandGuard.bareScriptTokens('python parse.py data.json').join() === 'python'
+)
 const SYS_ADMIN_FORBIDDEN = [
   'format C', 'format C:', 'format /FS:NTFS D:', 'vssadmin delete shadows /for=C: /all /quiet',
   'wbadmin delete systemstatebackup -keepVersions:0 -quiet',
@@ -4173,6 +4209,35 @@ const ghostRes = await ghostPromise
 check(
   '定位不到的引用被拒 → 不执行',
   ghostRes.ok === false && ghostRes.output.includes('命令未执行')
+)
+
+// —— 第九轮：无后缀的脚本引用（cmd 的 PATHEXT 会补 .bat，而 scriptRefs 只按后缀筛）——
+// 命令行里一个危险词都没有、脚本一个字都没读：`call guard-audit\barewipe` 跑的就是
+// guard-audit\barewipe.bat，原来整条零审批直通。
+fs.writeFileSync(path.join(auditDir, 'barewipe.bat'),
+  '@echo off\r\ndel /q guard-audit\\victim.txt\r\n')
+fs.writeFileSync(path.join(auditDir, 'victim.txt'), 'still here\n')
+events.length = 0
+const barePromise = CommandService.run(convCmd.id, cmdRoot, { command: 'call guard-audit\\barewipe' }, null)
+const bareAsk = await waitForEvent((e) => e.type === 'ask:user')
+check(
+  '无后缀的脚本引用同样交出去同审（call guard-audit\\barewipe 跑的是 barewipe.bat）',
+  bareAsk !== null && bareAsk.question.includes('barewipe.bat') &&
+    bareAsk.question.includes('删除文件'),
+  bareAsk === null ? '(没有审批卡)' : bareAsk.question.slice(0, 240)
+)
+await inv('work:answer', {
+  conversationId: convCmd.id,
+  requestId: bareAsk === null ? '' : bareAsk.requestId,
+  canceled: false,
+  selections: ['拒绝'],
+  note: ''
+})
+const bareRes = await barePromise
+check(
+  '裸名脚本被拒 → 不执行（victim.txt 还在）',
+  bareRes.ok === false && bareRes.output.includes('命令未执行') &&
+    fs.existsSync(path.join(auditDir, 'victim.txt'))
 )
 
 // —— 超过审阅层级同样转审批（封顶是成本考虑，但被挡掉的那一段绝不能算审过了）——
