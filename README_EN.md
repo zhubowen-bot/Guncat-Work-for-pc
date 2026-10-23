@@ -6,9 +6,8 @@
 > protocols, multi-turn tool loops with a sandboxed workspace, one-prompt interactive UIs, direct
 > Office output, and a **command execution path that has been through a real security audit**.
 >
-> It is one of **two parallel product lines** alongside the HarmonyOS version,
-> **[Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)**: the same product shape and
-> capability set, with independent platform implementations, release cadence and version numbers.
+> The HarmonyOS version is [Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)
+> (ArkTS / ArkUI).
 
 ![Electron](https://img.shields.io/badge/Electron-38-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
@@ -21,18 +20,6 @@
 ![shell audit](https://img.shields.io/badge/shell%20audit-163%20rules-red)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 [![CI](https://github.com/zhubowen-bot/Guncat-Work-for-pc/actions/workflows/ci.yml/badge.svg)](https://github.com/zhubowen-bot/Guncat-Work-for-pc/actions/workflows/ci.yml)
-
-## Two parallel projects
-
-| Project | Stack | Platform |
-| --- | --- | --- |
-| **Guncat Work (Desktop)** · this repository | Electron + React + TypeScript | Windows desktop |
-| [Guncat Work (HarmonyOS)](https://github.com/zhubowen-bot/Guncat-Work-for-hmos) | ArkTS / ArkUI | HarmonyOS |
-
-They share the same product shape and capability set (three modes, 45 tools, 37 skills, the
-`guncat-ui lang` renderer), but the code, release cadence and version numbers are **independent** —
-this is not an "upstream / downstream" relationship. The desktop platform adaptation and the
-implementation differences from the HarmonyOS version are recorded in [docs/PORTING.md](docs/PORTING.md).
 
 ## Three modes
 

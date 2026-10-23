@@ -6,8 +6,7 @@
 > 多轮工具循环与沙箱工作区、一句话直出的交互界面、桌面直出 Office，以及一条**经过系统安全审计的
 > 命令执行链路**。
 >
-> 与鸿蒙版 **[Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)** 是并行的两条
-> 产品线：同一个产品形态与能力口径，各自独立的平台实现、发布节奏与版本号。
+> 鸿蒙版见 [Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)（ArkTS / ArkUI）。
 
 <!-- 演示位（可选升级）：一段 30–60 秒的录屏 —— 进入工作模式 → 一句话生成 PPT → 产物卡片展开 → 切到交互模式拖滑块重算。动态 GIF 比静态截图更有说服力。 -->
 
@@ -22,17 +21,6 @@
 ![shell audit](https://img.shields.io/badge/shell%20audit-163%20rules-red)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 [![CI](https://github.com/zhubowen-bot/Guncat-Work-for-pc/actions/workflows/ci.yml/badge.svg)](https://github.com/zhubowen-bot/Guncat-Work-for-pc/actions/workflows/ci.yml)
-
-## 两个并行项目
-
-| 项目 | 技术栈 | 平台 |
-| --- | --- | --- |
-| **Guncat Work（电脑版）** · 本仓库 | Electron + React + TypeScript | Windows 桌面 |
-| [Guncat Work（鸿蒙版）](https://github.com/zhubowen-bot/Guncat-Work-for-hmos) | ArkTS / ArkUI | HarmonyOS |
-
-两者共享同一套产品形态与能力口径（三种模式、45 个工具、37 项技能、`guncat-ui lang` 渲染器），
-但代码、发布节奏与版本号**各自独立**——不是「上游 / 下游」关系。桌面端相对鸿蒙版的平台适配与
-实现差异，记录在 [docs/PORTING.md](docs/PORTING.md)。
 
 ## 三个形态
 

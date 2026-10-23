@@ -1,6 +1,6 @@
 # 参与贡献
 
-感谢你有兴趣参与。Guncat Work（电脑版）与[鸿蒙版 Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)是**并行的两条产品线**：同一个产品形态与能力口径，各自独立的平台实现、发布节奏与版本号。电脑版用 **Electron + React + TypeScript** 实现，业务内核（Agent Loop、三协议流式对话、45 个工具、37 项技能、Office 生成器、`guncat-ui lang` 渲染器）在桌面运行时上独立维护。
+感谢你有兴趣参与。Guncat Work（电脑版）用 **Electron + React + TypeScript** 实现；鸿蒙版见 [Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)。业务内核（Agent Loop、三协议流式对话、45 个工具、37 项技能、Office 生成器、`guncat-ui lang` 渲染器）在桌面运行时上独立维护。
 
 这个仓库对「改动是否可靠」的要求比较高 —— 它做的事情（Agent 循环、文档生成、IPC 契约、界面渲染）出错时很难靠肉眼发现，所以下面这套验证流程不是形式主义，**每一层都在拦真实发生过的事故**。
 
