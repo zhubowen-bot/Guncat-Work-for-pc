@@ -28,6 +28,9 @@ workspaces/
 # 工具输出超长时的落盘暂存（每次调用现生成，不入库）
 .spill/
 
+# Agent 会话内的任务清单（运行时状态，不入库）
+.todo.json
+
 # esbuild 的临时目录（Windows 上系统 TEMP 会报 Access is denied，故固定到项目内）
 .tmp/
 .npm-cache/
