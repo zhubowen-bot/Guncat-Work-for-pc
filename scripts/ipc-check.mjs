@@ -3420,8 +3420,8 @@ check(
   CommandGuard.assess('de^l /q victim.txt', cmdRoot).reasons.some((r) => r.includes('还原'))
 )
 check(
-  '混淆写法不影响「位置越界」这一层：^ 拆词 + 上跳两样同时报出来',
-  ['de^l /q ..\\out.txt', 'del /q C:\\Windows\\win.ini'].every(
+  '混淆写法不影响「位置越界」这一层：^ 拆词 + 上跳/圈外绝对路径两样同时报出来',
+  ['de^l /q ..\\out.txt', 'de^l /q C:\\Users\\me\\notes.txt'].every(
     (c) => CommandGuard.assess(c, cmdRoot).risky &&
       CommandGuard.assess(c, cmdRoot).reasons.some((r) => r.includes('工作区之外'))
   )
@@ -3472,8 +3472,9 @@ check(
 )
 check(
   'sc 与 netsh 进危险名单（net stop 早就有、sc stop 却没有，是同一个效果的漏判）',
+  // netsh 的**总开关**（advfirewall state off）在第十二轮升成了硬禁，这里换一条同为改网络的写法。
   ['sc stop guncat_probe', 'sc delete guncat_probe', 'cmd /c "sc query wuauserv"',
-    'netsh advfirewall set allprofiles state off'].every(
+    'netsh interface ip set address "Ethernet" static 10.1.2.3 255.255.255.0'].every(
     (c) => CommandGuard.assess(c, cmdRoot).risky
   )
 )
@@ -3628,15 +3629,18 @@ check(
 const SYS_ADMIN_FORBIDDEN = [
   'format C', 'format C:', 'format /FS:NTFS D:', 'vssadmin delete shadows /for=C: /all /quiet',
   'wbadmin delete systemstatebackup -keepVersions:0 -quiet',
-  'fsutil file setzerodata /offset:0 /length:1024 a.txt', 'fsutil usn deletejournal /D C:'
+  'fsutil file setzerodata /offset:0 /length:1024 a.txt', 'fsutil usn deletejournal /D C:',
+  // /R 与 /X 导出 EFS 恢复证书+私钥到文件：等于把「解密这台机器上所有受保护文件」的钥匙
+  // 写进一个普通文件（实测 cipher /x 静默执行），/E 只是加密、仍留在危险档。
+  'cipher /x', 'cipher /r:efs.pfx'
 ]
 check(
-  '系统级毁灭操作进硬禁表（不给审批入口）：format 不带冒号、删卷影、删备份、抹内容/日志',
+  '系统级毁灭操作进硬禁表（不给审批入口）：format 不带冒号、删卷影、删备份、抹内容/日志、导出 EFS 恢复密钥',
   SYS_ADMIN_FORBIDDEN.every((c) => CommandGuard.assess(c, cmdRoot).forbidden),
   SYS_ADMIN_FORBIDDEN.filter((c) => !CommandGuard.assess(c, cmdRoot).forbidden).join(' | ')
 )
 const SYS_ADMIN_RISKY = [
-  'vssadmin /?', 'wbadmin enable backup', 'fsutil volume diskfree C:', 'cipher /x',
+  'vssadmin /?', 'wbadmin enable backup', 'fsutil volume diskfree C:',
   'cipher /e:c:\\users\\me\\secrets', 'assoc .txt=txtfile', 'ftype txtfile=notepad.exe %1',
   'ren _shelltest\\f.txt f2.txt', 'rename a.txt b.txt', 'type nul > _shelltest\\g.txt',
   'copy nul _shelltest\\l.txt', 'copy /y a.txt b.txt', 'xcopy /y src dist',
@@ -3868,6 +3872,88 @@ check(
   '迁移结果不对'
 )
 
+// —— 第十二轮：拿 destructive_command_guard 的规则包逐条比对现有词表之后补的实测洞 ——
+// 根因只有一句话：**同一个破坏动作换了一套 API 名字，就等于没登记**。词表是按「POSIX 那半」写的，
+// 于是 PowerShell 的存储 cmdlet、分区与卷管理工具、关机 cmdlet、WMI 版卷影删除、Defender/防火墙
+// 总开关、审计日志清空、EFS 恢复密钥导出、macOS 的 bless --setboot 全部零审批直通。
+// 这一族不叫 del、不叫 rm，命令行上一个传统危险词都没有。
+const R12_FORBIDDEN = [
+  'Format-Volume -DriveLetter C', 'Clear-Disk -Number 0 -RemoveData',
+  'Remove-Partition -DriveLetter D', 'Remove-Volume -DriveLetter E',
+  'Initialize-Disk -Number 1', 'Reset-PhysicalDisk -FriendlyName XYZ',
+  'wipefs -a /dev/sda', 'fdisk /dev/sda', 'sgdisk --zap-all /dev/nvme0n1',
+  'mdadm --stop /dev/md0', 'lvremove /dev/vg0/lv0', 'pvmove /dev/sdb',
+  'zpool destroy tank', 'zfs destroy tank/data', 'diskutil eraseDisk NTFS X disk4',
+  'btrfs subvolume delete /data/vol',
+  'Stop-Computer', 'Restart-Computer -Force', 'systemctl poweroff', 'init 0', 'telinit 6',
+  'Set-MpPreference -DisableRealtimeMonitoring $true', 'Add-MpPreference -ExclusionPath C:\\',
+  'netsh advfirewall set allprofiles state off',
+  'Set-Service -Name WinDefend -StartupType Disabled', 'sc config WinDefend start= disabled',
+  'auditpol /clear /y', 'Clear-EventLog -LogName System',
+  'Remove-EventLog -LogName ForwardedEvents', 'Disable-ComputerRestore -Drive "C:\\',
+  'cipher /x:efs.pfx', 'cipher /r:efs.pfx',
+  'Get-WmiObject Win32_ShadowCopy | ForEach-Object { $_.Delete() }',
+  'wmic path Win32_LogicalDisk delete', 'wmic volume delete C:\\',
+  'wsl --unregister Ubuntu', 'manage-bde -off C:',
+  'userdel -r alice', 'sysadminctl -deleteUser alice',
+  'bless --folder /Volumes/X/System/Library/CoreServices --setboot'
+]
+check(
+  '第十二轮：磁盘/卷级销毁、关机器防护、清审计日志、导凭据一律硬禁（不给审批入口）',
+  R12_FORBIDDEN.every((c) => CommandGuard.assess(c, cmdRoot).forbidden),
+  R12_FORBIDDEN.filter((c) => !CommandGuard.assess(c, cmdRoot).forbidden).join(' | ')
+)
+// 「删除的落点」比「删除的动词」更值得判：这些命令文本上没有危险词，只有操作数。
+const R12_TARGET = [
+  'rd /s /q C:\\', 'Remove-Item C:\\ -Recurse -Force', 'rm -rf /home', 'rm -rf ~/Documents',
+  'echo x > /etc/passwd', 'Set-Content -Path /etc/sudoers -Value x'
+]
+check(
+  '第十二轮：落点是系统根/主目录/关键系统文件的删除与覆盖判硬禁（不问动词问操作数）',
+  R12_TARGET.every((c) => CommandGuard.assess(c, cmdRoot).forbidden),
+  R12_TARGET.filter((c) => !CommandGuard.assess(c, cmdRoot).forbidden).join(' | ')
+)
+check(
+  '第十二轮：这些新规则同样吃得住转义 —— 词内插 ^、词与词之间插 ^ 都还原后再判',
+  ['Form^at-Volume -DriveLetter C', 'Cl^ear-EventLog -LogName System',
+    'r^eg^ save^ HKLM\\SAM out.bin',
+    'Get-WmiObject Win32_ShadowCopy | F^orEach-Object { $_.Delete() }'].every(
+    (c) => CommandGuard.assess(c, cmdRoot).forbidden),
+  ['Form^at-Volume -DriveLetter C', 'Cl^ear-EventLog -LogName System',
+    'r^eg^ save^ HKLM\\SAM out.bin',
+    'Get-WmiObject Win32_ShadowCopy | F^orEach-Object { $_.Delete() }']
+    .filter((c) => !CommandGuard.assess(c, cmdRoot).forbidden).join(' | ')
+)
+const R12_RISKY = [
+  'Set-Disk -Number 0 -IsOffline $true', 'Optimize-Volume -DriveLetter C',
+  'Invoke-CimMethod -ClassName Win32_Service -MethodName StopService',
+  'Get-CimInstance Win32_ShadowCopy | Remove-CimInstance',
+  'Limit-EventLog -LogName System -BackupRetentionCount 0',
+  'softwareupdate --remove 1234', 'defaults write com.apple.Finder AppleShowAllFiles true',
+  'ifconfig eth0 down', 'resolvconf -u', 'nmcli networking off',
+  'journalctl --vacuum-size=1', 'history -c', 'dmesg -C',
+  'reg add HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Up /d evil.exe',
+  'npm exec some-tool', 'pnpm dlx some-tool', 'bunx some-tool',
+  'tar xzf backup.tgz', 'unzip pack.zip',
+  'git config --unset core.pager', 'git apply patch.diff'
+]
+check(
+  '第十二轮：换名字的破坏动作与「开机自启不带 Run\\ 尾斜杠」「tar 不带横杠的解包」至少转审批',
+  R12_RISKY.every(hit4),
+  R12_RISKY.filter((c) => !hit4(c)).join(' | ')
+)
+check(
+  '第十二轮的新规则不打扰日常写法（列目录、查状态、读配置照旧静默）',
+  ['tar cf out.tar src', 'tar tzvf out.tar.gz', 'unzip -l pack.zip', 'wevtutil gl Security',
+    'npm run build', 'journalctl -u nginx', 'defaults read com.apple.Finder',
+    'softwareupdate --list', 'Get-Disk', 'Get-Volume', 'diskutil list', 'zfs list'].every(
+    (c) => !hit4(c)),
+  ['tar cf out.tar src', 'tar tzvf out.tar.gz', 'unzip -l pack.zip', 'wevtutil gl Security',
+    'npm run build', 'journalctl -u nginx', 'defaults read com.apple.Finder',
+    'softwareupdate --list', 'Get-Disk', 'Get-Volume', 'diskutil list', 'zfs list']
+    .filter(hit4).join(' | ')
+)
+
 // —— 工具面：命令工具确实下发给工作模式，且被交互模式物理裁掉 ——
 WorkFileService.toolRegistrySynced()
 check(
@@ -4069,6 +4155,38 @@ for (const hole of [
   const card = await askFor(hole[0])
   check(
     '第六轮穿透项真的弹卡并拒绝执行: ' + hole[0].slice(0, 28),
+    card.askEvent !== null && card.askEvent.question.includes(hole[1]) &&
+      card.result.ok === false && card.result.output.includes('命令未执行'),
+    card.askEvent === null ? '(没有审批卡)' : card.askEvent.question.slice(0, 80)
+  )
+}
+
+// —— 第十二轮穿透项的端到端：新登记的形态要真的走到执行层（参数一律用不存在的盘/号，
+//     万一判定退化也不会真去动这台机器的磁盘；这里断言的是「硬禁不给卡、危险给卡且写明理由」）——
+for (const hard of [
+  ['Format-Volume -DriveLetter Q', '磁盘/卷级销毁'],
+  ['Clear-Disk -Number 99 -RemoveData', '磁盘/卷级销毁'],
+  ['Remove-EventLog -LogName ProbeNoSuchLog', '销毁事后现场'],
+  ['vssadmin delete shadows /for=Q: /quiet', '删除卷影副本'],
+  ['bless --device /dev/disk99s9 --setboot', '改写 macOS 启动卷']
+]) {
+  events.length = 0
+  const res = await CommandService.run(convCmd.id, cmdRoot, { command: hard[0] }, null)
+  check(
+    '第十二轮硬禁项直接拒绝且不给审批入口: ' + hard[0].slice(0, 26),
+    res.ok === false && res.output.includes('安全策略拒绝') &&
+      !events.some((e) => e.type === 'ask:user'),
+    events.some((e) => e.type === 'ask:user') ? '(弹了卡)' : res.output.slice(0, 100)
+  )
+}
+for (const hole of [
+  ['Set-Disk -Number 99 -IsOffline $true', '改分区/挂载点'],
+  ['tar xzf probe-backup.tar', '解包归档'],
+  ['npm exec some-probe-tool-xyz', 'registry']
+]) {
+  const card = await askFor(hole[0])
+  check(
+    '第十二轮危险项真的弹卡并拒绝执行: ' + hole[0].slice(0, 26),
     card.askEvent !== null && card.askEvent.question.includes(hole[1]) &&
       card.result.ok === false && card.result.output.includes('命令未执行'),
     card.askEvent === null ? '(没有审批卡)' : card.askEvent.question.slice(0, 80)

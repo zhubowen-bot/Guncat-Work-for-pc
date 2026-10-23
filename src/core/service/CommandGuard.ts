@@ -66,16 +66,72 @@ export class CommandGuard {
     { re: /\b(?:shutdown|reboot|poweroff)\b/i, why: '关机/重启整台机器' },
     { re: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:/i, why: 'fork 炸弹' },
     { re: /\brm\s+(?:-[^\s]*\s+)*\/(?:\*|\s|$)/i, why: '删除根目录' },
-    { re: /\brm\s+(?:-[^\s]*\s+)*(?:~|\$HOME|%USERPROFILE%)(?:\s|\/|$)/i, why: '删除用户主目录' },
+    // 「删主目录」只认主目录**本身**（含 `~/*` 这种整体通配，它由灾难目标层判）。
+    // 原来的写法带 `\/` 一支，把 `rm -rf ~/projects` 这种「主目录底下的一个子目录」也说成
+    // 「删除用户主目录」—— 硬禁没有审批入口，理由又写错了，属于最坏的一类误判（见 firstDisasterTarget）。
+    { re: /\brm\s+(?:-[^\s]*\s+)*(?:~|\$HOME|%USERPROFILE%)(?:\s|[&;|]|$)/i, why: '删除用户主目录' },
     { re: /\bchmod\s+(?:-[^\s]*\s+)*777\s+\//i, why: '把系统目录改成全局可写' },
     { re: /\breg\s+delete\s+"?\s*hklm/i, why: '删除机器级注册表项' },
     { re: /\bbcdedit\b/i, why: '修改系统引导配置' },
+    // macOS 上改启动卷的是 bless，跟 bcdedit 干同一件事（原先只登记了「bless 指向 /Volumes」这一种，
+    // `bless --setboot /dev/disk1s1` 直通）。指错了分区就是重启起不来，智能体没有正当需求。
+    { re: /(?:^|[\s;&|(])bless\b[^\n|;]*(?:--setboot|-setBoot|--boot-info|--quiet\s+--mount)/i,
+      why: '改写 macOS 启动卷/引导信息（改坏后机器起不来）' },
     { re: /\bcipher\s+\/w\b/i, why: '擦除磁盘空闲空间' },
+    // /R 与 /X 导出 EFS 恢复证书+私钥到文件：等于把「解密这台机器上所有受保护文件」的钥匙
+    // 写到一个普通文件里，之后被谁读走都不知道（实测 cipher /x 静默执行）。
+    // /E 只是加密，不改数据也不外泄，留在危险档。
+    { re: /\bcipher\s+\/(?:r|x)/i, why: '导出 EFS 恢复密钥（等于交出这台机器所有受保护文件的钥匙）' },
     // 卷影副本是「删掉就没了」的那一类：还原点、系统状态备份、USN 日志被清之后，
     // 用户连回滚到自己没注意的那一刻都做不到（实测 vssadmin/wbadmin/fsutil 全不在表里）。
     { re: /\bvssadmin\b[^\n]*delete\s+shadows/i, why: '删除卷影副本（还原点不可恢复）' },
     { re: /\bwbadmin\b[^\n]*\bdelete\b/i, why: '删除系统状态备份/备份目录' },
-    { re: /\bfsutil\b[^\n]*(?:setzerodata|deletejournal|deletevolume)/i, why: '抹掉文件内容或卷日志' }
+    { re: /\bfsutil\b[^\n]*(?:setzerodata|deletejournal|deletevolume|volume\s+dismount|usn\s+deletejournal)/i, why: '抹掉文件内容、卷日志或卸载卷' },
+    // —— 下面这几族是拿 destructive_command_guard 的规则包逐条比对现有词表后补的实测空洞
+    //    （它的 pack 按「同一破坏动作的所有方言写法」组织，而我原先只登记了 POSIX 那一半）。
+    //    共同根因：**破坏动作换了 API 名字就等于没登记**。PowerShell 的存储 cmdlet、磁盘工具、
+    //    关机 cmdlet、WMI 版卷影删除全部零审批直通。
+    { re: /\b(?:Format-Volume|Clear-Disk|Initialize-Disk|Reset-PhysicalDisk|Remove-(?:Partition|Volume|VirtualDisk|StoragePool|PhysicalDisk|SnapShot|IscsiTarget))\b(?![\w-])/i,
+      why: '磁盘/卷级销毁（PowerShell 存储 cmdlet）' },
+    // 分区表与卷管理工具：写坏一次就整盘不可读，智能体没有任何正当需求要动它们（只读形态一并算进来）。
+    { re: /(?:^|[\s;&|(\\/])@?(?:wipefs|fdisk|cfdisk|sfdisk|parted|gdisk|sgdisk|mkswap|newfs|dmsetup|mdadm|lvm|lvremove|vgremove|pvremove|lvreduce|lvconvert|vgexport|pvmove)(?:\.exe)?\b/i,
+      why: '分区表/逻辑卷管理工具（改坏即整盘不可读）' },
+    { re: /\b(?:zpool\s+destroy|zfs\s+(?:destroy|rollback)|diskutil\s+(?:erase\w*|reformat|partitionDisk)|hdiutil\s+erase|btrfs\s+(?:subvolume\s+delete|filesystem\s+(?:rm|delete)|device\s+(?:delete|remove))|logical\w*\s+(?:rmdir|dlvrm))\b/i,
+      why: '销毁文件系统卷/镜像（ZFS、APFS、Btrfs 侧的同一件事）' },
+    // 关机原先只有 shutdown|reboot|poweroff 三个词：PowerShell 的 cmdlet、systemctl 的另外几个目标、
+    // 切运行级别与注销整台机器的写法都不在表里（实测 Stop-Computer、init 0 一路直通）。
+    { re: /\b(?:Stop-Computer|Restart-Computer)\b|\b(?:systemctl|service)\s+(?:halt|poweroff|reboot)\b|\b(?:init|telinit)\s+[016]\b/i,
+      why: '关机/重启/切换运行级别整台机器' },
+    // 「把机器自身的防护关掉」这一整类原先一个字都没有：它删的不是用户的数据，而是**事后能看见什么**，
+    // 而且智能体没有任何正当需求要做它（实测 Defender 豁免、防火墙总开关、审计策略清空全部直通）。
+    { re: /\bSet-MpPreference\b[^\n|;]*(?:-Disable\w+|EnableControlledFolderAccess\s+Disabled)|\bAdd-MpPreference\b[^\n|;]*-Exclusion\w*|\bDisable(?:AntiSpyware|AntiVirus|RealtimeMonitoring|BehaviorMonitoring|IOAVProtection|OnAccessProtection|ScriptControlledFolderAccess|NetworkInspectionSystemMonitoring)\b/i,
+      why: '关闭或豁免 Microsoft Defender 实时防护（把机器防护关掉）' },
+    { re: /\bnetsh\s+(?:adv)?firewall\b[^\n|;]*(?:state\s+(?:off|disable)|opmode\s+disable|firewallpolicy\s+allow\s*,\s*allow)|\b(?:Set-NetFirewallProfile|Set-FirewallRule)\b[^\n|;]*-Enabled\s+\$?false|\bSet-Service\b[^\n|;]*(?:WinDefend|wscsvc|SecurityHealthService|mpssvc|SharedAccess|SgrmBroker|UsoSvc|ufas)[^\n|;]*(?:Disabled|Manual)|\bsc\b[^\n|;]*config[^\n|;]*(?:WinDefend|wscsvc|SecurityHealthService|mpssvc|SharedAccess|SgrmBroker)\b[^\n|;]*start=\s*(?:disabled|manual)/i,
+      why: '关闭系统防火墙或停用安全服务' },
+    // Clear-/Remove-EventLog 换成「清任意日志名」都算销毁现场：原先要求文本里出现 Security/Setup，
+    // 结果 `Clear-EventLog -LogName System` 静默执行（实测）。Limit-EventLog 是改保留策略，落危险档。
+    { re: /\bauditpol\s+\/(?:clear|set)\b|\bwevtutil\s+(?:cl|el)\s+(?:Security|Setup|ForwardedEvents|Microsoft-Windows-[\w-]+)(?:\s|$|")|\b(?:Clear-EventLog|Remove-EventLog)\b(?![\w-])|\bDisable-ComputerRestore\b/i,
+      why: '清空审计/安全日志或关掉系统还原（销毁事后现场）' },
+    { re: /\b(?:ntdsutil|secedit\s+\/(?:configure|import|export)|lpkcmdutil)\b|\bwevtutil\s+(?:sl|el)\s+(?:Security|Setup)\b/i,
+      why: '改写系统安全策略/目录服务底层设置' },
+    // 凭据库导出与 lsass 内存转储：拿到就等于整台机器的登录态，属于「无论如何不该由智能体做」。
+    { re: /\breg\s+(?:save|export|load|restore)\s+"?\s*hklm\\(?:sam|security|system|components)\b|\bcomsvcs\.dll\b[^\n|;]*(?:MiniDump|DumpFull)|\b(?:mimikatz|sekurlsa|lsassdump|nanodump|ppldump|safetydump)\b|\b(?:procdump|createdump)\b[^\n|;]*lsass|\b(?:dpapi::\w+|masterkey|backupkey)\b|\bg-sepdi\b|\bninjaodump\b/i,
+      why: '导出系统凭据库或转取 lsass 内存（登录态外泄）' },
+    // 删卷影原先只认 vssadmin 那一种拼法：WMI/CIM 走的是同一个底层对象（实测两条直通）。
+    // 对象名与方法之间常隔着管道（`Get-WmiObject Win32_ShadowCopy | ForEach-Object { $_.Delete() }`），
+    // 所以这一段的间隔允许 `|`，只锁同一行、并限长，避免跨语句误伤。
+    { re: /\bwmic\b[^\n|;]*shadowcopy[^\n|;]*\bdelete\b|Win32_ShadowCopy[^\n]{0,120}(?:Remove-WmiObject|Remove-CimInstance|\.Delete\s*\(|DeleteInstance)|\b(?:Remove-WmiObject|Remove-CimInstance)\b[^\n|;]*(?:ShadowCopy|RestorePoint|Backup)/i,
+      why: '删除卷影副本（还原点不可恢复）' },
+    // 同一个 API 换对象名就是另一件事：`wmic path Win32_LogicalDisk delete` 删的是卷本身
+    // （实测只落到「wmic 是系统组件」那条危险规则，等于给了审批入口就放行）。
+    // 读形态（get/list/where 查询）不在这一条里。
+    { re: /\bwmic\b[^\n]*\b(?:logicaldisk|diskpartition|partition|volume|diskdrive|physicalmedia)\b[^\n]*\bdelete\b|Win32_(?:LogicalDisk|DiskPartition|Volume|DiskDrive|PhysicalMedia)\b[^\n]{0,80}(?:\bdelete\b|DeleteInstance|\.Delete\s*\(|Remove-(?:CimInstance|WmiObject))/i,
+      why: '经 WMI 删除卷/分区对象（磁盘级销毁的另一种拼法）' },
+    // WSL 的发行版根文件系统就是一块 vhdx：--unregister 直接把整块盘删掉，Linux 侧删光了也找不回。
+    { re: /\bwsl(?:\.exe)?\s+(?:--unregister|-u\s+--unregister)\b|\bmanage-bde\b[^\n|;]*(?:-\s*off\b|-clearkey|-disableautounlock|-protectors\s+(?:-?delete|-disablekeyprotector)|-?pause)/i,
+      why: '销毁 WSL 发行版文件系统或摘除 BitLocker 保护' },
+    { re: /\buserdel\b[^\n|;]*\s-r\b|\bdeluser\b[^\n|;]*(?:--remove-home|--remove-all-files)|\bdscl\b[^\n|;]*-delete\s+\/Users\/|\bsysadminctl\b[^\n|;]*-deleteUser/i,
+      why: '删除账号并连带删掉其主目录数据' }
   ]
 
   private static readonly RISKY: Rule[] = [
@@ -105,6 +161,17 @@ export class CommandGuard {
     { re: /--(?:script-shell|use-compress-program|upload-pack|exec-path|editor|pager|signing-key)(?:[=\s]|$)/i,
       why: '把要运行的程序写进参数（命令行本身看不出真正跑的是什么）' },
     { re: /\b(?:setx|reg|schtasks|crontab|systemctl|service)\b/i, why: '改系统配置/计划任务/服务' },
+    // 开机自启/系统启动项是教科书级的持久化：改完之后每次登录都会跑别人的代码。
+    // `reg add` 本身只被上面那条泛化命中，这里给出**为什么**这条比普通改配置更要紧。
+    // 开机自启这一条原先要求 `Run\` 带尾斜杠，而真实写法是 `reg add "HKLM\...\Run" /v Up /d evil.exe`
+    // —— 斜杠后面接的是引号或空格，于是整个持久化门类静默直通（实测）。改成词边界。
+    { re: /\breg\s+(?:add|import)\b[^\n|;]*(?:\\Run(?:Once)?\b|Appinit_Dlls|Winlogon\\(?:Shell|Userinit)|Image File Execution|\\Services\\|\\BootExecute|ShellExtensions\\IconOverlayIdentifiers)/i,
+      why: '写入开机自启/系统启动项（持久化，之后每次登录都会执行）' },
+    { re: /\b(?:Unregister|Register|Set|New|Remove|Enable|Disable)-ScheduledTask\b|\bschtasks\b[^\n|;]*\/(?:delete|change)\b|\bcrontab\s+-r\b|\blaunchctl\s+(?:unload|remove|bootout|disable|enable|submit)\b/i,
+      why: '删除或改写计划任务/系统服务任务（crontab -r 会清掉这个用户的全部计划任务）' },
+    // 账号与认证状态：删组/删用户/清空密码都不喊 del，关键词表看不见。
+    { re: /\b(?:useradd|usermod|groupadd|groupdel|groupmod|deluser|adduser|chpasswd|grpck|pwconv)\b|\b(?:New|Remove|Rename|Set|Add|Disable|Enable)-Local(?:User|Group|GroupMember)\b|\bpsremoteuser\b|\bnet\s+localgroup\b[^\n|;]*\/delete/i,
+      why: '改本地账号/组或批量改密码' },
     // sc 是服务控制命令的正式名字，net stop 有规则而它没有（实测：sc stop 静默执行）。
     // 只认「动词在后面」的调用形态，避免把 sc 这个词从路径或文件名里捞出来。
     { re: /(?:^|[\s;&|(/])sc(?:\.exe)?\s+(?:stop|start|delete|create|config|control|failure|description|pause|resume|qa|query)\b/i, why: '改系统服务（sc）' },
@@ -140,7 +207,9 @@ export class CommandGuard {
     { re: /\bfind\b[^\n]*(?:-delete|-exec(?:dir)?|-ok(?:dir)?)/i, why: 'find 自带删除器/执行器（-delete、-exec）' },
     // 解包归档不叫「覆盖」，但它就是把一批同名文件换成归档里的那份（实测 tar -xf 全程无卡，
     // 目标文件从 74 B 变回 21 B）。建档（-c）与列表（-t / unzip -l）不在这一档。
-    { re: /\b(?:tar|bsdtar|gtar)\b[^\n]*(?:\s-[a-zA-Z]*x[a-zA-Z]*\b|--extract\b|--overwrite\b)/i,
+    // 开关前不带横杠的老式写法是同一件事（`tar xzf app.tar.gz` 实测静默执行），所以 `x…f`
+    // 这一族也算解包；`tar cf out.tar x` 不会因此被误判（那个 token 不以 x 开头）。
+    { re: /\b(?:tar|bsdtar|gtar)\b[^\n]*(?:\s-[a-zA-Z]*x[a-zA-Z]*\b|\bx[a-z]{0,6}f\b|--extract\b|--overwrite\b)/i,
       why: '解包归档（同名文件被静默覆盖成归档里的版本）' },
     { re: /\bunzip\b(?!\s+(?:-[a-z]*l|-Z)\b)|\b7z(?:r|a|z)?\s+[xe]\b|\bwinrar\b|\bexpand\b[^\n]*\.cab\b/i,
       why: '解包归档（同名文件被静默覆盖成归档里的版本）' },
@@ -151,15 +220,64 @@ export class CommandGuard {
     // 通道名不存在而失败）。只认破坏性的动词：gl/el/epl 这类读与导出照旧不打扰。
     { re: /\bwevtutil\b[^\n]*(?:\scl\b|--clear-log|clear-log|\sset-log\b|\sset-config\b|delete-log)/i,
       why: '清空或改写 Windows 事件日志（审计现场不可恢复）' },
-    // cipher /W 是擦空闲空间（硬禁）；/E 加密、/R 与 /X 导出 EFS 恢复密钥 —— 后者等于把
-    // 「解密这台机器上所有受保护文件」的钥匙写到一个文件里（实测 cipher /x 静默执行）。
-    { re: /\bcipher\s+\/(?:e|r|x)/i, why: '加密文件或导出 EFS 恢复密钥（凭据外泄）' },
+    // /R、/X 导出 EFS 恢复密钥已经进了硬禁；这里只留 /E：加密本身不改数据也不外泄，
+    // 但会让用户之后读不到自己的文件，仍值得一次审批。
+    { re: /\bcipher\s+\/e/i, why: '用 EFS 加密文件（之后没有对应证书就读不回来）' },
     // 文件类型关联是教科书级的持久化手法：改完之后双击 .txt 跑的就是别人的程序。
     { re: /(?:^|[\s;&|(/])(?:assoc|ftype)\b/i, why: '改文件类型关联（劫持打开方式）' },
-    { re: /-W\s+hidden|-ExecutionPolicy\s+Bypass/i, why: '隐藏窗口执行（刻意不给用户看见）' },
-    { re: /(?:^|[;&|]\s*)(?:set\b|env\b|printenv\b|Get-ChildItem\s+env:)/i, why: '导出全部环境变量' },
-    { re: /(?:\.ssh\b|id_rsa|known_hosts|\.aws\b|credentials\.aws|\.npmrc|\.netrc|lsass|\.env\b)/i, why: '触及凭据/密钥文件' },
-    { re: /\b(?:DROP\s+(?:TABLE|DATABASE)|TRUNCATE\s+TABLE)\b/i, why: '删除数据库内容' }
+    { re: /(?:^|[;&|]\s*)(?:set(?![\w-])|env\b|printenv\b|Get-ChildItem\s+env:)/i, why: '导出全部环境变量' },
+    { re: /(?:\.ssh\b|id_rsa|known_hosts|\.aws\b|credentials\.aws|\.npmrc|\.netrc|lsass|\.env\b|\.git-credentials|config\/gh\/hosts\.yml|\.docker\/config\.json|\.kube\/config|cookies\.sqlite|Login Data|keychain|secrets\.json|oauth\.token)/i, why: '触及凭据/密钥文件' },
+    // —— 下面这几族同样是「破坏动作没有对应动词」的补登记，只是量级不到系统级：
+    //    数据、备份、云上资源、版本库历史被清掉之后，人还能救回一部分，所以归危险档而不是硬禁。
+    { re: /\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA|USER|VIEW|MATERIALIZED|COLLATION|TEMPORARY)|TRUNCATE\s+(?:TABLE|SCHEMA)|FLUSHALL|FLUSHDB|db\.dropDatabase\s*\(|DELETE\s+FROM\s+[\w."]+\s*(?:;|"|'|$)|DROP\s+KEY|\bDELETE\s+\w+\s+FROM)/i,
+      why: '删除数据库/缓存里的内容（表、schema、整个键空间）' },
+    { re: /\b(?:terraform|pulumi|cdk|crossplane)\b[^\n|;]*(?:destroy|apply[^\n|;]*-destroy)|\b(?:aws|az|gcloud|gsutil|doctl|scaleway-cli|ovh-cli|s3cmd|hcloud)\b[^\n|;]*\b(?:delete|destroy|terminate|purge|prune|rm|deregister|deprovision)\b|\brclone\s+(?:purge|delete[frs]?|rm|trim|clean)\b|\b(?:helm)\s+(?:uninstall|delete|rollback)\b|\bargocd\s+app\s+delete\b|\bkubectl\s+(?:delete|drain|cordon|rollout\s+undo)\b/i,
+      why: '销毁或回滚外部基础设施/集群资源（远端那侧的状态本地撤不回）' },
+    { re: /\b(?:restic|borg|kopia|duplicity|burp|rdiff-backup|velero|pg_backrest|duply|rsnapshot)\b[^\n|;]*(?:\b(?:delete|forget|prune|purge|remove|destroy|expire|dropcache)\b|--prune)/i,
+      why: '删除或修剪备份仓库里的快照（备份没了就没有第二次机会）' },
+    // git 里「问一句就能跑」和「跑完救不回来」是两件事：reflog 过期与对象修剪会把悬空提交彻底清掉。
+    { re: /\bgit\b[^\n|;]*\b(?:reflog\s+expire|gc\b[^\n|;]*--prune|filter-repo|lfs\s+prune|stash\s+(?:drop|clear)|branch\s+-D|tag\s+-d|remote\s+(?:remove|rename|set-url)|worktree\s+remove|update-ref\s+-d|replace\s+\S|push\b[^\n|;]*(?:--force\b|-f\b|--delete\b|--mirror))/i,
+      why: '不可恢复的 git 操作（清历史/删分支或工作树/强推覆盖远端）' },
+    // `git clean` 的破坏力全在开关里：`-x` 连 .gitignore 里的构建产物一起删，工作区里没备份的那份就没了。
+    { re: /\bgit\b\s+clean\b[^\n|;]*-[a-z]*[fx]|git\b\s+clean\b[^\n|;]*--force/i,
+      why: 'git clean 删除工作区里未跟踪的文件（-x 连构建产物一起删）' },
+    { re: /\bgit\b[^\n|;]*\bapply\b[^\n|;]|\bgit\b[^\n|;]*\bmaintenance\s+(?:start|register)\b|\bgit\b\s+config\b[^\n]*--(?:unset|delete|remove-section)/i,
+      why: '用补丁改写工作区文件，或删掉 git 配置项' },
+    { re: /(?:^|[\s;/])\.(?:git|svn|hg)\/(?:HEAD|refs|objects|config|index|hooks|logs)(?:$|[\s/;])/i,
+      why: '读写版本库内部数据（本地历史与配置被改后无从恢复）' },
+    { re: /\b(?:setfacl|chacl|getfacl|setcap|getcap|chflags|xattr|fsutil\s+resource)\b/i,
+      why: '改 ACL/扩展属性/能力位（可让文件对所有人可写或带上提权位）' },
+    // 网卡与 DNS 配置：`ifconfig eth0 down` 断的是这台机器的网络，`resolvconf -u` 改写解析器配置，
+    // `nmcli networking off` 是同一件事的 NetworkManager 写法，都与 iptables/`ip route` 同一量级 ——
+    // 后果是「这台机器联系不上了」，不是删了谁的文档。
+    { re: /\b(?:iptables|ip6tables|ebtables|ufw|nftables|firewalld)\b|\bip\s+(?:route|link|addr|neigh|tcp_metrics)\b|\broute\s+(?:add|delete|change)\b|\bnetworksetup\b|\bnft\b[^\n|;]*(?:add|delete|flush|inject)|\bifconfig\b[^\n|;]*(?:\sdown\b|\sadd\b|\sdel\b|promisc|netmask|hwether)|\b(?:resolvconf|resolvconfig|nmcli\s+(?:connection|device|radio|networking)|ipset|route6d?)\b/i,
+      why: '改防火墙规则/路由/网卡或 DNS 解析状态' },
+    { re: /\b(?:modprobe|rmmod|insmod|kexec|lsmod)\b|\bsysctl\s+-[wx]\b|\bstrace\s+-p\b|\bulimit\s+-[HS]\b/i,
+      why: '装卸内核模块或改内核参数' },
+    { re: /\b(?:Set|New|Resize|Add|Remove|Optimize|Repair)-Partition\b|\b(?:Set-Disk|Optimize-Volume|Repair-Volume|Mount-DiskImage|Dismount-DiskImage|Add-AppxPackage|Remove-AppxPackage|Set-StoragePool|Update-StoragePool)\b|\bdiskutil\s+(?:mount|unmount|repair|verify|renameDisk|clone)\b|\bzfs\s+(?:set|create|clone|promote|rename|mount)\b/i,
+      why: '改分区/挂载点或增卸系统组件' },
+    // 容器的危险不只在「操作了容器」：特权模式与宿主 bind mount 会让容器里的进程直接摸到整台机器，
+    // 工作区边界这一层管不到那一侧（实测 `docker run --privileged -v /:/host` 全程无卡）。
+    { re: /\b(?:docker|podman|nerdctl)\b[^\n|;]*(?:--privileged|--pid=host|--ipc=host|--uts=host|--cgroupns=host|--security-opt=(?:apparmor|seccomp)=unconfined|--cap-add=(?:ALL|SYS_ADMIN|NET_ADMIN|SYS_PTRACE)|--entrypoint=(?:[a-zA-Z]:[\\/]|\/))/i,
+      why: '绕过容器隔离（特权模式、host 命名空间或危险 capability）' },
+    { re: /\b(?:docker|podman|nerdctl|kubectl|docker-compose)\b[^\n|;]*\s(?:-v\b|--volume\b|--mount\b|--hostpath\b)[^\n|;]*(?:[a-zA-Z]:[\\/]|\/(?:etc|usr|bin|var|root|home|sys|dev|boot|lib|opt|mnt|media|Users|private)[\/:\s]|\/:)/i,
+      why: '把宿主机的系统目录挂进容器（工作区边界在容器那一侧失效）' },
+    { re: /\b(?:dotnet\s+ef|prisma|alembic|flyway|liquibase|knex|typeorm)\b|\bmanage\.py\s+migrate\b|\brails\s+db:(?:migrate|rollback|reset|drop)\b|\|\s*(?:mysql|psql|sqlcmd|sqlite3|redis-cli|mongo(?:sh)?)\b/i,
+      why: '执行数据库迁移，或把 SQL 灌进数据库客户端' },
+    { re: /\b(?:npm|pnpm|yarn|bun)\s+(?:publish|unpublish|deprecate|owner\s+add|dist-tag)\b|\b(?:twine|gem|cargo)\s+(?:publish|push|yank)\b/i,
+      why: '对外发布或撤回包（发布出去的版本收不回来）' },
+    { re: /\brsync\b[^\n|;]*--delete[a-z-]*|\bdd\b[^\n|;]*\bof=|(?:^|[\s;&|(])install\s+[-\w]*m\s*[0-7]{3,4}|(?:^|[\s;&|(])install\b[^\n|;]*\s\/usr\/(?:local\/)?(?:bin|sbin|lib)/i,
+      why: '镜像同步删除目标侧差异，或用 dd/install 直接写系统路径' },
+    { re: /\bhistory\s+-[cw]\b|\bjournalctl\s+(?:--rotate|--vacuum[-\w]*|-q\s+-k)\b|\bdmesg\s+-C?\b|\b(?:Clear-RecycleBin|Reset-StartupPreference)\b|\bLimit-EventLog\b/i,
+      why: '清空 shell 历史或系统日志（现场不可恢复）' },
+    // WMI/CIM 是「破坏动作藏在方法名与对象名里」的那一类：`Get-CimInstance Win32_ShadowCopy |
+    // Remove-CimInstance` 删的是卷影副本（勒索软件的标准前戏），而命令行里一个危险词都没有。
+    { re: /\b(?:Invoke-WmiMethod|Invoke-CimMethod|Set-WmiInstance|New-CimInstance|Register-CimProvider|Remove-(?:CimInstance|WmiObject))\b|\bGet-(?:WmiObject|CimInstance)\b[^\n|;]*\|\s*(?:Remove-WmiObject|Remove-CimInstance|ForEach-Object)/i,
+      why: '经 WMI/CIM 调用系统方法（破坏动作藏在方法名里，关键词表看不见）' },
+    { re: /\bdefaults\s+write\b|(?:^|[\s;&|(])bless\s+[^\n|;]*\/Volumes|\bsoftwareupdate\b[^\n|;]*-(?:install|remove|ignore)/i,
+      why: '改 macOS 系统偏好/引导卷或增卸系统更新' },
+    { re: /-W\s+hidden|-WindowStyle\s+Hidden|-ExecutionPolicy\s+Bypass|\bCreateNoWindow\s*=\s*\$?true|(?:^|[\s;&|])-Hidden\b/i,
+      why: '隐藏窗口执行（刻意不给用户看见）' }
   ]
 
   // 「文本里没有危险词」不等于「执行时无害」。这一档不看关键词，只看**这条命令把决定权交给了谁**：
@@ -241,7 +359,15 @@ export class CommandGuard {
     { re: /\/\/E\s*[:=]|vbscript:|language\s*=\s*["']?(?:vbs|jscript)/i, why: '指定脚本引擎执行代码（//E: 、vbscript: 一类）' },
     { re: /\biex\b|\bstart-process\b|\bnew-object\b[^\n|;]*shell/i, why: 'PowerShell 执行原语' },
     { re: /\$\(|`[^`\n]+`/, why: '命令替换（$(…) 或反引号）：文本里看到的不是最终执行的那一段' },
-    { re: /%\w+:[~^=]|\$\{[A-Za-z_][A-Za-z0-9_]*[:@!\\/]/, why: '变量切片展开（用字符串拼出命令名）' }
+    { re: /%\w+:[~^=]|\$\{[A-Za-z_][A-Za-z0-9_]*[:@!\\/]/, why: '变量切片展开（用字符串拼出命令名）' },
+    // macOS 的脚本宿主：osascript 的 -e 与脚本文件里跑的都是命令行读不出来的代码，
+    // `do shell script` 更是直接在 shell 层执行一条命令（实测 osascript 两种写法零审批直通）。
+    { re: /(?:^|[\s;&|(\\/])@?(?:osascript|osacompile|automator)\b|\bdo\s+shell\s+script\b/i,
+      why: '交给 AppleScript 宿主执行（内层代码或它 do shell script 的那条命令不在命令行里）' },
+    { re: /\bdeno\s+(?:eval|repl)\b|\bexpect\b[^\n|;]*\s-c\b|\bwish\b[^\n|;]*\s-c\b/i,
+      why: '交给交互式脚本解释器执行一段代码' },
+    // cmd 的 /v:on 打开延迟变量扩展：`!CMD!` 在执行那一刻才换成命令，命令行文本里没有那条命令。
+    { re: /\/[vV]\s*:\s*[oO][nN]\b/i, why: '开启 cmd 延迟变量扩展（!VAR! 运行时才展开成命令）' }
   ]
 
   // 脚本文件里做的是「编程」而不是「敲命令」，删除与外发走的是语言 API，上面那些 shell 关键词看不见。
@@ -393,6 +519,30 @@ export class CommandGuard {
       sources.push(CommandGuard.unobfuscate(folded))
     }
     sources = sources.concat(CommandGuard.extractInnerCommands(trimmed))
+    // 关键词表也要看一份「只去 ^ 与引号、反斜杠原样留着」的文本：unobfuscate 按 POSIX 规则把
+    // `\S` 当转义吃掉，`reg save HKLM\SAM` 还原后成了 `HKLMSAM` —— 于是 `r^eg save HKLM\SAM`
+    // 这种「^ 拆词 + Windows 路径」的写法在原文与还原文里各缺一半，两层都看不见（实测）。
+    // 并集只会多出命中，所以补这一份不会洗掉任何东西。
+    for (let u: number = 0; u < sources.length; u++) {
+      let kept: string = CommandGuard.pathUnescape(sources[u])
+      if (sources.indexOf(kept) === -1) {
+        sources.push(kept)
+      }
+    }
+    // 边界检查与灾难目标层必须和关键词表看**同一批文本**：`type C:^\Windows^\win.ini` 执行时就是
+    // C:\Windows\win.ini，而这类检查若只读原文（trimmed），「要还原一次才看得出来去哪」的写法
+    // 就把整层跳了过去（实测：四种 ^ 转义写法全部零审批直通）。
+    // 关键词表那条路早就用的是原文 ∪ 还原文 ∪ 折叠文，边界层没跟上就是一处结构性缺口。
+    // 注意这里不能直接用 unobfuscate 的结果：它按 POSIX 规则把 `\W` 当转义吃掉，
+    // Windows 路径在它那里会变成 `C:Windows\win.ini`（实测），所以边界层要的是
+    // pathUnescape 那一份 —— 只去 cmd 的 ^ 与引号，反斜杠原样留着。
+    let boundary: string[] = [trimmed]
+    for (let b: number = 0; b < sources.length; b++) {
+      let one: string = CommandGuard.pathUnescape(sources[b])
+      if (boundary.indexOf(one) === -1) {
+        boundary.push(one)
+      }
+    }
     let forbidden: string[] = CommandGuard.matchedAll(sources, CommandGuard.FORBIDDEN)
     let risky: string[] = CommandGuard.matchedAll(sources, CommandGuard.RISKY)
       .concat(CommandGuard.matchedAll(sources, CommandGuard.OPAQUE))
@@ -410,10 +560,25 @@ export class CommandGuard {
       let quoted: string[] = [trimmed, folded].concat(CommandGuard.extractInnerCommands(trimmed))
       risky = risky.concat(CommandGuard.matchedAll(quoted, CommandGuard.CODE))
     }
+    // 灾难目标判定：动作落在「整棵树的根 / 某个人的主目录 / 一级系统目录 / 关键系统文件」上，
+    // 与 `rm -rf /` 同一口径不给审批入口。动词表只认得 POSIX 那一半写法，
+    // `del /q /s C:\*`、`rd /s /q C:\`、`Remove-Item $env:USERPROFILE\* -Recurse` 一直只判成「删文件」
+    // 弹一张卡（在完全权限档下连卡都不弹）—— 见 firstDisasterTarget 的说明。
+    let disaster: string = CommandGuard.firstOverSources(boundary,
+      (t: string): string => CommandGuard.firstDisasterTarget(t))
+    let disasterWhy: string = disaster === '' ? '' :
+      CommandGuard.DISASTER_WHY_PREFIX + disaster
+    if (disasterWhy !== '') {
+      forbidden = forbidden.concat([disasterWhy])
+    }
     // 只在还原文/内层命令里出现的命中，说明写命令的人绕了一段路 —— 档位按追加后的结果定
     // （形如 shut^down 的写法必须照样落进硬禁表，不能降级成「问一句就跑」），并额外说明原因。
     let rawForbidden: string[] = CommandGuard.matched(trimmed, CommandGuard.FORBIDDEN)
       .concat(CommandGuard.matchedPrograms(rawProgs, CommandGuard.POSITIONAL_FORBIDDEN))
+    let rawDisaster: string = CommandGuard.firstDisasterTarget(trimmed)
+    if (rawDisaster !== '') {
+      rawForbidden = rawForbidden.concat([CommandGuard.DISASTER_WHY_PREFIX + rawDisaster])
+    }
     let rawRisky: string[] = CommandGuard.matched(trimmed, CommandGuard.RISKY)
       .concat(CommandGuard.matched(trimmed, CommandGuard.OPAQUE))
       .concat(CommandGuard.matchedPrograms(rawProgs, CommandGuard.POSITIONAL_RISKY))
@@ -439,20 +604,6 @@ export class CommandGuard {
     if (obfuscated) {
       verdict.risky = true
       CommandGuard.pushReason(verdict, CommandGuard.OBFUSCATED_WHY)
-    }
-    // 边界检查必须和关键词表看**同一批文本**：`type C:^\Windows^\win.ini` 执行时就是
-    // C:\Windows\win.ini，而这几条检查原先只读原文（trimmed）——于是「要还原一次才看得出来
-    // 去哪」的写法把整个边界层跳了过去（实测：四种 ^ 转义写法全部零审批直通）。
-    // 关键词表那条路早就用的是原文 ∪ 还原文 ∪ 折叠文，边界层没跟上就是一处结构性缺口。
-    // 注意这里不能直接用 unobfuscate 的结果：它按 POSIX 规则把 `\W` 当转义吃掉，
-    // Windows 路径在它那里会变成 `C:Windows\win.ini`（实测），所以边界层要的是
-    // pathUnescape 那一份 —— 只去 cmd 的 ^ 与引号，反斜杠原样留着。
-    let boundary: string[] = [trimmed]
-    for (let b: number = 0; b < sources.length; b++) {
-      let one: string = CommandGuard.pathUnescape(sources[b])
-      if (boundary.indexOf(one) === -1) {
-        boundary.push(one)
-      }
     }
     let outside: string = CommandGuard.firstOverSources(boundary,
       (t: string): string => CommandGuard.firstPathOutsideWorkspace(t, root))
@@ -547,6 +698,9 @@ export class CommandGuard {
     out = CommandGuard.expandEnvRefs(text)
     out = out.replace(/\^\^/g, ' ')          // cmd: ^^ 是字面意义的 ^，先隔离开
     out = out.replace(/\^([^\s])/g, '$1')    // cmd: ^x 执行时就是 x（shell:true 走的就是 cmd）
+    // `^` 后面跟空白时它转义的是那个空格本身（`save^ HKLM` 执行时就是 `save HKLM`）：
+    // 原先只处理 `^` 后跟非空白，于是词与词之间多插一个 ^ 就能把 `reg save` 拆成匹配不上的样子。
+    out = out.replace(/\^(?=\s)/g, '')
     out = out.replace(/\\([A-Za-z_])/g, '$1') // POSIX: \x 执行时就是 x
     out = out.replace(/["']/g, '')           // 拆词: d"e"l 执行时就是 del
     // cmd 的 @ 前缀只是「别回显这一行」，语法位置与不带 @ 完全一样（实测：@cmd /c、@powershell -c
@@ -743,6 +897,25 @@ export class CommandGuard {
     return verdict.forbidden ? verdict.reasons.join('、') : ''
   }
 
+  /**
+   * 六张规则表按档口交出去，**只给验证脚本用**（scripts/guard-corpus.mjs 的覆盖自检）。
+   *
+   * 为什么要开这个口子：规则表是手写正则的堆叠，「加了一条永远命中不了的规则」和
+   * 「语料里从没跑到某条规则」都是静默的 —— 前者给人假的安心感，后者让人以为改坏了。
+   * 把表交给套件点名，每条规则的 why 至少要被一条用例命中，命中不了就报出来。
+   * 生产链路一处也不读它。
+   */
+  static ruleTables(): Record<string, Rule[]> {
+    let out: Record<string, Rule[]> = {}
+    out['FORBIDDEN'] = CommandGuard.FORBIDDEN
+    out['RISKY'] = CommandGuard.RISKY
+    out['OPAQUE'] = CommandGuard.OPAQUE
+    out['CODE'] = CommandGuard.CODE
+    out['POSITIONAL_FORBIDDEN'] = CommandGuard.POSITIONAL_FORBIDDEN
+    out['POSITIONAL_RISKY'] = CommandGuard.POSITIONAL_RISKY
+    return out
+  }
+
   private static pushReason(verdict: GuardVerdict, why: string): void {
     if (verdict.reasons.indexOf(why) === -1) {
       verdict.reasons.push(why)
@@ -757,7 +930,9 @@ export class CommandGuard {
    * 两份文本各司其职 —— 关键词表要的是 POSIX 视角，边界层要的是 Windows 视角。
    */
   private static pathUnescape(text: string): string {
-    let out: string = text.replace(/\^([^\s])/g, '$1')
+    let out: string = text.replace(/\^\^/g, ' ')
+    out = out.replace(/\^([^\s])/g, '$1')
+    out = out.replace(/\^(?=\s)/g, '')
     out = out.replace(/["']/g, '')
     return out
   }
@@ -774,6 +949,202 @@ export class CommandGuard {
       let hit: string = probe(sources[i])
       if (hit !== '') {
         return hit
+      }
+    }
+    return ''
+  }
+
+  /**
+   * ===== 灾难目标判定层 =====
+   *
+   * 为什么单独立一层，而不是往关键词表里再加几个词：`rm -rf /` 之所以不给审批，**不是因为 rm
+   * 这个词**，而是因为目标是整棵树的根。同一件事换一套方言写法，动词表就完全无感 ——
+   * 实测 `del /q /s C:\*`、`rd /s /q C:\`、`Remove-Item C:\ -Recurse -Force`、
+   * `del /q %USERPROFILE%\*`、`Remove-Item $env:USERPROFILE\* -Recurse` 全部只被判成「删除文件」
+   * 弹一张卡，而在完全权限档下连卡都不弹；词表只有 POSIX 那一半，等于给另外两种写法发了免检票。
+   * 这一层问的是**动作落在哪个目标上**：根、主目录、一级系统目录本身（或其整体通配）、
+   * 关键系统文件/裸设备 —— 命中即硬禁，与 `rm -rf /` 同一口径。
+   */
+  // 命中理由的前缀：审批卡与拒绝文案都要写明「动作落在了哪个目标上」
+  private static readonly DISASTER_WHY_PREFIX: string =
+    '删除或清空的目标是系统根目录/主目录/关键系统文件：'
+  // 删除类动作词（含 PowerShell 官方别名 ri/rmi 与 cmd 的 del/rd/erase/deltree）
+  private static readonly DISASTER_DELETE_RE: RegExp =
+    /^(?:rm|rmdir|del|erase|rd|deltree|unlink|shred|remove-item|ri|rmi|sremove)$/i
+  // 清零/覆盖类动作词：目标原内容不可恢复，与删掉它等价
+  private static readonly DISASTER_WRITE_RE: RegExp =
+    /^(?:truncate|clear-content|set-content|out-file|add-content|dd|shred)$/i
+  // 搬运类动作词：只有**最后一个**操作数是落地位置，前面的是被搬走的东西。
+  // 全按目标判会把 `xcopy C:\Windows\System32\drivers\etc\hosts backup\`（改之前先备份）判成删系统文件。
+  private static readonly DISASTER_MOVE_RE: RegExp =
+    /^(?:copy|cp|xcopy|move|mv|rename|ren|tee|robocopy|install)$/i
+  // 「目录树的第一层」：删掉整层就没有第二次机会（tmp/var/tmp 刻意不在里面 —— 它们本就是可丢弃的）
+  private static readonly TOP_DIRS: string[] = [
+    'bin', 'boot', 'dev', 'etc', 'home', 'lib', 'lib32', 'lib64', 'media', 'mnt', 'opt',
+    'proc', 'root', 'run', 'sbin', 'srv', 'sys', 'usr', 'var',
+    'windows', 'users', 'program files', 'program files (x86)', 'programdata', 'perflogs',
+    'recovery', 'inetpub', 'system volume information', 'documents and settings',
+    'applications', 'library', 'system', 'volumes', 'private'
+  ]
+  // 「就是某个人的主目录」的几种写法。%USERPROFILE% 与 userprofile 两个形态都要收：
+  // 前者是原文，后者是 expandEnvRefs 把 %NAME% 换成裸名之后的形态。
+  private static readonly HOME_FORM_RE: RegExp =
+    /^(?:~|\$home|\$\{home\}|%home%|home$|\$profile|\$env:profile|\$env:userprofile|\$env:homepath|%userprofile%|userprofile|homepath|mydocuments|documents)$/i
+  // 「第一段就是某个人的主目录」的写法（HOME_FORM_RE 管整条路径等于主目录，这里管路径的开头）：
+  // users / home 这种「共享目录」形态要带绝对路径前提，见下面 rooted 的说明。
+  private static readonly HOME_ROOT_RE: RegExp =
+    /^(?:~|\$\{?(?:home|profile|userprofile|homepath|appdata|localappdata)\}?|\$env:\w*(?:profile|home|appdata|tmp)\w*|%[\w%]*(?:profile|home|appdata|tmp)[\w%]*|users|home|documents and settings)$/i
+  // 主目录里那层「装这个人自己的文件」的目录：删掉它们等于删掉主目录的一部分，量级相同
+  private static readonly USER_DATA_RE: RegExp =
+    /^(?:documents|mydocuments|desktop|downloads|pictures|photos|videos|music|favorites|links|screenshots|contacts|calendar|notes|library|appdata|onedrive|google drive|iclouddrive)$/i
+  // 关键系统文件与裸设备：**它们里面的东西**也一并算（删掉一个 account hive 就起了不来系统）
+  private static readonly PROTECTED_TARGET_RE: RegExp =
+    /^(?:\/(?:etc\/(?:passwd|shadow|group|gshadow|passwd-|shadow-|user-list|sudoers|crypttab|fstab|resolv\.conf|hostname|profile|pam\.conf|ld\.so\.conf|ssh\/host\w*|ssh\/sshd_config|pam\.d\/|security\/|default\/(?:useradd|grub)|systemd\/|init\.d\/|rc\d\.d\/)|bin\/(?:sh|bash|su|sudo|login|mount)|lib(?:32|64)?\/(?:ld-|libc\.|systemd)|dev\/(?:sd|hd|nvme|vd|xvd|md|dm-|loop|mapper|disk|aoe)\S*|proc\/sys(?:\/|$)|sys(?:\/|$)|boot(?:\/|$|img)|kernel[^/]*|vmlinuz\S*|initrd\S*|private\/etc\/(?:passwd|shadow|group|master\.passwd)|library\/keychains(?:\/|$)|system\/(?:library|kernel|usr)(?:\/|$))|(?:[a-z]:)?\/windows\/(?:system32(?:\/(?:config|drivers|winevt|catroot|spool|sysprep|wbem|group_policy|inetsrv)?(?:\/|$)|\/(?:cmd|services|lsass|wininit|userinit|csrss|smss|explorer|svchost)\.exe)?|boot(?:\/|$)|sysnative\/|winsxs(?:\/|$)|inf(?:\/|$)|system\.ini|win\.ini|explorer\.exe)|(?:[a-z]:)\/(?:boot(?:\/|$)|windows\/system32(?:\/|$))|(?:[a-z]:)?\/\$recycle\.bin(?:\/|$))/i
+
+  /**
+   * 把一个「看起来像路径」的 token 归一成目标形态：'' = 不构成灾难，root/home/sys/protected = 构成。
+   *
+   * 归一动作全部是**去掉伪装**（引号、@ 前缀、`name=` 前缀、`\` 与 `//`、大小写、尾部的整体通配），
+   * 从不补全语义，所以判定用「原文 ∪ 还原文」的任何一份都只会多出命中。
+   */
+  private static disasterTargetKind(token: string): string {
+    let raw: string = token.replace(CommandGuard.TOKEN_EDGE_RE, '').replace(/^['"]+|['"]+$/g, '')
+    let eq: number = raw.lastIndexOf('=')
+    if (eq >= 0 && /[\\/]/.test(raw.substring(eq + 1))) {
+      raw = raw.substring(eq + 1)
+    }
+    if (raw === '' || !CommandGuard.looksLikePath(raw)) {
+      return ''
+    }
+    let norm: string = raw.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase()
+    // `C:\a\..\Windows\System32` 就是 `C:\Windows\System32`：不折这一段，「绕一层再进系统目录」
+    // 就是一条免检路（实测 del /s /q C:\a\..\Windows\System32\* 只判成「删文件」）。
+    // 只消 `名字/..` 这一种形状，`../` 开头的相对上跳原样留着 —— 它由边界层单独报，
+    // 理由是「工作区之外」，比这里含糊的「系统目录」更贴近用户看得见的后果。
+    while (/[^/]+\/\.\.(?:\/|$)/.test(norm)) {
+      norm = norm.replace(/(?:^|\/)[^/]+\/\.\.(?=\/|$)/g, '')
+    }
+    norm = norm.replace(/^\.\//, '')
+    norm = norm.replace(/\/{2,}/g, '/')
+    // `\\127.0.0.1\c$\Windows\…` 与 `\\localhost\C$\…` 走的是**本机**管理共享：换的是一个写法，
+    // 删的是同一块盘。不剥掉 host + share 两段，这一层就只能按「本地绝对路径」判，
+    // 于是「从 UNC 入口删系统目录」绕开（实测 \\127.0.0.1\c$\Windows 只报了工作区越界）。
+    // 只认本机那几个 host 名 —— 真正的远端共享不归这一层管，由边界层按「工作区之外」报。
+    let local: RegExpExecArray | null =
+      /^\/(?:127\.0\.0\.1|localhost|\[[0-9a-f:]+\]|\.|\?)(?:\/[^/]*(?:\$|:))?\/(.*)$/i.exec(norm)
+    if (local !== null) {
+      norm = '/' + local[1]
+    }
+    let absolute: boolean = norm.charAt(0) === '/' || /^[a-z]:/.test(norm)
+    if (CommandGuard.PROTECTED_TARGET_RE.test(norm)) {
+      return 'protected'
+    }
+    let drive: string = ''
+    let dm: RegExpExecArray | null = /^([a-z]):/.exec(norm)
+    if (dm !== null) {
+      drive = dm[1]
+      norm = norm.substring(2)
+    }
+    if (norm.charAt(0) === '/') {
+      norm = norm.substring(1)
+    }
+    norm = norm.replace(/\/+$/, '')
+    let segs: string[] = norm === '' ? [] : norm.split('/')
+    // 尾部的「整体通配」段（*、*.*、*.log）不改变目标所在层级：C:\Users\me\*.* 删的就是 me 的主目录
+    while (segs.length > 0 && segs[segs.length - 1].indexOf('*') !== -1) {
+      segs.pop()
+    }
+    let path: string = segs.join('/')
+    if (path === '') {
+      return absolute || drive !== '' ? 'root' : ''
+    }
+    if (CommandGuard.HOME_FORM_RE.test(path)) {
+      return 'home'
+    }
+    // 后面三种形态都要按「从哪里往下数」才成立，相对写法一律不算：项目里叫 `users/`、
+    // `Documents/` 的目录天天都在（`rm -rf users/me` 删的是仓库里的两个文件夹，不是某个人的家）。
+    let rooted: boolean = absolute || drive !== '' ||
+      /^[~$%]/.test(segs[0])
+    if (!rooted) {
+      return ''
+    }
+    if (segs.length === 1 && CommandGuard.TOP_DIRS.indexOf(path) !== -1) {
+      return 'sys'
+    }
+    // /home/<某人> 与 C:\Users\<某人>：某个用户的整个主目录
+    if (segs.length === 2 && (segs[0] === 'home' || segs[0] === 'users') &&
+      segs[1].indexOf('.') === -1) {
+      return 'home'
+    }
+    // 主目录**里面**那层用户数据目录本身（~/Documents、%APPDATA%、C:\Users\me\Desktop）：
+    // 里面是这个人攒的文件，删掉与删主目录同一量级。刻意限制深度（主目录形态下最多两级、
+    // users/<某人>/X 形态下最多三级），否则 `rm -rf D:\repo\Documents` 这种「项目里叫
+    // Documents 的目录」会被一路硬禁 —— 硬禁没有审批入口，误判的代价比漏判更高。
+    if (segs.length >= 2 &&
+      segs.length <= (/^(?:users|home|documents and settings)$/.test(segs[0]) ? 3 : 2) &&
+      CommandGuard.HOME_ROOT_RE.test(segs[0]) &&
+      CommandGuard.USER_DATA_RE.test(segs[segs.length - 1])) {
+      return 'home'
+    }
+    return ''
+  }
+
+  /** 这个 token 像不像「路径形态的操作数」（纯词、开关、数字一概不判，免得把 `del = 0` 当成删根） */
+  private static looksLikePath(token: string): boolean {
+    let t: string = token.replace(CommandGuard.TOKEN_EDGE_RE, '')
+    if (t === '' || CommandGuard.LEADING_SWITCH_RE.test(t) || /^\d+$/.test(t) ||
+      t === '=' || t === '==') {
+      return false
+    }
+    return /[\\/]/.test(t) || t.charAt(0) === '~' || t.charAt(0) === '$' || t.charAt(0) === '%' ||
+      /^[a-z]:/i.test(t) || t.indexOf('=') !== -1
+  }
+
+  /**
+   * 找出命令里第一个「灾难目标」：先看**重定向写入的目标**（`> /etc/passwd` 与删掉它等价），
+   * 再看删除/清零类动词的操作数。返回命中的写法（进审批卡与拒绝理由），没有则空串。
+   */
+  private static firstDisasterTarget(text: string): string {
+    let re: RegExp = new RegExp(CommandGuard.REDIRECT_TARGET_RE.source, 'g')
+    let match: RegExpExecArray | null = re.exec(text)
+    while (match !== null) {
+      let kind: string = CommandGuard.disasterTargetKind(match[1])
+      if (kind !== '') {
+        return match[1]
+      }
+      match = re.exec(text)
+    }
+    let segments: string[] = text.split(CommandGuard.SEGMENT_SPLIT_RE)
+    for (let s: number = 0; s < segments.length; s++) {
+      let toks: string[] = segments[s].trim().split(/\s+/)
+      let verb: number = -1
+      let verbBase: string = ''
+      for (let k: number = 0; k < toks.length; k++) {
+        let raw: string = toks[k].replace(CommandGuard.TOKEN_EDGE_RE, '')
+        let base: string = raw.substring(Math.max(raw.lastIndexOf('/'), raw.lastIndexOf('\\')) + 1)
+        base = base.replace(/\.(?:exe|com)$/i, '')
+        if (CommandGuard.DISASTER_DELETE_RE.test(base) || CommandGuard.DISASTER_WRITE_RE.test(base) ||
+          CommandGuard.DISASTER_MOVE_RE.test(base)) {
+          verb = k
+          verbBase = base
+          break
+        }
+      }
+      if (verb < 0) {
+        continue
+      }
+      // copy/move 一族的落地位置是**最后一个**操作数，前面那些是被搬走的东西：
+      // 全按目标判会把 `xcopy C:\Windows\System32\drivers\etc\hosts backup\hosts.bak`
+      // （改系统文件之前先备份一份）这条正当写法判成「删系统文件」。
+      let at: number = CommandGuard.DISASTER_MOVE_RE.test(verbBase) ? toks.length - 1 : verb + 1
+      for (let k: number = at; k < toks.length; k++) {
+        let cand: string = toks[k].replace(CommandGuard.TOKEN_EDGE_RE, '')
+        if (!CommandGuard.looksLikePath(cand)) {
+          continue
+        }
+        if (CommandGuard.disasterTargetKind(cand) !== '') {
+          return cand
+        }
       }
     }
     return ''
@@ -846,6 +1217,15 @@ export class CommandGuard {
     let tokenRe: RegExp = /[^\s"'`;|&)<>]+/g
     let match: RegExpExecArray | null = re.exec(text)
     while (match !== null) {
+      // 盘符/系统目录那段必须落在 token 边界上才算绝对路径：`https://x/a.zip` 里的 `s://` 是 URL
+      // 的冒号，`src/etc/passwd` 里的 `/etc/` 是相对路径的一段 —— 都不是绝对路径，
+      // 报出去等于给每一条带 URL 的命令都添一条「触及工作区之外的路径」。
+      let prev: string = match.index === 0 ? '' : text.charAt(match.index - 1)
+      if (/[A-Za-z0-9]/.test(prev)) {
+        re.lastIndex = match.index + 1
+        match = re.exec(text)
+        continue
+      }
       // 从命中的起点开始吃一整段路径 token
       let start: number = match.index
       tokenRe.lastIndex = start
@@ -992,7 +1372,10 @@ export class CommandGuard {
   // 只放词表覆盖不到的：diskpart/bcdedit/mkfs 这些词本身没有别的含义，子串匹配就够；
   // format 不行 —— 它同时是 `npm run format`、`--format=%h` 里的普通词，必须按位置判。
   private static readonly POSITIONAL_FORBIDDEN: Rule[] = [
-    { re: /(?:^|[\\/])format(?:\.com|\.exe)?$/, why: '格式化磁盘' }
+    { re: /(?:^|[\\/])format(?:\.com|\.exe)?$/, why: '格式化磁盘' },
+    // 注销与停机在 Windows 上是几个普通词（logoff/halt），子串匹配会误伤路径与脚本正文，
+    // 按命令位判才既堵得住 `logoff`、又放过 `echo logoff x`（关机硬禁原先只认 shutdown|reboot|poweroff）。
+    { re: /(?:^|[\\/])(?:logoff|halt|tsskill|bootrec|stop-computer|restart-computer)(?:\.exe)?$/, why: '关机/重启/注销整台机器' }
   ]
   private static readonly POSITIONAL_RISKY: Rule[] = [
     { re: /(?:^|[\\/])cp(?:\.exe)?$/, why: '覆盖写文件（cp 默认不提示）' },
@@ -1005,7 +1388,11 @@ export class CommandGuard {
     { re: /(?:^|[\\/])truncate(?:\.exe)?$/, why: '清空文件内容' },
     { re: /(?:^|[\\/])ln(?:\.exe)?$/, why: '创建链接（可把读写引到工作区之外）' },
     { re: /(?:^|[\\/])chattr(?:\.exe)?$/, why: '改文件不可变属性位' },
-    { re: /(?:^|[\\/])(?:ssh|scp|sftp|nc|ncat|netcat|telnet|rlogin|rsh|adb)$/, why: '外部执行/传输通道（远端那侧做什么读不出）' }
+    { re: /(?:^|[\\/])(?:ssh|scp|sftp|nc|ncat|netcat|telnet|rlogin|rsh|adb)$/, why: '外部执行/传输通道（远端那侧做什么读不出）' },
+    // 这几个词同时是很常见的变量名/文件名（mount 在前端代码里天天出现），所以只按命令位判：
+    // `component.mount()`、`--mount type=bind` 都不算，而真正被运行的 mount/umount 一律要问一句。
+    { re: /(?:^|[\\/])(?:mount|umount|swapon|swapoff|losetup|zloop?|pm-utils)$/, why: '改挂载点或交换区（能让目录内容整体不可见）' },
+    { re: /(?:^|[\\/])(?:chroot|nsenter|unshare|procdump|createdump|passwd|chpasswd|groupmems)$/, why: '切根/进他人命名空间执行，或改口令、转储进程内存' }
   ]
 
   private static readonly SEGMENT_SPLIT_RE: RegExp = /&&|\|\||[;&|\n]/
