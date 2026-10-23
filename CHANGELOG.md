@@ -2,9 +2,9 @@
 
 > [← 返回 README](README.md)
 
-本文件记录 Guncat Work（电脑版）的版本变更。电脑版是
-[鸿蒙版 Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)的桌面移植，
-两条产品线的版本号**各自独立**。
+本文件记录 Guncat Work（电脑版）的版本变更。电脑版与
+[鸿蒙版 Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)是并行的两条产品线，
+各自的版本号独立演进。
 
 ---
 

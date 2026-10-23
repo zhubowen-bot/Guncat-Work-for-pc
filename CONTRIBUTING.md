@@ -1,6 +1,6 @@
 # 参与贡献
 
-感谢你有兴趣参与。Guncat Work（电脑版）是[鸿蒙版 Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)的桌面移植：**Electron + React + TypeScript**，业务内核（Agent Loop、三协议流式对话、44 个工具、37 项技能、Office 生成器、`guncat-ui lang` 渲染器）从 ArkTS 逐字移植而来。
+感谢你有兴趣参与。Guncat Work（电脑版）与[鸿蒙版 Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)是**并行的两条产品线**：同一个产品形态与能力口径，各自独立的平台实现、发布节奏与版本号。电脑版用 **Electron + React + TypeScript** 实现，业务内核（Agent Loop、三协议流式对话、45 个工具、37 项技能、Office 生成器、`guncat-ui lang` 渲染器）在桌面运行时上独立维护。
 
 这个仓库对「改动是否可靠」的要求比较高 —— 它做的事情（Agent 循环、文档生成、IPC 契约、界面渲染）出错时很难靠肉眼发现，所以下面这套验证流程不是形式主义，**每一层都在拦真实发生过的事故**。
 
@@ -28,7 +28,7 @@
 npm run typecheck        # = typecheck:node + typecheck:web
 ```
 
-覆盖 `src/core`（移植内核）+ `src/main` + `src/preload` + `src/renderer`。
+覆盖 `src/core`（业务内核）+ `src/main` + `src/preload` + `src/renderer`。
 
 > `tsconfig.node.json` 里**关掉了** `strictNullChecks` / `strictFunctionTypes`：
 > ArkTS 的空值语义与 TS 不同（ArkTS 的 `Object` 接受 `null`），不关的话 3.5 万行移植代码
@@ -43,7 +43,7 @@ npm run build            # main / preload / renderer 三端产物 → out/
 ### 第 3 层 · 四套无头冒烟（本仓库的核心验证）
 
 ```bash
-npm run smoke:core       # 移植内核 + 工具链 + 三协议
+npm run smoke:core       # 业务内核 + 工具链 + 三协议
 npm run smoke:render     # react-dom/server 逐项断言
 npm run smoke:ipc        # 每个 IPC 通道真实 invoke 一遍
 npm run smoke:startup    # electron 替身跑真实入口 src/main/index.ts
@@ -93,12 +93,12 @@ npm run dist             # 产出 release/Guncat Work-<version>/
 
 因此：
 
-- **不要**为了「顺手改好一点」而修改移植文件的语义。这会让下一次同步上游变成逐行比对。
+- **不要**为了「顺手改好一点」而修改共享内核的语义。这会让下一次与鸿蒙版同步变成逐行比对。
 - **确实必须改**（平台差异、Bug、语义修正）的，**必须**登记进
-  [`docs/PORTING.md`](docs/PORTING.md) 的**移植补丁清单** —— 那张表是与上游的**唯一分歧清单**，
-  同步上游时按它逐条重新施加。
+  [`docs/PORTING.md`](docs/PORTING.md) 的**差异补丁清单** —— 那张表是与鸿蒙版的**唯一分歧清单**，
+  同步时按它逐条重新施加。
 - **不要**在 `src/core/` 里放界面代码，也不要 import React / Electron / DOM 专有的东西。
-  移植内核必须保持可在纯 Node 下被 `smoke:core` 导入。
+  业务内核必须保持可在纯 Node 下被 `smoke:core` 导入。
 - 新写平台能力时，加在 `src/core/platform/` 下，并通过别名暴露 —— 而不是直接改调用方。
 
 ### 二、TypeScript

@@ -2,9 +2,13 @@
 
 **English** | [中文](README.md)
 
-> an Agent Harness client rebuilt with **Electron + React + TypeScript**.
-> The business core (agent loop, three streaming protocols, 45 built-in tools, 37 skills, Office
-> generators, the `guncat-ui lang` renderer) was ported line by line from ArkTS.
+> A **desktop Agent Harness client** built with **Electron + React + TypeScript**: three streaming
+> protocols, multi-turn tool loops with a sandboxed workspace, one-prompt interactive UIs, direct
+> Office output, and a **command execution path that has been through a real security audit**.
+>
+> It is one of **two parallel product lines** alongside the HarmonyOS version,
+> **[Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos)**: the same product shape and
+> capability set, with independent platform implementations, release cadence and version numbers.
 
 ![Electron](https://img.shields.io/badge/Electron-38-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
@@ -14,8 +18,21 @@
 ![forms](https://img.shields.io/badge/Agent%20Forms-Intelligent%20UI%20%2B%20Harness-blueviolet)
 ![tools](https://img.shields.io/badge/built--in%20tools-45-informational)
 ![skills](https://img.shields.io/badge/skills-37-informational)
+![shell audit](https://img.shields.io/badge/shell%20audit-163%20rules-red)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 [![CI](https://github.com/zhubowen-bot/Guncat-Work-for-pc/actions/workflows/ci.yml/badge.svg)](https://github.com/zhubowen-bot/Guncat-Work-for-pc/actions/workflows/ci.yml)
+
+## Two parallel projects
+
+| Project | Stack | Platform |
+| --- | --- | --- |
+| **Guncat Work (Desktop)** · this repository | Electron + React + TypeScript | Windows desktop |
+| [Guncat Work (HarmonyOS)](https://github.com/zhubowen-bot/Guncat-Work-for-hmos) | ArkTS / ArkUI | HarmonyOS |
+
+They share the same product shape and capability set (three modes, 45 tools, 37 skills, the
+`guncat-ui lang` renderer), but the code, release cadence and version numbers are **independent** —
+this is not an "upstream / downstream" relationship. The desktop platform adaptation and the
+implementation differences from the HarmonyOS version are recorded in [docs/PORTING.md](docs/PORTING.md).
 
 ## Three modes
 
@@ -30,16 +47,22 @@ behavioural discipline and **the tool surface exposed** — work mode gets all 4
 loops and long-horizon delivery, while interactive mode only receives **27** (read material / compute
 real numbers / verify external facts / emit files). Long-horizon tools (`todo_write` / `goal_*` /
 `schedule_*` / `subagent`) never appear in its requests, which is what makes it a "fast lane, one-shot
-interface".
+interface". `run_command` is likewise absent from interactive mode: a mode that can run commands must
+have somewhere for a human to see and approve them.
 
 ## Capabilities
 
+- **Audited terminal execution**: work mode can run builds, tests, git and local CLIs in a real
+  project, but every command goes through the guard — destructive operations are **rejected outright
+  with no approval path**, outward-facing operations raise an approval card according to the selected
+  tier, and workspace escapes, actions hidden inside scripts, encoded payloads and inline interpreter
+  code are all blocked. See [Shell security audit](#shell-security-audit-commandguard).
 - **Two agent shapes that matter today**: interactive mode mirrors GPT's Intelligent UI — the answer is
   no longer plain text but an **interface program** which the app renders as draggable, clickable UI
   whose parameters can be changed with instant recomputation (8 chart types: bar / line / area /
   horizontal bar / donut / radial / radar / stacked bar, plus tables, metric cards, image walls, tabs /
   accordions / step bars / card blocks and a full set of form controls); work mode brings the core
-  DeepSeek Harness agent loop to the desktop intact.
+  DeepSeek Harness agent loop to the desktop.
 - **Three protocols**: OpenAI Completions (`/chat/completions`), OpenAI Responses (`/responses`) and
   Anthropic Messages (`/messages`), all supporting direct image input; deep thinking and web search are
   explicitly controlled per protocol.
@@ -50,8 +73,9 @@ interface".
   PDF and Office files are parsed entirely locally, **consuming no multimodal quota**.
 - **45 built-in tools**: file create / read / update / delete and pattern-based search, task lists,
   image viewing, network downloads, PDF parsing, Office read/write, data-pipeline cleaning,
-  transformation and format conversion, and a `run_js` code sandbox built on `node:vm`
-  (no network, no filesystem access, **infinite loops are hard-interrupted by the engine**).
+  transformation and format conversion, command execution with background jobs, and a `run_js` code
+  sandbox built on `node:vm` (no network, no filesystem access, **infinite loops are hard-interrupted
+  by the engine**).
 - **37 skills**: 5 main skill routes + 7 format branches + 25 domain branches, loaded on demand when they
   match; the PPT / Word / Excel skills use gate-style constraints that produce a verifiable self-check
   report before delivery.
@@ -66,6 +90,113 @@ interface".
   the capsule in the title bar switches models without opening settings.
 - **Adaptive UI**: wide screens show a side-by-side conversation panel, narrow screens collapse to a
   single column; light/dark theme follows the system.
+
+## Shell security audit (CommandGuard)
+
+> The worst outcome for an agent that can type commands is not a wrong answer — it is **one generated
+> command deleting something on the user's disk**. This capability shipped with an audit from day one:
+> the decision layer `src/core/service/CommandGuard.ts` (1,700+ lines of pure logic, no process access),
+> the approval path `src/core/service/CommandService.ts`, and a dedicated adjudication corpus.
+> Almost all work after `0.2.0` went here: more than ten rounds of adversarial testing, twenty-plus
+> bypasses closed one by one — every one reproduced first, fixed second, and covered by a regression.
+
+### Threat model
+
+Model output is **untrusted input**; when `run_command` fails, the cost is not "one wrong file" but
+unrecoverable data loss. The goal is therefore not "block the obviously bad spelling" but **stay blocked
+when the spelling changes**.
+
+### Gate 1: hard-deny, with no approval path
+
+The `forbidden` tier rejects outright and does not even offer an "Allow" button — because **a user
+slipping and clicking Allow is itself a failure mode that must be defended against**. Hard-deny only
+contains genuinely irreversible things an agent has no legitimate reason to do: formatting disks,
+writing raw devices, deleting shadow copies and system backups, firmware/controller-level erasure,
+disabling Defender or the firewall, clearing audit logs, dumping lsass credentials or EFS recovery
+keys… 37 rules in total.
+
+### Gate 2: four approval tiers, changing **who decides**
+
+| Tier | Who decides for a dangerous command |
+| --- | --- |
+| `ask` | Every command needs human approval |
+| `ask-risk` (default) | Dangerous commands raise an approval card; everything else runs |
+| `auto` | A model reviews first; runs silently only when it says low/medium **and** explicitly allows |
+| `full-access` | No review, no questions — only hard-deny remains |
+
+`auto` is not "fully automatic": a high verdict, a self-contradictory answer, a non-JSON reply, a
+timeout, or no configured model — **all fall back to the human card; the machine never has the final
+word**. The reviewer only sees the environment, the user's own words and the command text; the agent's
+own explanations and reasoning are excluded, otherwise it could talk the reviewer into approving by
+saying "this is safe" first. `full-access` only turns off review — the hard-deny table sits in front of
+it and no tier can reach past it.
+
+### Six rule tables, 163 rules
+
+37 hard-deny + 77 risky + 27 "intent unreadable" + 11 script-content + 2 positional hard-deny +
+9 positional risky. Rules register **semantics**, not the shape of a word.
+
+### Three independent layers — drop one and it is bypassed
+
+1. **Keywords over normalized text**: cmd's `^`, word-splitting quotes, the `@` prefix, `%ComSpec%`,
+   the second segment inside parentheses or after a pipe — all disappear at execution time, so the text
+   under judgement is "raw ∪ normalized ∪ extracted inner commands". Normalization only strips
+   disguises and never rewrites meaning, so derived text can only **add** hits.
+2. **Unreadable intent (OPAQUE)**: inline interpreter code, code fed through stdin or redirection,
+   `for` loop variables executed as commands, Base64 payloads, command substitution, script hosts and
+   system-component loaders, and WSL / ssh-style "hand the decision to somewhere else" channels. These
+   commands contain no dangerous words by construction, so keywords can never catch up; they are judged
+   as "we cannot tell what this does".
+3. **Positional escape**: absolute paths, `..` traversal, paths built from environment variables,
+   drive-root forms (`\data\a.txt` is `C:\data\a.txt`), UNC network paths, the `\\?\` prefix. This layer
+   is spelling-independent and is the hardest of the three.
+
+### Script co-review: read **the file that will run**, not its extension
+
+`cscript //E:` can run a `.txt` as VBS, `cmd` appends PATHEXT suffixes to bare names, `%~dp0` /
+`$PSScriptRoot` change the base directory, and `npm run x` runs the string inside `package.json`. So:
+
+- references are resolved against **the process cwd and the script's own directory**, and every hit is
+  reviewed;
+- bare names without an extension are resolved through PATHEXT to real files before being read;
+- `npm --prefix` / `yarn --cwd` / `pnpm -C` switch package directories, so the `package.json` **at the
+  switched-to location** is the one read;
+- rewriting a script with `copy` / redirection and then executing it also goes to approval — co-review
+  would only see the pre-rewrite content;
+- unresolvable references, missing files and references beyond the review-depth limit **become approval
+  prompts instead of being silently allowed**.
+
+### Command-position judgement: a new name for the same act is not a new command
+
+`npx` and `npm exec` / `npm x` / `pnpm exec` / `pnpm dlx` / `yarn dlx` / `bunx` are the same act;
+whether `format` means "format a disk" or is just a word inside `npm run format` depends on whether it
+sits in command position. Rules are registered by **what the action does**, not by enumerating names —
+otherwise changing one spelling bypasses an entire table.
+
+### The process layer is tightened too
+
+The working directory is pinned to the session workspace (an escape is rejected, the command never runs
+in some other directory of the user's); the child environment is sanitized against a whitelist, so API
+keys held by the main process never reach the command; timeouts, cancellation and no answer all
+fail closed — **silence is not consent**.
+
+### Audit method and regressions
+
+- **Reproduce first, fix second**: every round runs real reports against production code, using the real
+  `CommandGuard.assess` and the real `run_command` to reproduce a "zero-approval pass-through", and only
+  fixes what reproduces.
+- **Two regression layers**: the decision layer (dangerous inputs must be dangerous + everyday spellings
+  must not be disturbed) and the integration layer (card raises → card states the matched reason → click
+  reject → the file is still there).
+- **A dedicated corpus**: `scripts/guard-corpus.mjs` covers 117 hard-deny cases, 90 risky cases and 47
+  benign spellings, plus 250 `^`-escaped variants and 111 "`^` inserted between words" variants,
+  asserting that **changing the spelling never lowers the tier**.
+- **Explicit trade-offs**: no allowlist rewrite (it would make `npm run build` prompt every day —
+  usability does not survive the security gain); string false positives are accepted (`git commit -m
+  "notes on rm -rf /"` also gets one prompt) — a miss costs the user's data, a false positive costs one
+  extra click.
+
+In one line: **ask one time too many rather than miss one time.**
 
 ## Quick start
 
@@ -145,8 +276,10 @@ npm run dev        # main process + renderer with hot reload
 - **Desktop shell**: Electron 38 (all application code is bundled into `out/` by Vite, so the artifact has
   **no runtime node_modules**)
 - **UI**: React 19 + TypeScript + Vite (electron-vite)
-- **Business core**: TypeScript **ported line by line** from the HarmonyOS app (~35k lines), with
-  platform dependencies replaced through `@kit.*` aliases
+- **Business core**: TypeScript (~35k lines), with platform differences adapted to the desktop runtime
+  through `@kit.*` aliases
+- **Command security**: `CommandGuard` (pure decision logic) + `CommandService` (approval and execution
+  path); the decision layer is testable without touching a real process
 - **Packaging**: the bundled `scripts/package-portable.mjs` (see "About packaging" below)
 
 ### About packaging
@@ -181,7 +314,7 @@ file" error: text extraction degrades to missing font metrics, and rendering deg
 
 ### App icon
 
-Taken from the HarmonyOS original: in `AppScope/resources/base/media/layered_image.json` both the
+The icon uses the same brand assets: in `AppScope/resources/base/media/layered_image.json` both the
 background and foreground of the layered icon **point at `cat_avatar.png`**, so that is the real app icon.
 `scripts/make-icon.py` generates two formats: `app-icon.png` (256², window and taskbar icon) and
 `app-icon.ico` (7 sizes, used by desktop shortcuts).
@@ -192,16 +325,17 @@ One command runs everything: **`npm run verify`** (= typecheck + smoke, and smok
 
 | Layer | Command | Coverage |
 | --- | --- | --- |
-| Types | `npm run typecheck` | `src/core` (ported core) + `src/main` + `src/preload` + `src/renderer` |
+| Types | `npm run typecheck` | `src/core` (business core) + `src/main` + `src/preload` + `src/renderer` |
 | Build | `npm run build` | main / preload / renderer artifacts |
-| Core | `npm run smoke:core` | **341 assertions**: agent loading, 45 tools, 37 skills, sandbox workspace, the `run_js` sandbox, data pipelines, persistence, three protocol endpoints, **Office toolchain end to end** (generate → read back → operator edits), **skill-system tools**, **interactive mode full chain** (parse / `$binding` recompute / action callbacks / state tail markers / form packaging), **PDF parsing** (text / search / page-to-image), **SVG rasterization** (preview PNG / docx and pptx references), **plugin hot loading** (manifest → parse → register into the tool table), **HTTP read-idle timeout** (long streams not cut off / stalled connections cut off), plus 138 desktop-side enhancements, 12 voice-input items, 20 multi-turn chat and UI-assist items, 10 runtime snapshot items and 26 `ask_user_question` items |
-| Renderer | `npm run smoke:render` | **272 assertions**: `react-dom/server` renders an interface program covering the main components to HTML and asserts item by item (including how work mode and interactive mode each orchestrate, the three Markdown chains for LaTeX / code blocks / mermaid, workspace-panel upload entry and file-type icons, attachment entry and interjection button in the input area, engine grouping and workspace toggle in the sidebar, diff / task-list cards on tool rows, task-stats and goal cards, artifact summary card, table-extraction panel) |
-| Contract | `npm run smoke:ipc` | **247 assertions**: an electron stand-in really invokes **every IPC channel** the renderer calls (registration completeness, settings round-trip, session lifecycle, event push, out-of-bounds and directory-traversal rejection, guard prompts, **file inbox and workspace upload**, **Word export**, **voice transcription config and endpoint assembly**, **local web-search config and binding**, **protocol path-suffix toggle round-trip**, **configuration profiles** (migration / create / switch / save / delete protection), **chat attachments** (actually filling content into the message), **scheduled reminder advancement**, **reasoning-effort pass-through**, **interjection during execution**, **task stats and goals**, **artifact summary**, **table extraction** and model-output cleanup) |
+| Core | `npm run smoke:core` | **504 assertions**: agent loading, 45 tools, 37 skills, sandbox workspace, the `run_js` sandbox, data pipelines, persistence, three protocol endpoints, **Office toolchain end to end** (generate → read back → operator edits), **skill-system tools**, **interactive mode full chain** (parse / `$binding` recompute / action callbacks / state tail markers / form packaging), **PDF parsing** (text / search / page-to-image), **SVG rasterization** (preview PNG / docx and pptx references), **plugin hot loading**, **HTTP read-idle timeout**, plus 156 desktop-side enhancements, 12 voice-input items, 20 multi-turn chat and UI-assist items, 10 runtime snapshot items, 26 `ask_user_question` items, **423 cumulative command-execution and security-boundary assertions**, the read-before-edit guard, `@` file references, credential encryption at rest and cross-turn context |
+| Renderer | `npm run smoke:render` | **309 assertions**: `react-dom/server` renders an interface program covering the main components to HTML and asserts item by item (including how work mode and interactive mode each orchestrate, the three Markdown chains for LaTeX / code blocks / mermaid, workspace-panel upload entry and file-type icons, attachment entry and interjection button in the input area, engine grouping and workspace toggle in the sidebar, diff / task-list cards on tool rows, task-stats and goal cards, artifact summary card, table-extraction panel) |
+| Contract | `npm run smoke:ipc` | **504 assertions**: an electron stand-in really invokes **every IPC channel** the renderer calls (registration completeness, settings round-trip, session lifecycle, event push, out-of-bounds and directory-traversal rejection, guard prompts, the **full command-approval chain** (card / reject / allow-all-this-task / model review in `auto` / the four tiers), **file inbox and workspace upload**, **Word export**, **voice transcription**, **local web search**, **configuration profiles**, **chat attachments**, **scheduled reminder advancement**, **reasoning-effort pass-through**, **interjection during execution**, **task stats and goals**, **artifact summary**, **table extraction** and model-output cleanup) |
+| Security corpus | `node scripts/guard-corpus.mjs` | **43 assertion groups / 615 cases**: 117 hard-deny, 90 risky, 47 benign spellings, 250 `^`-escaped variants and 111 "`^` between words" variants; it also self-checks that every regex in all six tables is exercised and that every case lands in the expected tier |
 | Startup | `npm run smoke:startup` | **150 assertions** (Windows; 145 on other platforms, see note below): runs the **real entry point** `src/main/index.ts` with an electron stand-in and asserts that single-instance lock → whenReady → create window → register IPC happen in order, that **both the preload path and index.html point at files that actually exist**, that the data directory was created, and that nothing throws; it also asserts taskbar identity, menu bar, window icon, scheduled-reminder startup and the icon written by the packaging script |
 | Characters | `node scripts/check-emoji.mjs src/renderer` | the renderer must contain no emoji and no symbols used as icons (use SVG components instead) |
-| All | `npm run smoke` | the four smoke suites above + the character scan (~1010 assertions in total on Windows) |
+| All | `npm run smoke` | the four smoke suites above + the security corpus + the character scan (~1467 assertions in total on Windows) |
 
-`npm run smoke` pulls the riskiest ported code down into plain Node and exercises it along the real call
+`npm run smoke` pulls the riskiest core code down into plain Node and exercises it along the real call
 chain, applying **exactly the same** alias rules as `electron.vite.config.ts` through esbuild — so what is
 verified is the resolution rules the build artifacts actually depend on, not a separate approximation.
 
@@ -246,27 +380,29 @@ artifact ships with `diagnose.cmd`.
 
 ```text
 src/
-├── core/         # HarmonyOS business core (ported line by line) + platform adapter layer
+├── core/         # business core (TypeScript) + desktop platform adapter layer
 │   ├── common/   #   prompts, tool registry, guncat-ui lang, data pipelines, diff…
 │   ├── model/    #   Message / Conversation / ApiConfig / Agent…
-│   ├── service/  #   three-protocol SSE, agent loop, tool execution, skills, sandbox workspace…
+│   ├── service/  #   three-protocol SSE, agent loop, tool execution, skills, sandbox workspace,
+│   │             #   CommandGuard decisions and the command approval path…
 │   ├── export/   #   Docx / Xlsx / Pptx / Svg generators and importers
 │   ├── data/     #   StorageManager
-│   └── platform/ # ★ desktop-only: desktop equivalents of @kit.*
+│   └── platform/ #   desktop platform adapter: equivalents of @kit.*
 ├── main/         # Electron main process (windows, IPC, session and agent-loop orchestration)
 ├── preload/      # contextBridge security bridge
 ├── renderer/     # React UI
 └── ipc/          # shared main ↔ renderer contract
 resources/        # bundled resources: agents.json, agent prompts, skill library
-scripts/          # headless smoke verification and packaging scripts
-docs/PORTING.md   # ★ porting strategy, platform-adapter mapping, divergences from upstream
+scripts/          # headless smoke verification, command corpus and packaging scripts
+docs/PORTING.md   # platform adaptation strategy and differences from the HarmonyOS version
 ```
 
 ## Documentation
 
 | Document | Contents |
 | --- | --- |
-| [Porting notes](docs/PORTING.md) | Porting strategy, `@kit.*` adapter mapping, **list of divergences from upstream** (re-apply item by item when syncing upstream) |
+| [Platform adaptation and differences](docs/PORTING.md) | Desktop platform adapter, `@kit.*` mapping, **list of implementation differences from the HarmonyOS version** |
+| [Command security audit](src/core/service/CommandGuard.ts) | Threat model, six rule tables, four approval tiers and the reason for every bypass (the header comment is the design document) |
 | [Interactive mode](docs/INTERACTIVE-MODE.md) | guncat-ui lang data flow, 76 component coverage, fault tolerance, two-layer headless verification |
 | [Startup troubleshooting](docs/STARTUP-TROUBLESHOOTING.md) | Crash root cause, 14 controlled experiments, the real cause of the white screen, the 6-tier diagnostic ladder, crash-dump analysis |
 | [Contributing](CONTRIBUTING.md) | Environment requirements, verification matrix, coding conventions and red lines, PR process |
@@ -274,16 +410,21 @@ docs/PORTING.md   # ★ porting strategy, platform-adapter mapping, divergences 
 
 The documents themselves are written in Chinese.
 
-Research material from the upstream HarmonyOS project:
+Research material from the HarmonyOS project:
 [open-intelligent-ui spec](https://github.com/zhubowen-bot/Guncat-Work-for-hmos/blob/main/docs/reference/open-intelligent-ui-spec.md) ·
 [openui-lang spec](https://github.com/zhubowen-bot/Guncat-Work-for-hmos/blob/main/docs/reference/openui-lang-spec.md).
 
 ## Privacy
 
-- API keys and app configuration are stored in the local user-data directory (`%APPDATA%\Guncat Work`).
+- API keys and app configuration live in the local user-data directory (`%APPDATA%\Guncat Work`) and are
+  encrypted by the system credential vault.
 - Chat requests and attachments are sent only to the model service you configure.
 - File reads and writes in work mode happen entirely inside the app's sandbox workspace; **no additional
   permissions are requested**.
+- Command execution always goes through the security audit: destructive operations are rejected; commands
+  that need approval show the working directory, the risk and the command text, and rejecting, skipping
+  or not answering all count as denial; the child environment is whitelisted, so the main process's keys
+  never reach the command.
 - Files received through command-line arguments, a second instance or a window drag-and-drop go into the
   **sandbox workspace** (the model reads them with file tools); they are not automatically sent as
   attachments.
@@ -295,19 +436,24 @@ Start with [Startup troubleshooting and compatibility mode](docs/STARTUP-TROUBLE
 covers a missing window / white screen / instant exit, the `-2147483645` exit code, the real cause of the
 white screen, how to use the diagnostic scripts and how to read crash dumps.
 
+For why a command was rejected or why approval is being requested, see the rule tables and reasons in
+[Command security audit](src/core/service/CommandGuard.ts) and the
+[Shell security audit](#shell-security-audit-commandguard) section.
+
 ## Contributing
 
 Issues and pull requests are welcome. For the development environment, coding conventions (including the
-hard rule that the ported core must not be modified by default), how to run the verification matrix and the
-PR process, see **[CONTRIBUTING.md](CONTRIBUTING.md)** (Chinese).
+hard rule that the core must not be modified by default), how to run the verification matrix and the PR
+process, see **[CONTRIBUTING.md](CONTRIBUTING.md)** (Chinese).
 
 1. Fork the repository.
 2. Create a feature branch.
 3. Make your changes and run the matching verification layer (changes under `src/core/**` must come with
-   new assertions).
+   new assertions; changes to command rules must add cases to both the decision layer and the integration
+   layer of `scripts/guard-corpus.mjs` and `scripts/ipc-check.mjs`).
 4. Make sure `npm run verify` passes.
 5. Open a pull request describing the change and how it was verified.
 
 ## License
 
-Released under the [Apache License 2.0](LICENSE), the same license as the upstream HarmonyOS app.
+Released under the [Apache License 2.0](LICENSE), the same license as the HarmonyOS version.
