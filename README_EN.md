@@ -2,7 +2,6 @@
 
 **English** | [中文](README.md)
 
-> A desktop port of the HarmonyOS app [Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos) —
 > an Agent Harness client rebuilt with **Electron + React + TypeScript**.
 > The business core (agent loop, three streaming protocols, 45 built-in tools, 37 skills, Office
 > generators, the `guncat-ui lang` renderer) was ported line by line from ArkTS.
