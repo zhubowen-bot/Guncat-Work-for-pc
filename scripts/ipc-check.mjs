@@ -3792,6 +3792,35 @@ check(
   ['echo hi > note.txt', 'dir > listing.txt', 'git diff > patch.diff', 'type log.txt > out.log',
     'npm run build > build.log', 'command > nul 2>&1'].filter(hit4).join(' | ')
 )
+// —— 第十一轮实测：两条「同一语义换一种写法」的通道 ——
+// (1) 重定向只是写文件的一种写法。copy/xcopy/move/tee/tftp 做的是同一件事：把载荷换成脚本内容，
+//     再在**同一条命令**里把它跑起来 —— 同审读到的同样是改写前的旧内容。上一轮只堵了 `>`，
+//     实测 `copy payload.txt run.bat && call run.bat` 零审批执行了 payload 里的内容。
+const R9_COPY_WRITE = [
+  'copy payload.txt run.bat', 'copy payload.txt run.bat && call run.bat',
+  'xcopy payload.txt run.cmd', 'move payload.txt run.ps1', 'tee run.js < payload.txt',
+  'tftp -i 127.0.0.1 GET run.bat', 'copy /b payload.txt "sub\\run.cmd"'
+]
+check(
+  '写入型命令（copy/xcopy/move/tee/tftp）把内容写进脚本文件判危险（与重定向同一条理由）',
+  R9_COPY_WRITE.every(hit4),
+  R9_COPY_WRITE.filter((c) => !hit4(c)).join(' | ')
+)
+check(
+  '复制/搬运普通数据文件不打扰（写数据文件与 write_file 同一口径）',
+  ['copy a.txt b.txt', 'xcopy src dist /e', 'copy /b a.bin b.bin', 'tee out.log',
+    'tftp -i 127.0.0.1 GET report.csv'].every((c) => !hit4(c)),
+  ['copy a.txt b.txt', 'xcopy src dist /e', 'copy /b a.bin b.bin', 'tee out.log',
+    'tftp -i 127.0.0.1 GET report.csv'].filter(hit4).join(' | ')
+)
+// (2) @ 前缀只是「别回显」，语法位置与裸写完全一样；而驱动 @ 剥离开关的那份名单里没有脚本宿主，
+//     于是 `@cscript payload.vbs` 原先整条免检（锚点要求段首/分隔符，`@` 把锚点顶掉了）。
+const R9_AT_HOSTS = ['@cscript run.vbs', '@wscript //nologo run.vbs', '@cscript //E:vbscript run.txt']
+check(
+  '@ 前缀不改变脚本宿主的语义（@cscript/@wscript 与裸写同判）',
+  R9_AT_HOSTS.every(hit4),
+  R9_AT_HOSTS.filter((c) => !hit4(c)).join(' | ')
+)
 check(
   '空命令与超长命令都按硬禁处理（人无法审阅）',
   CommandGuard.assess('', cmdRoot).forbidden && CommandGuard.assess('x'.repeat(5000), cmdRoot).forbidden
@@ -4032,7 +4061,10 @@ for (const hole of [
   ['wevtutil cl Application', '事件日志'],
   // 第八轮的两条通道：加载器执行二进制、先改写脚本再执行（同审看到的是旧内容）
   ['installutil probe-payload.dll', '系统组件加载'],
-  ['type probe-payload.txt > probe-run.bat', '重定向进脚本文件']
+  ['type probe-payload.txt > probe-run.bat', '重定向进脚本文件'],
+  // 第十一轮的两条通道：写入型命令改写脚本（同审看到的是旧内容）、@ 前缀顶掉宿主锚点
+  ['copy probe-payload.txt probe-run.bat', '写入型命令改写了脚本文件'],
+  ['@cscript probe-payload.vbs', '脚本宿主']
 ]) {
   const card = await askFor(hole[0])
   check(
@@ -4227,6 +4259,62 @@ check(
   benignScript.ok === true && benignScript.output.includes('audit-safe-ok') &&
     !events.some((e) => e.type === 'ask:user'),
   benignScript.output.slice(0, 160)
+)
+// —— 第十一轮：脚本里内嵌 base64/hex 载荷、运行时才解出来交给子进程 ——
+// 文本里既没有命令也没有危险词（载荷本身是乱码串），原来整条零审批执行（实测写出了标记文件）。
+fs.writeFileSync(path.join(auditDir, 'decode.cjs'),
+  "require('child_process').execSync(Buffer.from('ZWNobyBhdWRpdC1ieXBhc3M=', 'base64').toString())\n")
+events.length = 0
+const decodePromise = CommandService.run(convCmd.id, cmdRoot,
+  { command: 'node guard-audit/decode.cjs' }, null)
+const decodeAsk = await waitForEvent((e) => e.type === 'ask:user')
+check(
+  '脚本里运行时解码的载荷（Buffer.from … base64）要走审批，理由写明是运行时解码',
+  decodeAsk !== null && decodeAsk.question.includes('decode.cjs') &&
+    decodeAsk.question.includes('解码'),
+  decodeAsk === null ? '(没有审批卡)' : decodeAsk.question.slice(0, 240)
+)
+await inv('work:answer', {
+  conversationId: convCmd.id,
+  requestId: decodeAsk === null ? '' : decodeAsk.requestId,
+  canceled: false,
+  selections: ['拒绝'],
+  note: ''
+})
+const decodeRes = await decodePromise
+check(
+  '解码载荷的脚本被拒 → 不执行',
+  decodeRes.ok === false && decodeRes.output.includes('命令未执行'),
+  decodeRes.output.slice(0, 160)
+)
+// —— 第十一轮：写入型命令（copy）把载荷换成脚本内容，再在同一条命令里执行它 ——
+// 与重定向是同一件事：同审读到的是 copy 之前的干净旧脚本，跑起来才被换掉（实测零审批执行了载荷）。
+fs.writeFileSync(path.join(auditDir, 'run-clean.bat'), '@echo off\r\necho clean-content\r\n')
+fs.writeFileSync(path.join(auditDir, 'payload.txt'), '@echo off\r\necho hijacked-content\r\n')
+events.length = 0
+const copyHijack = CommandService.run(convCmd.id, cmdRoot,
+  { command: 'copy guard-audit\\payload.txt guard-audit\\run-clean.bat && call guard-audit\\run-clean.bat' },
+  null)
+const copyAsk = await waitForEvent((e) => e.type === 'ask:user')
+check(
+  'copy 改写脚本再执行要走审批（与重定向同一条理由：同审读到的是旧内容）',
+  copyAsk !== null && copyAsk.question.includes('run-clean.bat') &&
+    copyAsk.question.includes('写入型命令'),
+  copyAsk === null ? '(没有审批卡)' : copyAsk.question.slice(0, 240)
+)
+await inv('work:answer', {
+  conversationId: convCmd.id,
+  requestId: copyAsk === null ? '' : copyAsk.requestId,
+  canceled: false,
+  selections: ['拒绝'],
+  note: ''
+})
+const copyHijackRes = await copyHijack
+check(
+  'copy 改写脚本被拒 → 脚本没有被换掉、也没有执行（内容仍是 clean-content）',
+  copyHijackRes.ok === false && copyHijackRes.output.includes('命令未执行') &&
+    fs.readFileSync(path.join(auditDir, 'run-clean.bat'), 'utf8').includes('clean-content'),
+  copyHijackRes.output.slice(0, 160)
 )
 await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_FULL_ACCESS)
 const chained = await CommandService.run(

@@ -235,7 +235,9 @@ export class CommandGuard {
     // Windows 脚本宿主：它唯一的作用是「把那个文件当代码跑」，而跑什么全在文件里。
     // 更要紧的是后缀说了不算 —— cscript/wscript 加 //E:vbscript 能把 payload.txt 当 VBS 执行，
     // 而脚本同审是按后缀决定读不读内容的，于是这条通道三道防线一个都不过（实测删了文件、读了 win.ini）。
-    { re: /(?:^|[\s;&|(])(?:cscript|wscript)(?:\.exe)?\b/i, why: '交给 Windows 脚本宿主执行脚本文件（内容不在命令行里）' },
+    // 锚点同样要认 @ 前缀与路径分隔符（`@cscript x.vbs`、`tools\cscript.exe x.vbs`）：@ 只是「别回显」，
+    // 语法位置与裸写完全一样，而 unobfuscate 的 @ 剥离名单里没有这两个名字（实测 `@cscript x.vbs` 整条免检）。
+    { re: /(?:^|[\s;&|(\\/])@?(?:cscript|wscript)(?:\.exe)?\b/i, why: '交给 Windows 脚本宿主执行脚本文件（内容不在命令行里）' },
     { re: /\/\/E\s*[:=]|vbscript:|language\s*=\s*["']?(?:vbs|jscript)/i, why: '指定脚本引擎执行代码（//E: 、vbscript: 一类）' },
     { re: /\biex\b|\bstart-process\b|\bnew-object\b[^\n|;]*shell/i, why: 'PowerShell 执行原语' },
     { re: /\$\(|`[^`\n]+`/, why: '命令替换（$(…) 或反引号）：文本里看到的不是最终执行的那一段' },
@@ -259,9 +261,22 @@ export class CommandGuard {
     // 起一个 cmd —— 关键词表对这些完全无感，只有读了内容才看得见。
     { re: /CreateObject\s*\(\s*["']?(?:Wscript|Shell|Scripting|Msxml2|Adodb)|ActiveXObject\s*\(\s*["']?(?:Wscript|Shell|Scripting|Msxml2|Adodb)/i, why: '脚本经 WSH/COM 对象操作文件或起进程' },
     { re: /\bDelete(?:File|Folder)\b|\bKillFile\b/i, why: '脚本删除文件（FSO/API）' },
-    // 参数不是单段字面量（变量、拼接、模板串）或字面量后面还接了一段 —— 真正跑什么不在文本里。
-    { re: /\b(?:execSync|execFileSync|execFile|spawnSync|spawn|Popen|subprocess\.\w+|os\.system|os\.popen|child_process\.exec)\s*\(\s*(?:[A-Za-z_$][\w$]*\s*[+,)]|\$\{|`)|\b(?:execSync|execFileSync|execFile|spawnSync|spawn|Popen|subprocess\.\w+|os\.system|os\.popen)\s*\(\s*['"][^'"\n]{0,200}['"]\s*[+&]/i,
-      why: '把拼出来的字符串交给子进程执行（真正运行的命令读不出）' },
+    // 脚本里内嵌一段编码载荷，运行时才解出来 —— 文本里既没有命令也没有危险词。
+    // 原先只登记了命令行那一侧的写法（-enc / FromBase64String / base64 -d），脚本 API 这一侧完全没管：
+    // Buffer.from('…','base64').toString() / atob('…') 解码出来的命令，交给 execSync 就是一个
+    // 「发一条命令就能执行的任意代码」，而脚本同审看不出任何东西（实测零审批执行了载荷里的命令，
+    // 并写出了一个标记文件）。
+    { re: /\bBuffer\.from\s*\([^()\n]*,\s*['"](?:base64|hex|latin1|binary|ucs2|utf16le)['"]|\batob\s*\(|\bbase64\.b64decode\b|\bbinascii\.unhexlify\b|\bbytes\.fromhex\b|\bcodecs\.decode\s*\([^)]*['"]base64['"]/i,
+      why: '脚本在运行时解码内嵌载荷（base64/hex），真正要执行的内容不在文本里' },
+    // 参数不是一段**完整的字面量**（变量、拼接、模板串、Buffer.from/atob 解码出来的值）——
+    // 真正跑什么不在文本里。原先只认「第一个字符是标识符且紧跟 + , )」，于是
+    // execSync(Buffer.from('…','base64').toString()) 正好从这个缝里漏了过去：参数以 Buffer 开头、
+    // 后面跟的是 `.`，两个分支都对不上（实测零审批执行了载荷里的命令）。现在改成「除了字面量一概不放过」，
+    // 列表/数组字面量（subprocess.run(['git','status'])）仍然放行 —— 那种写法内容是读得出来的。
+    { re: /\b(?:execSync|execFileSync|execFile|spawnSync|spawn|Popen|subprocess\.\w+|os\.system|os\.popen|child_process\.exec)\s*\(\s*(?![`'"[])/i,
+      why: '把拼出来/解码出来的字符串交给子进程执行（真正运行的命令读不出）' },
+    { re: /\b(?:execSync|execFileSync|execFile|spawnSync|spawn|Popen|subprocess\.\w+|os\.system|os\.popen)\s*\(\s*['"][^'"\n]{0,200}['"]\s*[+&]/i,
+      why: '把拼出来/解码出来的字符串交给子进程执行（真正运行的命令读不出）' },
     { re: /\beval\s*\(|\bnew\s+Function\s*\(|(?:^|[^\w.])Execute(?:Global)?\s*\(/i, why: '执行一段动态拼出来的代码（eval 一类）' }
   ]
 
@@ -501,6 +516,16 @@ export class CommandGuard {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '命令把输出重定向进脚本文件 ' + scriptWrite +
         '（同审读到的是改写前的旧内容，先改写再执行等于没审）')
+    }
+    // 重定向只是「写文件」的一种写法。copy/xcopy/move/tee/tftp 做的是同一件事：
+    // 把载荷换成那个脚本的内容，再在**同一条命令**里把它跑起来 —— 同审读到的同样是改写前的旧内容。
+    // 实测 `copy payload.txt run.bat && call run.bat` 零审批跑出了 payload 里的内容。
+    let scriptCopy: string = CommandGuard.firstOverSources(sources,
+      (t: string): string => CommandGuard.firstScriptCopyTarget(t))
+    if (scriptCopy !== '') {
+      verdict.risky = true
+      CommandGuard.pushReason(verdict, '命令用 copy/move/xcopy/tee 一类写入型命令改写了脚本文件 ' +
+        scriptCopy + '（同审读到的是改写前的旧内容，先改写再执行等于没审）')
     }
     // `~` / `$HOME` 在 cmd 里只是一个字符，在 Git-bash / WSL / PowerShell 里就是主目录 ——
     // 字面路径规则对这种「由 shell 决定指向哪」的写法完全无感（实测 wsl ls ~ 静默列出主目录）。
@@ -957,7 +982,7 @@ export class CommandGuard {
   // 「按命令里出现的文件字面量决定执行什么」的宿主。它们一旦出现在命令里，同审就要去读那个文件，
   // 无论它叫什么后缀（见 scriptRefs）—— cscript 能把 payload.txt 当 VBS 跑，//E: 就是它自己声明的引擎。
   private static readonly SCRIPT_HOST_RE: RegExp =
-    /(?:^|[\s;&|(])(?:cscript|wscript|mshta)(?:\.exe)?\b|\/\/E\s*[:=]|vbscript:/i
+    /(?:^|[\s;&|(\\/])@?(?:cscript|wscript|mshta)(?:\.exe)?\b|\/\/E\s*[:=]|vbscript:/i
 
   // 宿主的文件操作数：带后缀、不是开关、不是宿主自己
   private static readonly HOST_OPERAND_RE: RegExp = /^[^\d\-/\\][\w.~+@:/\\-]*\.[A-Za-z][A-Za-z0-9]{0,4}$/i
@@ -1109,6 +1134,65 @@ export class CommandGuard {
    * 这些日常写法不该被打扰；而「把内容写进 .bat/.ps1/.py/.js」本身就是「接下来要执行的一段代码」，
    * 值得人看一眼。
    */
+  // 「把内容写进目标文件」的那批程序：它们的**最后一个操作数**就是被覆盖/新建的文件，
+  // 与重定向是同一件事的另一种写法。实测 `copy payload.txt run.bat && call run.bat` 零审批跑出了
+  // payload 里的内容（同审读到的是 copy 之前的干净旧脚本）—— 上一轮只堵了 `>`，这条平行路径没堵。
+  private static readonly WRITE_VERB_RE: RegExp =
+    /^(?:copy|xcopy|move|mv|ren|rename|tee|tftp|expand|replace|robocopy|cp|install|rsync)$/i
+
+  /**
+   * 找出「被写入型命令覆盖/新建的脚本文件」；没有则返回空串。
+   *
+   * 判据落在**动词 + 它的操作数**上：`copy 源 目标`、`xcopy 源 目标`、`move 源 目标`、
+   * `tee 文件`、`tftp … GET 目标` —— 只要某个操作数带脚本后缀（与 SCRIPT_EXT_RE 同一把尺子）就命中，
+   * 因为无论是拷贝还是被覆盖，这条命令都在**改一个接下来可能被执行的脚本**。
+   * 从后往前找（目标通常在最后），`copy a.txt b.txt`、`robocopy src dist` 这类照旧不打扰。
+   */
+  private static firstScriptCopyTarget(text: string): string {
+    let segments: string[] = text.split(CommandGuard.SEGMENT_SPLIT_RE)
+    for (let s: number = 0; s < segments.length; s++) {
+      let toks: string[] = segments[s].trim().split(/\s+/)
+      let verb: string = ''
+      let operands: string[] = []
+      for (let k: number = 0; k < toks.length; k++) {
+        let raw: string = toks[k].replace(CommandGuard.TOKEN_EDGE_RE, '')
+        // 输入重定向（`tee run.js < payload.txt`）后面的都是数据源，不是被写的目标
+        if (raw.indexOf('>') !== -1 || raw.indexOf('<') !== -1) {
+          if (verb !== '') {
+            break
+          }
+          continue
+        }
+        if (raw === '' || CommandGuard.LEADING_SWITCH_RE.test(raw)) {
+          continue
+        }
+        let base: string = raw
+        let slash: number = Math.max(base.lastIndexOf('/'), base.lastIndexOf('\\'))
+        if (slash >= 0) {
+          base = base.substring(slash + 1)
+        }
+        base = base.replace(/\.(?:exe|com)$/i, '')
+        if (verb === '') {
+          if (!CommandGuard.WRITE_VERB_RE.test(base)) {
+            break
+          }
+          verb = base.toLowerCase()
+          continue
+        }
+        operands.push(raw)
+      }
+      if (verb === '') {
+        continue
+      }
+      for (let o: number = operands.length - 1; o >= 0; o--) {
+        if (CommandGuard.SCRIPT_EXT_RE.test(operands[o])) {
+          return operands[o]
+        }
+      }
+    }
+    return ''
+  }
+
   private static firstScriptWriteTarget(text: string): string {
     let re: RegExp = new RegExp(CommandGuard.REDIRECT_TARGET_RE.source, 'g')
     let match: RegExpExecArray | null = re.exec(text)
