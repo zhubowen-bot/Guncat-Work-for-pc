@@ -81,6 +81,14 @@ class ScriptAuditItem {
   depth: number = 0;
 }
 
+// 一个待审阅的 package.json script（`npm run x` 真正执行的那段命令行）
+class PackageScript {
+  /** scripts 里的键名 */
+  name: string = '';
+  /** 那段命令行的原文 */
+  body: string = '';
+}
+
 export class CommandService {
   // 会话级审批档位(与 WorkFileService.customRoots 同构: core 侧注册表, 主进程按会话元数据回填)
   private static permissions: Record<string, string> = {};
@@ -403,6 +411,26 @@ export class CommandService {
     // token —— 「把破坏写进 clean.bat，再用 call clean 调起来」把整个脚本同审跳了过去（实测）。
     // 只把**工作区里真实存在**的那几个补进来，所以不会给每条命令都添一条「脚本不存在」的风险项。
     refs = refs.concat(CommandService.bareScriptRefs(command, cwdRel, root));
+    // package.json 的 scripts 是「同一条命令的另一半」：`npm run x` 跑的是文件里那段命令行，
+    // 它既不在命令行文本里，后缀也不在脚本同审那张表里（.json 是数据文件）——把 `del` 写进去
+    // 再 npm run 一下，就等于把破坏搬进了一个**没有扩展名**的脚本容器。
+    // 实测（本轮）：package.json 里写 "x": "del /q marker.txt"，`npm run x` 零审批删掉了文件。
+    // 这里按同一把尺子审它的正文，并把正文里引用的脚本一并排进同审队列（`npm run y` 也跟一层）。
+    let pkgScripts: PackageScript[] =
+      CommandService.packageScriptBodies(command, cwdRel, root, verdict);
+    for (let p: number = 0; p < pkgScripts.length; p++) {
+      let pkgVerdict: GuardVerdict = CommandGuard.assessScript(pkgScripts[p].body, root);
+      for (let r: number = 0; r < pkgVerdict.reasons.length; r++) {
+        let label: string = 'package.json 的 scripts.' + pkgScripts[p].name + ' 里：' +
+          pkgVerdict.reasons[r];
+        if (pkgVerdict.forbidden) {
+          forbidden.push(label);
+          verdict.forbidden = true;
+        }
+        CommandService.pushRisk(verdict, label);
+      }
+      refs = refs.concat(CommandGuard.scriptRefs(pkgScripts[p].body));
+    }
     for (let i: number = 0; i < refs.length; i++) {
       let abs: string | null = CommandService.resolveScript(refs[i], cwdRel, root);
       if (abs === null) {
@@ -578,6 +606,153 @@ export class CommandService {
       }
     }
     return refs;
+  }
+
+  /**
+   * 命令里出现的「npm/yarn/pnpm/bun 要跑哪个 script」。
+   *
+   * 三种写法都要认：`<pm> run x` / `<pm> run-script x`（最正规的那一种）、
+   * `<pm> start|test|restart|stop`（npm 的隐式 script 名）、以及 yarn/bun 特有的 `<pm> x`
+   * （不需要 run）。词先过 CommandGuard.plainToken，`np^m run x` 这种拆词写法同样认得出来。
+   */
+  private static packageScriptNames(text: string): string[] {
+    let out: string[] = [];
+    let segments: string[] = text.split(/\r?\n|&&|\|\||[;&|]/);
+    for (let s: number = 0; s < segments.length; s++) {
+      let rawToks: string[] = segments[s].trim().split(/\s+/);
+      let toks: string[] = [];
+      for (let t: number = 0; t < rawToks.length; t++) {
+        let w: string = CommandGuard.plainToken(rawToks[t]);
+        if (w !== '') {
+          toks.push(w);
+        }
+      }
+      for (let i: number = 0; i + 1 < toks.length; i++) {
+        let pm: string = toks[i].replace(/^.*[\\/]/, '').replace(/\.(?:cmd|exe)$/i, '').toLowerCase();
+        if (!/^(?:npm|pnpm|yarn|bun)$/.test(pm)) {
+          continue;
+        }
+        let next: string = toks[i + 1].toLowerCase();
+        if (next === 'run' || next === 'run-script') {
+          let name: string = toks.length > i + 2 ? toks[i + 2] : '';
+          if (name !== '' && name.charAt(0) !== '-' && out.indexOf(name) === -1) {
+            out.push(name);
+          }
+          break;
+        }
+        if (/^(?:start|test|restart|stop)$/.test(next)) {
+          if (out.indexOf(next) === -1) {
+            out.push(next);
+          }
+          break;
+        }
+        // yarn / bun 允许省掉 run：`yarn build`、`bun dev`。只认「不是子命令」的那个词。
+        if ((pm === 'yarn' || pm === 'bun') && next.charAt(0) !== '-' &&
+          !CommandService.PKG_SUBCOMMAND_RE.test(next)) {
+          let direct: string = toks[i + 1];
+          if (out.indexOf(direct) === -1) {
+            out.push(direct);
+          }
+        }
+        break;
+      }
+    }
+    return out;
+  }
+
+  // 包管理器自己的子命令（它们不是 script 名，别拿去找 package.json 的 scripts）
+  private static readonly PKG_SUBCOMMAND_RE: RegExp =
+    /^(?:add|audit|bin|cache|ci|config|create|dedupe|delete|dlx|doctor|exec|explain|fund|get|help|i|info|init|install|launch|link|list|login|logout|ls|outdated|pack|patch|pkg|prefix|prune|publish|rebuild|remove|repo|root|run|run-script|search|set|store|un|uninstall|unlink|update|upgrade|version|view|why|workspace|workspaces|whoami|x)$/i;
+
+  /** 从工作目录往上找工作区里最近的那个 package.json（npm 自己也是这么找的） */
+  private static findPackageJson(cwdRel: string, root: string): string | null {
+    let rel: string = cwdRel.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    while (true) {
+      let candidate: string = rel === '' ? 'package.json' : rel + '/package.json';
+      let abs: string | null = WorkFileService.resolveSafePublic(root, candidate);
+      if (abs !== null && fileIo.accessSync(abs)) {
+        return abs;
+      }
+      if (rel === '') {
+        return null;
+      }
+      let cut: number = rel.lastIndexOf('/');
+      rel = cut < 0 ? '' : rel.substring(0, cut);
+    }
+  }
+
+  /**
+   * 取出这条命令会执行的 package.json script（名字 + 正文），并且顺着 `npm run y` 再跟一层。
+   *
+   * 读不出 / 解析不了时**转审批**而不是静默放过 —— 与「脚本读不出文本」同一条口径：
+   * 读不到内容只代表我们看不见，不代表它跑起来无害。
+   */
+  private static packageScriptBodies(command: string, cwdRel: string, root: string,
+    verdict: GuardVerdict): PackageScript[] {
+    let out: PackageScript[] = [];
+    let wanted: string[] = CommandService.packageScriptNames(command);
+    if (wanted.length === 0) {
+      return out;
+    }
+    let pkgAbs: string | null = CommandService.findPackageJson(cwdRel, root);
+    if (pkgAbs === null) {
+      // 工作区里连 package.json 都没有：npm 会自己往上一层找，找不到就报错，命令根本跑不起来，
+      // 所以这里不打扰用户（否则每个空目录里的 `npm test` 都要多问一次）。
+      return out;
+    }
+    let size: number = fileIo.statSync(pkgAbs).size;
+    if (size > Constants.WORK_CMD_SCRIPT_AUDIT_MAX_BYTES) {
+      CommandService.pushRisk(verdict, 'package.json 有 ' + Math.round(size / 1024).toString() +
+        ' KB，超出能逐字审阅的上限，里面的 scripts 审阅不了');
+      return out;
+    }
+    let text: string | null = CommandService.readScript(pkgAbs);
+    if (text === null) {
+      CommandService.pushRisk(verdict, 'package.json 读不出文本（编码不符？），里面的 scripts 审阅不了');
+      return out;
+    }
+    let scripts: Record<string, string> = {};
+    try {
+      let parsed: Object = JSON.parse(text) as Object;
+      let bag: Object | undefined = (parsed as Record<string, Object>)['scripts'];
+      if (bag !== undefined && bag !== null && typeof bag === 'object') {
+        let map: Record<string, Object> = bag as Record<string, Object>;
+        let keys: string[] = Object.keys(map);
+        for (let k: number = 0; k < keys.length; k++) {
+          let v: Object = map[keys[k]];
+          if (typeof v === 'string') {
+            scripts[keys[k]] = v as string;
+          }
+        }
+      }
+    } catch (e) {
+      CommandService.pushRisk(verdict, 'package.json 解析失败，里面的 scripts 审阅不了');
+      return out;
+    }
+    let queue: string[] = wanted;
+    let seen: string[] = [];
+    while (queue.length > 0 && out.length < CommandService.MAX_SCRIPT_FILES) {
+      let name: string = queue.shift() as string;
+      if (seen.indexOf(name) !== -1) {
+        continue;
+      }
+      seen.push(name);
+      let body: string | undefined = scripts[name];
+      if (body === undefined || body.trim() === '') {
+        continue;
+      }
+      let item: PackageScript = new PackageScript();
+      item.name = name;
+      item.body = body;
+      out.push(item);
+      let nested: string[] = CommandService.packageScriptNames(body);
+      for (let n: number = 0; n < nested.length; n++) {
+        if (seen.indexOf(nested[n]) === -1) {
+          queue.push(nested[n]);
+        }
+      }
+    }
+    return out;
   }
 
   private static readScript(abs: string): string | null {

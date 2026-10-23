@@ -3626,6 +3626,19 @@ check(
     CommandGuard.bareScriptTokens('npm run build').join() === 'npm' &&
     CommandGuard.bareScriptTokens('python parse.py data.json').join() === 'python'
 )
+// 壳被拆词/转义遮过：`ca^ll clean`、`c"a"ll clean` 执行时就是 `call clean`，跑的是 clean.bat。
+// 上一版这一层只看原文，`ca^ll` 既不是已知的壳也不是合法裸名，循环当场 break ——
+// 后面那个 clean 连一次内容审阅都没触发（实测把 del 写进 clean.bat 后零审批执行）。
+check(
+  '被拆词写法遮过的壳照样认得出（ca^ll / c"a"ll / ^ 夹在中间）',
+  CommandGuard.bareScriptTokens('ca^ll tools\\clean').join() === 'tools\\clean' &&
+    CommandGuard.bareScriptTokens('c"a"ll tools\\clean').join() === 'tools\\clean' &&
+    CommandGuard.bareScriptTokens('c^a^l^l tools\\clean').join() === 'tools\\clean' &&
+    CommandGuard.bareScriptTokens('ca^ll clean').join() === 'clean' &&
+    CommandGuard.bareScriptTokens('ca^ll npm run build').join() === 'npm',
+  CommandGuard.bareScriptTokens('ca^ll tools\\clean').join() + ' / ' +
+    CommandGuard.bareScriptTokens('c"a"ll tools\\clean').join()
+)
 const SYS_ADMIN_FORBIDDEN = [
   'format C', 'format C:', 'format /FS:NTFS D:', 'vssadmin delete shadows /for=C: /all /quiet',
   'wbadmin delete systemstatebackup -keepVersions:0 -quiet',
@@ -4622,6 +4635,81 @@ check(
   bareRes.ok === false && bareRes.output.includes('命令未执行') &&
     fs.existsSync(path.join(auditDir, 'victim.txt'))
 )
+
+// —— 本轮：同一个裸名，壳换成拆词写法（`ca^ll …` 执行时就是 `call …`）——
+// 上一版只按原文认壳，`ca^ll` 对不上任何已知壳、也不是合法裸名，裸名同审整段被跳过：
+// 同一条命令换成这种写法就零审批执行（实测用 marker 文件复现）。
+events.length = 0
+const caretPromise = CommandService.run(
+  convCmd.id, cmdRoot, { command: 'ca^ll guard-audit\\barewipe' }, null
+)
+const caretAsk = await waitForEvent((e) => e.type === 'ask:user')
+check(
+  '拆词写法遮过的壳照样进同审（ca^ll guard-audit\\barewipe 跑的是 barewipe.bat）',
+  caretAsk !== null && caretAsk.question.includes('barewipe.bat') &&
+    caretAsk.question.includes('删除文件'),
+  caretAsk === null ? '(没有审批卡)' : caretAsk.question.slice(0, 240)
+)
+await inv('work:answer', {
+  conversationId: convCmd.id,
+  requestId: caretAsk === null ? '' : caretAsk.requestId,
+  canceled: false,
+  selections: ['拒绝'],
+  note: ''
+})
+const caretRes = await caretPromise
+check(
+  '被拒 → 不执行（victim.txt 还在）',
+  caretRes.ok === false && caretRes.output.includes('命令未执行') &&
+    fs.existsSync(path.join(auditDir, 'victim.txt'))
+)
+
+// —— 本轮：npm run 执行的是 package.json 里的 scripts（同一条命令的另一半）——
+// `.json` 是数据文件、不进脚本同审那张后缀表，命令行里又只有 `npm run wipe` 三个词：
+// 把 del 写进 scripts.wipe 再 npm run 一下，等于给破坏换了一个「没有扩展名」的脚本容器
+// （实测用 marker 文件复现：零审批、marker 被删）。这里要求它和 .bat 一样被读出来同审。
+const auditPkgPath = path.join(cmdRoot, 'package.json')
+fs.writeFileSync(auditPkgPath, JSON.stringify({
+  name: 'guard-audit-pkg',
+  private: true,
+  scripts: {
+    cleanit: 'del /q guard-audit\\victim.txt',
+    ok: 'echo audit-pkg-ok'
+  }
+}, null, 2))
+events.length = 0
+const pkgPromise = CommandService.run(convCmd.id, cmdRoot, { command: 'npm run cleanit' }, null)
+const pkgAsk = await waitForEvent((e) => e.type === 'ask:user')
+check(
+  'package.json 的 scripts 进同审（npm run cleanit 跑的是文件里那段 del）',
+  pkgAsk !== null && pkgAsk.question.includes('package.json 的 scripts.cleanit') &&
+    pkgAsk.question.includes('删除文件'),
+  pkgAsk === null ? '(没有审批卡)' : pkgAsk.question.slice(0, 260)
+)
+await inv('work:answer', {
+  conversationId: convCmd.id,
+  requestId: pkgAsk === null ? '' : pkgAsk.requestId,
+  canceled: false,
+  selections: ['拒绝'],
+  note: ''
+})
+const pkgRes = await pkgPromise
+check(
+  'package.json 里的破坏被拒 → 不执行（victim.txt 还在）',
+  pkgRes.ok === false && pkgRes.output.includes('命令未执行') &&
+    fs.existsSync(path.join(auditDir, 'victim.txt'))
+)
+// 反过来：干净的 script 不该多问一句（同审只看内容，不看是不是 npm run）
+events.length = 0
+const pkgOkRun = await CommandService.run(convCmd.id, cmdRoot, { command: 'npm run ok' }, null)
+check(
+  '干净的 npm script 不打扰用户（只有内容危险时才问）',
+  events.every((e) => e.type !== 'ask:user') && pkgOkRun.ok === true &&
+    pkgOkRun.output.includes('audit-pkg-ok'),
+  pkgOkRun.output.slice(0, 120)
+)
+fs.rmSync(auditPkgPath, { force: true })
+
 
 // —— 超过审阅层级同样转审批（封顶是成本考虑，但被挡掉的那一段绝不能算审过了）——
 fs.writeFileSync(path.join(auditDir, 'l1.bat'), '@echo off\r\ncall guard-audit\\l2x.bat\r\n')

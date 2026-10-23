@@ -136,7 +136,11 @@ export class CommandGuard {
     //    补的是「根本不经过文件系统」的那一族：固件/控制器收到一条命令就把整块盘的块映射丢掉或
     //    覆盖掉，没有回收站、没有卷影副本、没有任何恢复工具能救。词表里原先只有 POSIX 的 mkfs/dd，
     //    换一个厂商工具名（blkdiscard / nvme / hdparm / cryptsetup）就等于没登记。
-    { re: /(?:^|[\s;&|(\\/])@?(?:blkdiscard|nwipe|sg_format|sdelete|sdelete64|wipe|scrub)(?:\.exe)?\b/i,
+    // 尾部这个 `(?!\.\w)` 是给「文件名」留的路：`node guard-audit/wipe.js` 里的 wipe 只是一段
+    // 文件名，不是要运行的 wipe 程序，但前缀字符类为了认 `tools\wipe` 把 `/` 也收了进来，
+    // 于是 wipe.js / sdelete.py 这类**源码文件**会被判成「物理介质级擦除」直接硬禁（没有审批入口，
+    // 用户连申诉的机会都没有 —— 硬禁误判比漏判更伤人）。`.exe` 由前一段显式吃掉，不受影响。
+    { re: /(?:^|[\s;&|(\\/])@?(?:blkdiscard|nwipe|sg_format|sdelete|sdelete64|wipe|scrub)(?:\.exe)?\b(?!\.\w)/i,
       why: '物理介质级擦除（整块盘或空闲空间被覆盖，不可恢复）' },
     { re: /\bcryptsetup\b[^\n|;]*(?:luksFormat|luksErase|luksRemoveKey|luksKillSlot|\berase\b|\bremove\b)/i,
       why: '销毁 LUKS 加密卷头/密钥（卷内数据永久读不回）' },
@@ -1470,6 +1474,20 @@ export class CommandGuard {
   private static readonly TOKEN_EDGE_RE: RegExp = /^[@'"`]+|['"`]+$/g
 
   /**
+   * 把一个 token 还原成「cmd 真正会执行的那个词」：去掉 cmd 的 ^ 转义与拆词用的引号。
+   *
+   * 为什么每个「按词比对」的地方都要过它：关键词表早就按「原文 ∪ 还原文」判了，
+   * 但**裸名脚本同审**（bareScriptTokens）与命令位判定（commandPrograms）原先只看原文，
+   * 于是 `ca^ll clean` 这样的写法两头都对不上 —— `ca^ll` 不是任何已知的壳、也不是合法的裸名，
+   * 循环当场 break，后面那个 `clean`（PATHEXT 补成 clean.bat 再执行）连一次内容审阅都没触发。
+   * 实测：把 `del` 写进 clean.bat，`call clean` 会走同审，`ca^ll clean` 则零审批直接执行。
+   * 同一个缺口对 `co^py a b`、`nod^e payload.txt` 一样成立，所以统一在这里还原一次。
+   */
+  static plainToken(raw: string): string {
+    return raw.replace(CommandGuard.TOKEN_EDGE_RE, '').replace(/\^/g, '').replace(/["'`]/g, '')
+  }
+
+  /**
    * 取每一段「命令位」上真正要被运行的那个程序（小写、去 @ 与引号、跳过开关与包一层的壳）。
    * 只取每段的第一个非开关程序名，参数位一概不收 —— 这是「程序名 vs 参数内容」的区分，
    * 词表级子串匹配做不到（`echo del x`、`npm run format` 都在参数位）。
@@ -1481,7 +1499,9 @@ export class CommandGuard {
       for (let i: number = 0; i < segments.length; i++) {
         let toks: string[] = segments[i].trim().split(/\s+/)
         for (let k: number = 0; k < toks.length; k++) {
-          let raw: string = toks[k].replace(CommandGuard.TOKEN_EDGE_RE, '').toLowerCase()
+          // 命令位上的词先还原伪装：`form^at`、`de^l`、`ca^ll` 执行时就是 format/del/call，
+          // 只看原文等于让程序名这一层被一个 ^ 绕过去（与 bareScriptTokens 同一个缺口）。
+          let raw: string = CommandGuard.plainToken(toks[k]).toLowerCase()
           if (raw === '' || CommandGuard.LEADING_SWITCH_RE.test(raw)) {
             continue
           }
@@ -1552,7 +1572,7 @@ export class CommandGuard {
       if (slash >= 0) {
         base = base.substring(slash + 1)
       }
-      if (!CommandGuard.EXEC_HOST_TOKEN_RE.test(base)) {
+      if (!CommandGuard.EXEC_HOST_TOKEN_RE.test(CommandGuard.plainToken(base))) {
         continue
       }
       for (let j: number = i + 1; j < parts.length; j++) {
@@ -1625,6 +1645,8 @@ export class CommandGuard {
           base = base.substring(slash + 1)
         }
         base = base.replace(/\.(?:exe|com)$/i, '')
+        // 动词同样要还原伪装：`co^py payload.txt run.bat` 与 `copy …` 是同一件事
+        base = CommandGuard.plainToken(base)
         if (verb === '') {
           if (!CommandGuard.WRITE_VERB_RE.test(base)) {
             break
@@ -1694,16 +1716,19 @@ export class CommandGuard {
     for (let s: number = 0; s < segments.length; s++) {
       let toks: string[] = segments[s].trim().split(/\s+/)
       for (let i: number = 0; i < toks.length; i++) {
-        let raw: string = toks[i].replace(CommandGuard.TOKEN_EDGE_RE, '')
-        if (raw === '' || CommandGuard.LEADING_SWITCH_RE.test(raw) || /^\d+$/.test(raw)) {
+        // 这一层必须看到「真正被敲下去的那个词」：`ca^ll clean` 执行时就是 `call clean`，
+        // 只按原文比会把 `ca^ll` 当成未知程序名然后 break —— 后面的 `clean` 永远进不了同审。
+        // 实测（本轮）把 `del` 写进 clean.bat 后：`call clean` 会走同审，`ca^ll clean` 零审批执行。
+        let plain: string = CommandGuard.plainToken(toks[i])
+        if (plain === '' || CommandGuard.LEADING_SWITCH_RE.test(plain) || /^\d+$/.test(plain)) {
           continue
         }
-        let bare: string = raw.replace(/\.(?:exe|com)$/i, '')
+        let bare: string = plain.replace(/\.(?:exe|com)$/i, '')
         // 包一层的壳与它自己的开关都跳过，接着往后面找真正的名字
         if (CommandGuard.SCRIPT_WRAPPER_RE.test(bare)) {
           continue
         }
-        let name: string = raw.replace(/^\.\//, '').replace(/^\.\\/, '')
+        let name: string = plain.replace(/^\.\//, '').replace(/^\.\\/, '')
         if (CommandGuard.isBareScriptName(name) && out.indexOf(name) === -1 && out.length < 8) {
           out.push(name)
         }

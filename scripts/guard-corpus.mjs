@@ -283,6 +283,12 @@ SILENT.push(
   'kafka-topics --list', 'nats stream ls', 'diskutil list'
 )
 
+// 固件擦除工具那一族（blkdiscard / sdelete / wipe / scrub）的前缀字符类为了认 `tools\wipe`
+// 把 `/` 也收了进来，于是 wipe.js / sdelete.py 这类**源码文件名**会被判成「物理介质级擦除」
+// 直接硬禁（硬禁没有审批入口，误判的代价比漏判更高）。尾部 `(?!\.\w)` 把「带扩展名的文件名」
+// 摘出去，这里钉住它。
+SILENT.push('node tools/wipe.js', 'python tools/sdelete.py', 'node src/scrub.mjs')
+
 tier('4. 不打扰（正常写法既不硬禁也不危险）', SILENT, 'silent')
 
 console.log('\n4.5 工作区边界')
