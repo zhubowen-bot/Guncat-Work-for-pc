@@ -183,7 +183,7 @@ export const app = {
     return 'Guncat Work'
   },
   getVersion(): string {
-    return '0.2.0-test'
+    return '0.2.1-test'
   },
   getPath(name: string): string {
     if (paths[name] !== undefined) {

@@ -10,7 +10,7 @@
 ![Electron](https://img.shields.io/badge/Electron-38-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-0.2.1-blue)
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 ![forms](https://img.shields.io/badge/Agent%20Forms-Intelligent%20UI%20%2B%20Harness-blueviolet)
 ![tools](https://img.shields.io/badge/%E5%86%85%E7%BD%AE%E5%B7%A5%E5%85%B7-45-informational)
@@ -74,7 +74,7 @@ npm run dist       # 产出 release/Guncat Work-<版本>/
 产物：
 
 ```text
-release/Guncat Work-0.2.0/
+release/Guncat Work-0.2.1/
 ├── Guncat Work.exe              ← 双击这个
 ├── create-desktop-shortcut.cmd  ← 想放桌面就双击一次（带应用图标）
 ├── run-compat.cmd               ← 不提权，直接带 --no-sandbox 启动
