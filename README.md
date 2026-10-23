@@ -2,7 +2,6 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-> 鸿蒙版 [Guncat Work](https://github.com/zhubowen-bot/Guncat-Work-for-hmos) 的桌面移植 ——
 > 用 **Electron + React + TypeScript** 复刻的 Agent Harness 客户端。
 > 业务内核（Agent Loop、三协议流式对话、45 个内置工具、37 项技能、Office 生成器、
 > `guncat-ui lang` 渲染器）从 ArkTS 逐字移植而来。
