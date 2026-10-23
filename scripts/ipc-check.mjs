@@ -4776,14 +4776,27 @@ check(
 )
 
 // 不误伤：同一个 --prefix，跑的是干净 script
+// 这一条与上面几条的区别是它**真会执行**（干净 script 不转审批），所以路径写法必须跟平台走：
+// CI 跑在 ubuntu 上、命令经 `/bin/sh -c`，`\` 在那里是转义符不是分隔符，
+// `npm --prefix guard-audit\pkgsub run ok` 会被解成 `guard-auditpkgsub`，npm 找不到包目录 →
+// 命令失败，这条「不误伤」就被平台差异顶掉（实测 CI：502 通过 / 本项失败）。
+// 判定层自己的路径解析会把 `\` 归一成 `/`（resolveScript），所以上面那些只判不跑的用例
+// 可以继续留 Windows 写法；但落地的这条要用 path.join 交给平台。
+const pkgSubArg = path.join('guard-audit', 'pkgsub')
 events.length = 0
 const prefixOkRun = await CommandService.run(convCmd.id, cmdRoot,
-  { command: 'npm --prefix guard-audit\\pkgsub run ok' }, null)
+  { command: 'npm --prefix ' + pkgSubArg + ' run ok' }, null)
+// 拆成两条：判定层「没多问」与「命令真的跑成了」是两件事，混在一条里 CI 只报一行，
+// 看不出是误伤还是路径/环境问题（这次失败就吃过这个亏）。
 check(
   '--prefix + 干净的 script 不打扰用户',
-  events.every((e) => e.type !== 'ask:user') && prefixOkRun.ok === true &&
-    prefixOkRun.output.includes('audit-subpkg-ok'),
-  prefixOkRun.output.slice(0, 140)
+  events.every((e) => e.type !== 'ask:user'),
+  events.filter((e) => e.type === 'ask:user').map((e) => e.question.slice(0, 120)).join(' | ')
+)
+check(
+  '--prefix + 干净的 script 能真的跑起来（副命令 npm --prefix ' + pkgSubArg + ' run ok）',
+  prefixOkRun.ok === true && prefixOkRun.output.includes('audit-subpkg-ok'),
+  prefixOkRun.output.slice(0, 180)
 )
 
 // -w / --workspace：执行目录被换到子包，手上这份 package.json 不是要跑的那份 → 转审批
