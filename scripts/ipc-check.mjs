@@ -3747,6 +3747,51 @@ check(
   R6_QUIET.every((c) => !hit4(c)),
   R6_QUIET.filter(hit4).join(' | ')
 )
+// —— 第八轮实测：两条「审阅范围之外」的通道 ——
+// (1) 系统组件加载器：installutil/regsvcs/regasm/cmstp/odbcconf/pcalua/xwizard/msdt 的作用就是
+//     「把工作区里那个二进制/描述文件加载起来跑」。载荷是 .dll/.inf，脚本同审读不了；命令行里
+//     也没有危险词 —— 与已经登记的 rundll32/regsvr32/mshta 完全是同一族，原先却全部零审批直通。
+const R8_HOSTS = [
+  'installutil payload.dll', 'installutil /logfile= /LogToConsole=false /U payload.dll',
+  'regsvcs payload.dll', 'regasm /codebase payload.dll', 'cmstp /s payload.inf',
+  'odbcconf /a {REGSVR payload.dll}', 'pcalua -a payload.exe', 'xwizard RunWizard {x}',
+  'msdt /id PCWDiagnostic', '@installutil payload.dll', 'tools\\installutil.exe payload.dll',
+  'start "" regsvcs payload.dll', 'dotnet exec payload.dll', 'dotnet payload.dll'
+]
+check(
+  '系统组件加载器（installutil/regsvcs/regasm/cmstp/odbcconf…、dotnet exec）判危险：载荷是二进制，内容审阅不了',
+  R8_HOSTS.every(hit4),
+  R8_HOSTS.filter((c) => !hit4(c)).join(' | ')
+)
+check(
+  '加载器规则不误伤正常命令（dotnet 的 build/test、npm run、node 脚本照旧静默）',
+  ['dotnet build', 'dotnet test', 'dotnet --info', 'npm run build', 'node scripts/build.mjs',
+    'python parse.py', 'type data.json'].every((c) => !hit4(c)),
+  ['dotnet build', 'dotnet test', 'dotnet --info', 'npm run build', 'node scripts/build.mjs',
+    'python parse.py', 'type data.json'].filter(hit4).join(' | ')
+)
+// (2) 脚本同审读的是**执行前**的内容，而写文件不在危险表里（与 write_file 同一口径）。
+//     两者叠起来就是一条免检通道：`type payload.txt > run.bat && call run.bat` —— 同审看到 run.bat
+//     的旧内容（干净），命令跑起来先把它换成 payload.txt（.txt 不进同审表，一个字都不会被读），
+//     再 call 它。实测这条命令零审批执行了 payload.txt 里的 del。
+const R8_SCRIPT_WRITE = [
+  'type payload.txt > run.bat', 'type payload.txt > run.bat && call run.bat',
+  'type payload.txt >> run.bat && call run.bat', 'type payload.txt > run.cmd & run.cmd',
+  'type payload.txt > run.ps1', 'type payload.txt > run.js && node run.js',
+  'type payload.txt > run.py && python run.py', 'echo x > sub\\run.bat'
+]
+check(
+  '把输出重定向进脚本文件判危险（同审读到的是改写前的旧内容，先改写再执行等于没审）',
+  R8_SCRIPT_WRITE.every(hit4),
+  R8_SCRIPT_WRITE.filter((c) => !hit4(c)).join(' | ')
+)
+check(
+  '重定向到普通数据/日志文件不打扰（写数据文件与 write_file 同一口径）',
+  ['echo hi > note.txt', 'dir > listing.txt', 'git diff > patch.diff', 'type log.txt > out.log',
+    'npm run build > build.log', 'command > nul 2>&1'].every((c) => !hit4(c)),
+  ['echo hi > note.txt', 'dir > listing.txt', 'git diff > patch.diff', 'type log.txt > out.log',
+    'npm run build > build.log', 'command > nul 2>&1'].filter(hit4).join(' | ')
+)
 check(
   '空命令与超长命令都按硬禁处理（人无法审阅）',
   CommandGuard.assess('', cmdRoot).forbidden && CommandGuard.assess('x'.repeat(5000), cmdRoot).forbidden
@@ -3984,7 +4029,10 @@ for (const hole of [
   ['tar -xf probe-backup.tar', '解包归档'],
   ['robocopy probe-src probe-dst', '默认静默覆盖'],
   ['git -c core.fsmonitor="echo probe" status', 'git 配置注入'],
-  ['wevtutil cl Application', '事件日志']
+  ['wevtutil cl Application', '事件日志'],
+  // 第八轮的两条通道：加载器执行二进制、先改写脚本再执行（同审看到的是旧内容）
+  ['installutil probe-payload.dll', '系统组件加载'],
+  ['type probe-payload.txt > probe-run.bat', '重定向进脚本文件']
 ]) {
   const card = await askFor(hole[0])
   check(

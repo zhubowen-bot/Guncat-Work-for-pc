@@ -212,6 +212,20 @@ export class CommandGuard {
     { re: /\bdeno\s+run|(?:^|[\s;&|])(?:ts-node|tsx)\s/i, why: '直接执行 TypeScript 脚本（内容不在命令里）' },
     { re: /-{1,2}enc\w*\b|frombase64string|tobase64string|\bbase64\s+(?:-d|--decode)\b|\becho\s+[a-z0-9+/=]{24,}\s*\|/i, why: 'Base64 或编码载荷（解码后才知道要执行什么）' },
     { re: /\b(?:certutil|bitsadmin|mshta|rundll32|regsvr32|msiexec|wmic)\b/i, why: '系统组件下载/执行（常被用来绕过安全策略）' },
+    // 上面这一行的另一半：这些系统组件**不做下载**，只负责「把工作区里那个二进制/描述文件加载起来跑」。
+    // installutil/regsvcs/regasm 会执行程序集里的安装代码，cmstp 按 .inf 里写的命令与 DLL 执行，
+    // odbcconf 的 {REGSVR dll} 就是「注册一个 DLL」（等于执行它的 DllRegisterServer），
+    // pcalua/xwizard/msdt/mavinject/ieexec/register-cimprovider 直接起进程或注入。
+    // 与 rundll32/regsvr32 完全是同一档：载荷是二进制，审阅没东西可读，命令行里也没有危险词
+    // （实测：下面每一种写法原先全部零审批直通）。
+    // 锚点带上 @ 前缀与路径分隔符 —— `@installutil x.dll`、`tools\installutil.exe x.dll`
+    // 在 cmd 里与裸写同义，而 unobfuscate 的 @ 名单里没有这些名字。
+    { re: /(?:^|[\s;&|(\\/])@?(?:installutil|regsvcs|regasm|cmstp|odbcconf|pcalua|xwizard|msdt|mavinject|ieexec|register-cimprovider)(?:\.exe)?\b/i,
+      why: '系统组件加载/执行外部二进制（.dll/.inf 一类载荷，内容审阅不了）' },
+    // dotnet 的 build/test/run 与 npm run 同类（跑工作区里自己的工程），不打扰；
+    // 但 `dotnet exec x.dll` / `dotnet x.dll` 是把一个**二进制程序集**直接跑起来，没有任何可审的文本。
+    { re: /(?:^|[\s;&|(])@?dotnet(?:\.exe)?\s+(?:exec\s+\S+|\S+\.(?:dll|exe)\b)/i,
+      why: '用 .NET 运行时直接执行二进制程序集（内容审阅不了）' },
     // WSL 是把整条命令交给另一套环境（Linux）执行：那边的 find -delete、cp、tee、truncate
     // 一个都不在我这张表里（实测 wsl find probes -name canary.txt -delete 真的删了文件，
     // 而 wsl -u root 直接是 root 权限）。不解析它后面的 argv，命中即按危险处理。
@@ -475,6 +489,18 @@ export class CommandGuard {
     if (payload !== '') {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '解释器执行的载荷后缀不是代码文件，内容审阅不了：' + payload)
+    }
+    // 脚本同审读的是**执行前**的文件内容。同一条命令完全可以先把脚本改写成载荷、再把它跑起来：
+    // `type payload.txt > run.bat && call run.bat` 里命令文本没有任何危险词，run.bat 在审阅那一刻
+    // 还是干净旧内容，判完才被覆盖 —— 实测这条命令零审批跑出了 payload.txt 里的 del
+    // （payload.txt 后缀不在同审表里，一个字都不会被读）。
+    // 写普通数据文件不需要批准（与 write_file 同一口径），所以这里只盯「重定向的目标是脚本」。
+    let scriptWrite: string = CommandGuard.firstOverSources(sources,
+      (t: string): string => CommandGuard.firstScriptWriteTarget(t))
+    if (scriptWrite !== '') {
+      verdict.risky = true
+      CommandGuard.pushReason(verdict, '命令把输出重定向进脚本文件 ' + scriptWrite +
+        '（同审读到的是改写前的旧内容，先改写再执行等于没审）')
     }
     // `~` / `$HOME` 在 cmd 里只是一个字符，在 Git-bash / WSL / PowerShell 里就是主目录 ——
     // 字面路径规则对这种「由 shell 决定指向哪」的写法完全无感（实测 wsl ls ~ 静默列出主目录）。
@@ -1062,6 +1088,36 @@ export class CommandGuard {
         }
         break
       }
+    }
+    return ''
+  }
+
+  // 写重定向的目标：`> x` / `>> x` / `> "x"` / `1>x`；`2>&1` 这类不当路径用（目标以 & 开头，token 类里已排除）
+  private static readonly REDIRECT_TARGET_RE: RegExp =
+    />>?\s*("[^"\n]*"|'[^'\n]*'|[^\s"'`;|&<>()]+)/g
+
+  /**
+   * 找出命令里第一个「被重定向写入的脚本文件」；没有则返回空串。
+   *
+   * 为什么单独立一条：脚本同审（CommandService.auditScripts）必须在命令跑起来**之前**读文件，
+   * 而写文件本身不在危险表里（与 write_file 同一口径）。两者合在一起就是一条免检通道：
+   * `type payload.txt > run.bat && call run.bat` —— 同审看到的是 run.bat 的旧内容（干净），
+   * 命令跑起来先把它换成 payload.txt（不在同审后缀表里，一个字都不会被读），再 call 它。
+   * 实测这条命令零审批执行了 payload.txt 里的 del。
+   *
+   * 只认脚本后缀（与 SCRIPT_EXT_RE 同一把尺子）：`dir > listing.txt`、`git diff > patch.diff`
+   * 这些日常写法不该被打扰；而「把内容写进 .bat/.ps1/.py/.js」本身就是「接下来要执行的一段代码」，
+   * 值得人看一眼。
+   */
+  private static firstScriptWriteTarget(text: string): string {
+    let re: RegExp = new RegExp(CommandGuard.REDIRECT_TARGET_RE.source, 'g')
+    let match: RegExpExecArray | null = re.exec(text)
+    while (match !== null) {
+      let target: string = match[1].replace(/^["']+|["']+$/g, '')
+      if (CommandGuard.SCRIPT_EXT_RE.test(target)) {
+        return target
+      }
+      match = re.exec(text)
     }
     return ''
   }

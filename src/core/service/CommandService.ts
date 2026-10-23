@@ -388,6 +388,11 @@ export class CommandService {
    *      （`%~dp0`、PATH 上的名字、脚本里自己 cd），不代表运行时不存在 ——
    *      实测 `%~dp0` 一条就静默删了文件。
    * 深度 2、文件数 8 封顶；被上限挡掉的引用同样转审批，不能默默少审。
+   *
+   * 这套审阅有一个绕不过去的时间差：它读的是**执行前**的文件内容，而同一条命令可以先把脚本改写掉
+   * 再执行（`type payload.txt > run.bat && call run.bat`：这里看到的是干净的旧 run.bat，命令跑起来
+   * 才把它换成 payload.txt 再 call）。所以「把输出重定向进脚本文件」由 CommandGuard 单独判危险
+   * （见 firstScriptWriteTarget），改这条链时别把那层规则当成多余的。
    */
   private static auditScripts(command: string, cwdRel: string, root: string,
     verdict: GuardVerdict): string {
