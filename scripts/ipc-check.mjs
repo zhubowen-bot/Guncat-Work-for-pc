@@ -3529,6 +3529,34 @@ check(
     CommandGuard.scriptRefs('node _shelltest\\payload.txt').length === 0 &&
     CommandGuard.scriptRefs('python parse.py data.json').join() === 'parse.py'
 )
+// 第七轮实测：把「要执行的代码」放进数据文件不只有脚本宿主一条路 ——
+// cmd 的 stdin 重定向与 for /f 的循环变量都会把文件逐行当命令执行，而 .txt 不进脚本同审，
+// 命令行里也没有任何危险词（cmd < payload.txt 原来整条零审批直通）。
+const STDIN_CODE_CMDS = [
+  'cmd < payload.txt', 'cmd /d /s /c < payload.txt', 'python - < payload.txt',
+  'python < payload.txt', 'node < payload.txt', 'sh < payload.txt',
+  'for /f %i in (payload.txt) do @%i', 'for /f %i in (payload.txt) do call "%i"'
+]
+check(
+  '从 stdin / for 循环变量执行未审阅数据文件里的命令一律判危险（.txt 不进脚本同审）',
+  STDIN_CODE_CMDS.every((c) => CommandGuard.assess(c, cmdRoot).risky) &&
+    ['bash run.sh < input.txt', 'python parse.py < data.json', 'node build.js < config.json',
+      "for /f %i in ('echo hi') do echo %i", 'for /f %i in (list.txt) do echo %i'].every(
+      (c) => !CommandGuard.assess(c, cmdRoot).risky),
+  STDIN_CODE_CMDS.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
+// 第七轮实测：工作区边界原先只认盘符/.. /环境变量，UNC 路径一条都不沾 ——
+// \\127.0.0.1\c$ 是本机 C 盘的管理共享，读写它等于绕过整个工作区约束。
+const UNC_ESCAPE_CMDS = [
+  'dir \\\\127.0.0.1\\c$\\Users', 'type \\\\server\\share\\a.txt', 'ls //server/share',
+  'copy \\\\localhost\\c$\\Users\\me\\secret.txt .'
+]
+check(
+  'UNC/网络路径指向工作区之外判为危险（没有盘符、没有 .. 也是出圈）',
+  UNC_ESCAPE_CMDS.every((c) => CommandGuard.assess(c, cmdRoot).risky &&
+    CommandGuard.assess(c, cmdRoot).reasons.some((r) => r.includes('工作区之外'))),
+  UNC_ESCAPE_CMDS.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
+)
 const SYS_ADMIN_FORBIDDEN = [
   'format C', 'format C:', 'format /FS:NTFS D:', 'vssadmin delete shadows /for=C: /all /quiet',
   'wbadmin delete systemstatebackup -keepVersions:0 -quiet',

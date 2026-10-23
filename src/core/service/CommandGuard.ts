@@ -165,7 +165,24 @@ export class CommandGuard {
     // 管道右边是解释器时，执行的是**上游那段文本**：命令行里既没有解释器的开关，也没有动作，
     // 关键词表无从下手（实测：echo ([IO.File]::Delete(…)) | @powershell - 静默删掉了文件）。
     { re: /\|\s*(?:sudo\s+)?@?\s*(?:cmd|command)(?:\.exe|\.com)?\b|\|\s*(?:sudo\s+)?@?\s*(?:node|python\d?|perl|ruby|php|lua|deno|bun)(?:\.exe)?\b/i, why: '把上游内容当代码交给解释器执行' },
-    { re: /\b(?:cmd|command|powershell|pwsh|sh|bash|zsh|dash|ksh|node|python\d?|perl|ruby|php|lua)\s+-\s*(?:$|[;&|])/i, why: '解释器从标准输入读代码执行（内容不在命令行里）' },
+    // stdin 重定向是「同一件事的另一种写法」：`-` 后面跟的不是结束符而是 `<` 时，代码同样来自
+    // 那个文件（实测 `python - < payload.txt` 原来因为只认 `$|;&|` 而整条放行）。
+    { re: /\b(?:cmd|command|powershell|pwsh|sh|bash|zsh|dash|ksh|node|python\d?|perl|ruby|php|lua)\s+-\s*(?:$|[;&|<])/i, why: '解释器从标准输入读代码执行（内容不在命令行里）' },
+    // cmd 不带 /c 时会把**重定向进来的每一行**当成命令执行；它是脚本同审完全覆盖不到的一条门：
+    // payload.txt 的后缀不在 SCRIPT_EXT_RE 里，脚本内容一个字都不会被读，而命令行里既没有
+    // del/rm 也没有解释器（实测 `cmd < payload.txt`、`cmd /d /s /c < payload.txt` 零审批直通，
+    // 文件里写什么就执行什么）。
+    // 同一条规律适用于所有「没有脚本操作数时从 stdin 读代码」的解释器：`python < payload.txt`、
+    // `node < payload.txt`、`sh < payload.txt` 都是跑文件里的内容（实测原来全部放行）。
+    // 只认「宿主与 `<` 之间只有开关」的形态：`python script.py < data.json` 这种把 stdin 当数据
+    // 的正常写法有脚本操作数挡在中间，不会被误伤。
+    { re: /(?:^|[\s;&|(])(?:cmd|command|sh|bash|zsh|dash|ksh|python\d?|py|pypy|node|iojs|deno|bun|perl|ruby|php|lua|tclsh)(?:\.exe|\.com)?(?:\s+(?:\/[a-z]|-{1,2}[\w=.-]*|-))*\s*</i,
+      why: '解释器从重定向进来的文件读代码执行（文件内容不在命令行里）' },
+    // `for /f ... do %i` 是 cmd 里「把文件逐行当命令执行」的标准写法：文件是 .txt 时不进脚本同审，
+    // 命令行里也没有任何危险词（实测 `do %i`、`do @%i`、`do call %i` 三种写法全部零审批直通）。
+    // 只认「循环变量本身就位于命令位」的形态，`do echo %i` 这类正常用法不打扰。
+    { re: /\bfor\s+\/f\b[^\n]*?\bdo\s+\(?\s*@?(?:call\s+)?["']?%{1,2}[A-Za-z]/i,
+      why: '把文件内容当命令执行（for /f 的循环变量位于命令位）' },
     { re: /\b(?:sh|bash|zsh|dash|ksh)(?:\.exe)?\b[^\n|;&]*?\s-\w*c\b/i, why: '交给 shell 内联执行一段代码' },
     { re: /\b(?:node|iojs|deno|bun)(?:\.exe)?\b[^\n|;&]*?\s-(?:e|p)\b|\b(?:node|iojs|deno|bun)(?:\.exe)?\b[^\n|;&]*?\s--(?:eval|print)\b/i, why: '交给 JS 运行时内联执行代码' },
     { re: /\b(?:python|python\d|pypy|py)(?:\.exe)?\b[^\n|;&]*?\s-(?:c|m)\b/i, why: '交给 Python 内联执行代码' },
@@ -227,6 +244,13 @@ export class CommandGuard {
   // 命令里出现的绝对路径 token: 盘符路径, 或系统级 POSIX/Windows 目录开头的路径
   private static readonly ABS_PATH_RE: RegExp =
     /(?:[a-zA-Z]:[\\/]|[\\/](?:etc|usr|var|opt|bin|sbin|boot|sys|dev|home|root|tmp|mnt|media|Users|Program Files(?:\s?\(x86\))?|ProgramData|Windows)[\\/])/g
+
+  // UNC / 网络路径：`\\server\share`、`//server/share`、`\\?\C:\…`、`\\?\UNC\server\share`。
+  // 它们既没有盘符也不带 `..`，而 ABS_PATH_RE 只认得第二段恰好叫 Windows/Users 这类系统目录的写法 ——
+  // 于是 `\\127.0.0.1\c$\Users`（本机 C 盘的管理共享，等于整块磁盘）与 `//server/share`
+  // 一直零审批直通（实测）。token 至少要 host + 分隔符 + share 三段，`\\n` 这种转义串不会被误判。
+  private static readonly UNC_TOKEN_RE: RegExp =
+    /^(?:\\{2,}|\/{2,})[^\\/\s"'`;|&<>()]+[\\/][^\\/\s"'`;|&<>()]+/
 
   /**
    * 判定一条命令。root 传当前工作区根目录（用于豁免「就在工作区里干活」的绝对路径），
@@ -380,6 +404,14 @@ export class CommandGuard {
     if (up !== '') {
       verdict.risky = true
       CommandGuard.pushReason(verdict, '命令里有 .. 上跳，读写位置在工作区之外：' + up)
+    }
+    // UNC 路径是「工作区边界」上另一条没被覆盖的路：它没有盘符、没有 ..，ABS_PATH_RE 也认不全。
+    // `dir \\127.0.0.1\c$\Users` 读的是本机整块 C 盘，`copy \\server\share\x .` 是往外拿数据 ——
+    // 与绝对路径同一条边界，判定也归到同一档（工作区根本身在 UNC 共享上时不误伤）。
+    let unc: string = CommandGuard.firstUncPathOutside(trimmed, root)
+    if (unc !== '') {
+      verdict.risky = true
+      CommandGuard.pushReason(verdict, '命令里的 UNC/网络路径在工作区之外：' + unc)
     }
     // 字面路径规则只认 `C:\` 与 `..`，而 cmd 里 `%TEMP%\x`、PowerShell 里 `$env:TEMP + '\x'`
     // 展开后同样出圈（实测：type %SystemRoot%\win.ini 读系统文件全程静默）。
@@ -693,6 +725,49 @@ export class CommandGuard {
     while (match !== null) {
       if (CommandGuard.UP_SEGMENT_RE.test(match[0])) {
         return match[0]
+      }
+      match = re.exec(text)
+    }
+    return ''
+  }
+
+  /**
+   * 找出命令里第一个指向工作区之外的 UNC/网络路径；没有则返回空串。
+   *
+   * 为什么单独一条：工作区边界原先只认「盘符绝对路径」「.. 上跳」「环境变量路径」三种写法，
+   * 而 SMB 路径一条都不沾 —— `\\server\share` 没有盘符，`\\localhost\c$\Users` 的第二段是共享名
+   * 而不是系统目录名，所以 `dir \\127.0.0.1\c$\Users` 连绝对路径规则都不会碰它。影响是整台机器：
+   * `\\localhost\c$` 就是本机 C 盘的管理共享，读写它等于绕过整个工作区约束；对远端共享则是外发通道。
+   * 与绝对路径同档（risky）：正当的跨共享操作仍然可以经审批放行。
+   *
+   * 工作区自己就在网络共享上时不误伤：把 `\\?\` / `\\.\` 扩展前缀归一掉之后按前缀比较。
+   */
+  private static firstUncPathOutside(text: string, root: string): string {
+    let normRoot: string = CommandGuard.normalizePath(root).replace(/\/+$/, '').replace(/^\/\/\?\//, '')
+    let re: RegExp = new RegExp(CommandGuard.TOKEN_RE.source, 'g')
+    let match: RegExpExecArray | null = re.exec(text)
+    while (match !== null) {
+      // 引号与 @ 只是伪装，token 边界已经把前后引号切开了
+      let token: string = match[0].replace(CommandGuard.TOKEN_EDGE_RE, '')
+      // `--out=\\server\share` 这种把路径挂在参数上的写法：UNC 前缀前面还有一段 `name=`。
+      // 取最后一个 = 之后的部分再判，URL（https://…）不以此开头，不会被当成 UNC。
+      let candidate: string = token
+      let eq: number = candidate.lastIndexOf('=')
+      if (eq >= 0 && eq + 1 < candidate.length) {
+        candidate = candidate.substring(eq + 1)
+      }
+      // 脚本源码里的 UNC 会写成 `\\\\server\\share`（每个分隔符都被转义成两个），
+      // 判定前先把连续分隔符折成一个，否则「宿主 + 分隔符 + 共享名」这条结构在脚本里永远对不上。
+      let probe: string = candidate
+      if (/^(?:\\\\|\/\/)/.test(probe)) {
+        let sep: string = probe.charAt(1)
+        probe = sep + sep + probe.replace(/^[\\/]+/, '').replace(/[\\/]+/g, sep)
+      }
+      if (CommandGuard.UNC_TOKEN_RE.test(probe)) {
+        let norm: string = CommandGuard.normalizePath(candidate).replace(/^\/\/\?\//, '')
+        if (normRoot === '' || (norm !== normRoot && norm.indexOf(normRoot + '/') !== 0)) {
+          return token
+        }
       }
       match = re.exec(text)
     }
