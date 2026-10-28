@@ -12,7 +12,7 @@
 ![Electron](https://img.shields.io/badge/Electron-38-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
-![version](https://img.shields.io/badge/version-0.2.1-blue)
+![version](https://img.shields.io/badge/version-7.0.0-blue)
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 ![forms](https://img.shields.io/badge/Agent%20Forms-Intelligent%20UI%20%2B%20Harness-blueviolet)
 ![tools](https://img.shields.io/badge/built--in%20tools-45-informational)
@@ -84,7 +84,7 @@ have somewhere for a human to see and approve them.
 > command deleting something on the user's disk**. This capability shipped with an audit from day one:
 > the decision layer `src/core/service/CommandGuard.ts` (1,700+ lines of pure logic, no process access),
 > the approval path `src/core/service/CommandService.ts`, and a dedicated adjudication corpus.
-> Almost all work after `0.2.0` went here: more than ten rounds of adversarial testing, twenty-plus
+> Almost all of the last stretch of the beta (`0.2.0` → `0.2.1`) went here: more than ten rounds of adversarial testing, twenty-plus
 > bypasses closed one by one — every one reproduced first, fixed second, and covered by a regression.
 
 ### Threat model
@@ -202,7 +202,7 @@ npm run dist       # produces release/Guncat Work-<version>/
 Output layout:
 
 ```text
-release/Guncat Work-0.2.1/
+release/Guncat Work-7.0.0/
 ├── Guncat Work.exe              ← double-click this
 ├── create-desktop-shortcut.cmd  ← double-click once to add a desktop shortcut (with the app icon)
 ├── run-compat.cmd               ← starts with --no-sandbox, without elevation
