@@ -112,9 +112,10 @@ export interface GuncatApi {
       conversationId: string
     ): Promise<{ names: string[]; imported: number; failed: string[]; canceled: boolean }>
   }
-  /** 聊天模式的附件：选文件（立刻返回 parsing；解析结果经 attachment:parsed 事件回报） */
+  /** 聊天模式的附件：选文件或直接拖入文件路径（立刻返回 parsing；解析结果经 attachment:parsed 事件回报） */
   attachments: {
     pick(): Promise<PickedAttachmentDto[]>
+    addPaths(paths: string[]): Promise<PickedAttachmentDto[]>
   }
   /** 工作模式执行中插话；返回是否被接受（false 时应改走普通发送） */
   steer(conversationId: string, text: string): Promise<boolean>
@@ -136,6 +137,7 @@ export interface GuncatApi {
   }
   files: {
     pathForFile(file: File): string
+    stageTemp(name: string, bytes: Uint8Array): Promise<string>
   }
   asr: {
     transcribe(audio: Uint8Array, mime: string): Promise<{ ok: boolean; text: string; error: string }>

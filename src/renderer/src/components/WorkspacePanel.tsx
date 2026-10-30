@@ -560,6 +560,13 @@ export function WorkspacePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadWorkspace, activeId])
 
+  // 当工作区清单变化（拖拽导入 / 点击「上传」/ 主进程推送 workspace:changed）时立刻刷新文件树，
+  // 避免等 3 秒轮询才在列表里看到刚拖进来的文件。
+  useEffect(() => {
+    void refreshTree()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace])
+
   const messages = active?.messages ?? []
   const toolCalls = messages.reduce((sum, m) => sum + m.toolCalls.length, 0)
   // 速度与命中取**最后一条有值的** assistant（原版 WorkspaceBar 的 getSpeedText/getCacheHitText）

@@ -3390,6 +3390,14 @@ select {
   color: var(--accent);
   font-size: 14px;
   font-weight: 500;
+  text-align: center;
+}
+
+.dropzone__sub {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
 }
 
 /* ===== 滚动条 ===== */

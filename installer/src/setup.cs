@@ -397,10 +397,24 @@ namespace GuncatSetup
             string exe = Path.Combine(txtDir.Text.Trim().Trim('"'), BuildInfo.ExeName);
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo(exe);
-                psi.WorkingDirectory = Path.GetDirectoryName(exe);
-                psi.UseShellExecute = true;
-                Process.Start(psi);
+                // 安装器自身是提权进程（High Integrity）。若用户未勾选「始终以管理员身份运行」而直接
+                // Process.Start(exe)，子进程会继承管理员令牌；资源管理器是普通令牌（Medium Integrity），
+                // Windows UIPI 会拦截从资源管理器向高完整性窗口的 OLE 文件拖拽。
+                // 经由 explorer.exe 拉起可让应用回归普通桌面令牌，装完立即启动也能直接拖入文件。
+                if (chkAdmin != null && chkAdmin.IsChecked == true)
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo(exe);
+                    psi.WorkingDirectory = Path.GetDirectoryName(exe);
+                    psi.UseShellExecute = true;
+                    Process.Start(psi);
+                }
+                else
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo("explorer.exe", "\"" + exe + "\"");
+                    psi.WorkingDirectory = Path.GetDirectoryName(exe);
+                    psi.UseShellExecute = false;
+                    Process.Start(psi);
+                }
             }
             catch (Exception ex)
             {

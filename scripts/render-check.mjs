@@ -1580,6 +1580,24 @@ check(
   decode(mod.renderSettings()).includes('仅保存在本机应用数据目录，不会上传')
 )
 
+// --- 窗口文件拖拽目标路由（工作区 vs 附件区） ---
+check(
+  '聊天模式：拖到对话区/输入区时自动进「附件区」，拖到右侧工作区面板时进「工作区」',
+  mod.resolveDropTarget('chat', false) === 'attachment' &&
+    mod.resolveDropTarget('chat', true) === 'workspace'
+)
+check(
+  '工作/交互模式：拖到窗口任意区域都自动进「当前会话工作区」',
+  mod.resolveDropTarget('work', false) === 'workspace' &&
+    mod.resolveDropTarget('work', true) === 'workspace' &&
+    mod.resolveDropTarget('interactive', false) === 'workspace'
+)
+check(
+  '拖拽遮罩文案随落点区分「加入附件区」与「导入当前会话工作区」',
+  mod.dropzoneCopy('attachment').includes('加入附件区') &&
+    mod.dropzoneCopy('workspace').includes('导入当前会话工作区')
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

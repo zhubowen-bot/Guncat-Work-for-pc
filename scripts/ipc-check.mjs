@@ -168,7 +168,9 @@ const required = [
   'settings:saveCurrentApiProfile',
   'intake:import',
   'intake:pickFiles',
+  'files:stageTemp',
   'attachments:pick',
+  'attachments:addPaths',
   'work:steer',
   'conversation:stats',
   'conversation:artifacts',
@@ -875,6 +877,56 @@ check(
     typeof missingParsed.error === 'string' &&
     missingParsed.error !== '',
   JSON.stringify(missingParsed)
+)
+
+// --- 拖拽文件直达附件区 / 工作区（attachments:addPaths / files:stageTemp / 文件夹拖拽导入） ---
+const dropAttachFile = path.join(intakeDir, '拖拽附件.txt')
+fs.writeFileSync(dropAttachFile, 'dragged attachment text', 'utf8')
+events.length = 0
+const droppedAttachments = await inv('attachments:addPaths', [
+  dropAttachFile,
+  dropAttachFile,
+  intakeDir
+])
+check(
+  'attachments:addPaths 直接把拖拽路径变成 parsing 卡片，并去重 + 跳过目录',
+  droppedAttachments.length === 1 &&
+    droppedAttachments[0].path === dropAttachFile &&
+    droppedAttachments[0].name === '拖拽附件.txt' &&
+    droppedAttachments[0].status === 'parsing',
+  JSON.stringify(droppedAttachments)
+)
+const dropAttachParsed = await waitForEvent(
+  (e) => e.type === 'attachment:parsed' && e.path === dropAttachFile
+)
+check(
+  'attachments:addPaths 后台完成解析并推送 attachment:parsed(ready)',
+  dropAttachParsed !== null && dropAttachParsed.status === 'ready',
+  JSON.stringify(dropAttachParsed)
+)
+
+const stagedPath = await inv(
+  'files:stageTemp',
+  '截图:01?.txt',
+  new Uint8Array(Buffer.from('staged bytes', 'utf8'))
+)
+check(
+  'files:stageTemp 把无路径的内存拖拽文件落入临时目录并净化非法字符',
+  typeof stagedPath === 'string' &&
+    fs.existsSync(stagedPath) &&
+    fs.readFileSync(stagedPath, 'utf8') === 'staged bytes',
+  stagedPath
+)
+
+const dragFolder = path.join(intakeDir, '拖拽文件夹')
+fs.mkdirSync(dragFolder, { recursive: true })
+fs.writeFileSync(path.join(dragFolder, '子文件A.md'), '# A', 'utf8')
+const convDragDir = await inv('conversations:create', agents[0].id, 'work')
+const dragDirOutcome = await inv('intake:import', convDragDir.id, [dragFolder])
+check(
+  'intake:import 支持直接拖入整个文件夹并递归导入其中的文件',
+  dragDirOutcome.imported === 1 && dragDirOutcome.names.includes('子文件A.md'),
+  JSON.stringify(dragDirOutcome)
 )
 
 // 假的多模态服务：只数请求次数并回一句可识别的文字。

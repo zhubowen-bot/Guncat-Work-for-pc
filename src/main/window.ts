@@ -292,6 +292,18 @@ export function createMainWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // 防止文件拖放落到页面之外（或首屏挂载前松手）时 Chromium 默认导航到 file:// 把整个应用冲掉
+  window.webContents.on('will-navigate', (event, url) => {
+    const allowed =
+      url.startsWith('app://') ||
+      url.startsWith('data:') ||
+      (process.env.ELECTRON_RENDERER_URL !== undefined &&
+        url.startsWith(process.env.ELECTRON_RENDERER_URL))
+    if (!allowed) {
+      event.preventDefault()
+    }
+  })
+
   if (process.env.ELECTRON_RENDERER_URL !== undefined) {
     bootLog(`加载开发态页面: ${process.env.ELECTRON_RENDERER_URL}`)
     window.loadURL(process.env.ELECTRON_RENDERER_URL).catch((e: unknown) => {

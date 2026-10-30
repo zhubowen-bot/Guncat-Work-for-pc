@@ -2314,12 +2314,31 @@ export class SessionManager {
 
     const files: PickedFile[] = []
     const failed: string[] = []
+    const candidateFiles: string[] = []
     for (const p of paths) {
       try {
-        if (!fs.existsSync(p) || fs.statSync(p).isDirectory()) {
+        if (!fs.existsSync(p)) {
           failed.push(p)
           continue
         }
+        const stat = fs.statSync(p)
+        if (stat.isDirectory()) {
+          // 拖拽整个文件夹进工作区时，递归展开里面的文件（跳过 .git / node_modules，最多 64 个）
+          const inside = SessionManager.collectFilesInDir(p, 64)
+          if (inside.length === 0) {
+            failed.push(p)
+          } else {
+            candidateFiles.push(...inside)
+          }
+          continue
+        }
+        candidateFiles.push(p)
+      } catch {
+        failed.push(p)
+      }
+    }
+    for (const p of candidateFiles) {
+      try {
         const stat = fs.statSync(p)
         // 与上游单文件上限保持一致，避免把超大文件塞进工作区
         if (stat.size > Constants.WORK_WRITE_MAX_BYTES * 4) {
@@ -2349,6 +2368,41 @@ export class SessionManager {
       failed
     })
     return { names, imported: names.length, failed }
+  }
+
+  /**
+   * 递归收集目录下的文件（供拖拽文件夹进工作区时使用）。
+   * 跳过 .git 与 node_modules，总数封顶 maxFiles，避免误拖巨型仓库把工作区撑爆。
+   */
+  private static collectFilesInDir(rootDir: string, maxFiles: number): string[] {
+    const out: string[] = []
+    const walk = (dir: string): void => {
+      if (out.length >= maxFiles) {
+        return
+      }
+      let entries: fs.Dirent[]
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        if (out.length >= maxFiles) {
+          return
+        }
+        if (entry.name === '.git' || entry.name === 'node_modules') {
+          continue
+        }
+        const full: string = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          walk(full)
+        } else if (entry.isFile()) {
+          out.push(full)
+        }
+      }
+    }
+    walk(rootDir)
+    return out
   }
 
   /**

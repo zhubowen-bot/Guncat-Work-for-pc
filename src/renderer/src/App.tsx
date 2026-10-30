@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useStore } from './store'
+import { dropzoneCopy, resolveDropTarget, useStore, type DropTarget } from './store'
 import { reportStage } from './bootReport'
 import { Sidebar } from './components/Sidebar'
 import { Composer } from './components/Composer'
@@ -29,6 +29,52 @@ import { IconBrain, IconChevronDown, IconGlobe, IconTable } from './icons'
  * 因为错误信息在桌面端没有第二个可见出口，1 秒来不及读。
  */
 const NOTICE_MS: Record<string, number> = { error: 2500 }
+
+/** 判断拖拽事件是否携带文件（排除拖选网页文本等内部拖动） */
+function hasDraggedFiles(dt: DataTransfer | null): boolean {
+  if (dt === null) {
+    return false
+  }
+  const types = Array.from(dt.types ?? [])
+  return types.includes('Files') || (dt.files !== undefined && dt.files.length > 0)
+}
+
+/** 判断当前拖拽落点是否位于右侧「工作区」面板内 */
+function isOverWorkspacePanel(target: EventTarget | null): boolean {
+  if (target instanceof Element) {
+    return target.closest('.workspace') !== null
+  }
+  return false
+}
+
+/**
+ * 从拖拽的 FileList 中提取本机路径。
+ * 优先走 preload 的 webUtils.getPathForFile；若拖拽源只有内存字节（如从浏览器或截图工具直接拖入），
+ * 则通过 stageTemp 落入临时目录后再返回绝对路径，确保两条路径都能走通。
+ */
+async function extractDroppedPaths(fileList: FileList): Promise<string[]> {
+  const files = Array.from(fileList)
+  const paths: string[] = []
+  for (const file of files) {
+    const direct = window.guncat.files.pathForFile(file)
+    if (direct !== '') {
+      paths.push(direct)
+      continue
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      if (bytes.byteLength > 0) {
+        const staged = await window.guncat.files.stageTemp(file.name || 'dropped-file', bytes)
+        if (staged !== '') {
+          paths.push(staged)
+        }
+      }
+    } catch {
+      // 忽略无法读取的条目
+    }
+  }
+  return paths
+}
 
 function Notice() {
   const notice = useStore((s) => s.notice)
@@ -146,8 +192,21 @@ export default function App() {
   const showWorkspace = workspaceOpen
 
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [dragging, setDragging] = useState(false)
-  const intakeFiles = useStore((s) => s.intakeFiles)
+  const [dragTarget, setDragTarget] = useState<DropTarget | null>(null)
+  const dropFiles = useStore((s) => s.dropFiles)
+
+  useEffect(() => {
+    if (dragTarget === null) {
+      return
+    }
+    const reset = (): void => setDragTarget(null)
+    window.addEventListener('dragend', reset)
+    window.addEventListener('blur', reset)
+    return () => {
+      window.removeEventListener('dragend', reset)
+      window.removeEventListener('blur', reset)
+    }
+  }, [dragTarget])
 
   // 自动朗读（对齐原版 ChatPage 的 autoReadEnabled）：一轮结束就把最后一条回答念出来。
   // 只看 running 由 true → false 的那一次跃迁 —— 否则打开应用、切换会话都会触发朗读。
@@ -269,34 +328,52 @@ export default function App() {
   return (
     <div
       className={showWorkspace ? 'app with-workspace' : 'app'}
+      onDragEnter={(e) => {
+        if (hasDraggedFiles(e.dataTransfer)) {
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'copy'
+          setDragTarget(resolveDropTarget(mode, isOverWorkspacePanel(e.target)))
+        }
+      }}
       onDragOver={(e) => {
         // 只有真的拖了文件才提示；拖文本不拦截
-        if (Array.from(e.dataTransfer.types).includes('Files')) {
+        if (hasDraggedFiles(e.dataTransfer)) {
           e.preventDefault()
-          setDragging(true)
+          e.dataTransfer.dropEffect = 'copy'
+          const next = resolveDropTarget(mode, isOverWorkspacePanel(e.target))
+          if (dragTarget !== next) {
+            setDragTarget(next)
+          }
         }
       }}
       onDragLeave={(e) => {
-        if (e.currentTarget === e.target) {
-          setDragging(false)
+        const related = e.relatedTarget as Node | null
+        if (related === null || !e.currentTarget.contains(related)) {
+          setDragTarget(null)
         }
       }}
       onDrop={(e) => {
-        if (!Array.from(e.dataTransfer.types).includes('Files')) {
+        if (!hasDraggedFiles(e.dataTransfer)) {
           return
         }
         e.preventDefault()
-        setDragging(false)
-        // contextIsolation 下 File 没有 path，必须经 preload 的 webUtils 换算
-        const paths: string[] = Array.from(e.dataTransfer.files)
-          .map((f) => window.guncat.files.pathForFile(f))
-          .filter((p) => p !== '')
-        void intakeFiles(paths)
+        const target = resolveDropTarget(mode, isOverWorkspacePanel(e.target))
+        setDragTarget(null)
+        void extractDroppedPaths(e.dataTransfer.files).then((paths) => dropFiles(paths, target))
       }}
     >
-      {dragging ? (
-        <div className="dropzone">
-          <div className="dropzone__box">松开即可把文件导入当前会话工作区</div>
+      {dragTarget !== null ? (
+        <div className="dropzone" data-target={dragTarget}>
+          <div className="dropzone__box">
+            <div>{dropzoneCopy(dragTarget)}</div>
+            {mode === 'chat' && showWorkspace ? (
+              <div className="dropzone__sub">
+                {dragTarget === 'attachment'
+                  ? '拖到右侧「工作区」面板可改为导入工作区'
+                  : '拖到左侧对话区 / 输入框可改为加入附件区'}
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
       <Sidebar />

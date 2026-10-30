@@ -121,9 +121,11 @@ export {
  */
 export {
   defaultThinkingForAgent,
+  dropzoneCopy,
   interactiveEffortFromPrefs,
   isLoopMode,
   requestThinking,
+  resolveDropTarget,
   workEffortFromPrefs
 } from '@renderer/store'
 

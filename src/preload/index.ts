@@ -155,10 +155,12 @@ const api = {
       ipcRenderer.invoke(INVOKE.intakePickFiles, conversationId)
   },
 
-  /** 聊天模式的附件：选文件（返回时状态一律是 parsing，解析结果由 attachment:parsed 事件回报） */
+  /** 聊天模式的附件：选文件或直接拖入文件路径（返回时状态一律是 parsing，解析结果由 attachment:parsed 事件回报） */
   attachments: {
     pick: (): Promise<import('../ipc/contract').PickedAttachmentDto[]> =>
-      ipcRenderer.invoke(INVOKE.attachmentsPick)
+      ipcRenderer.invoke(INVOKE.attachmentsPick),
+    addPaths: (paths: string[]): Promise<import('../ipc/contract').PickedAttachmentDto[]> =>
+      ipcRenderer.invoke(INVOKE.attachmentsAddPaths, paths)
   },
 
   /** 工作模式执行中插话；返回是否被接受（false 时应改走普通发送） */
@@ -196,11 +198,24 @@ const api = {
 
   /**
    * 拖拽进来的 File 对象在开启 contextIsolation 后拿不到真实路径，
-   * 必须经 webUtils.getPathForFile 换算。这里只暴露这一个转换函数，
-   * 不把整个 webUtils 交给渲染进程。
+   * 必须经 webUtils.getPathForFile 换算；若拖拽源只有内存字节（如网页/截图工具），
+   * 则用 stageTemp 落入临时目录后再返回路径。
    */
   files: {
-    pathForFile: (file: File): string => webUtils.getPathForFile(file)
+    pathForFile: (file: File): string => {
+      try {
+        const resolved = webUtils.getPathForFile(file)
+        if (typeof resolved === 'string' && resolved !== '') {
+          return resolved
+        }
+      } catch {
+        // 某些非磁盘来源的拖拽条目没有本地路径，回退读 legacy path 或交由 stageTemp 落盘
+      }
+      const legacy = (file as { path?: unknown }).path
+      return typeof legacy === 'string' ? legacy : ''
+    },
+    stageTemp: (name: string, bytes: Uint8Array): Promise<string> =>
+      ipcRenderer.invoke(INVOKE.filesStageTemp, name, bytes)
   },
 
   /** 语音输入（录音 → 转写） */

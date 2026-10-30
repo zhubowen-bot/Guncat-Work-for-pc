@@ -20,6 +20,12 @@ export const INVOKE = {
    */
   attachmentsPick: 'attachments:pick',
   /**
+   * 把已有文件路径直接加入聊天模式的附件列表（拖拽文件到对话区 / 输入区时走这条路）。
+   * 返回值与 attachmentsPick 同构（初始状态一律为 parsing），并在主进程后台启动
+   * preparseAttachments、通过 attachment:parsed 事件逐个回报解析结果。
+   */
+  attachmentsAddPaths: 'attachments:addPaths',
+  /**
    * 工作模式执行中插话（原版流式时的「发送(插话)」按钮）。
    * 不打断当前请求，文本在下一轮开始前并入消息，返回是否被接受。
    */
@@ -123,6 +129,11 @@ export const INVOKE = {
    * 「拖拽到窗口」这一条路 —— 而拖拽在界面上没有任何提示，用户根本找不到入口。
    */
   intakePickFiles: 'intake:pickFiles',
+  /**
+   * 端侧增强：把只有内存字节的拖拽文件（如从浏览器或截图工具直接拖入、没有本地磁盘路径的文件）
+   * 写入应用临时目录并返回绝对路径，使后续的工作区导入与附件解析都能按路径统一处理。
+   */
+  filesStageTemp: 'files:stageTemp',
   /** 端侧增强：把一条回答导出为 Word */
   messageExportDocx: 'message:exportDocx',
   /** 端侧增强：语音输入（录音 → 转写） */

@@ -340,6 +340,24 @@ export function registerIpcHandlers(session: SessionManager): void {
     return { ...outcome, canceled: false }
   })
 
+  /**
+   * 拖拽内存文件落临时目录（当 webUtils.getPathForFile 拿不到磁盘路径时兜底，
+   * 例如从网页或截图工具直接拖进窗口的图片）。
+   */
+  ipcMain.handle(
+    INVOKE.filesStageTemp,
+    async (_e, name: string, data: Uint8Array | ArrayBuffer): Promise<string> => {
+      const rawName = typeof name === 'string' && name.trim() !== '' ? name.trim() : 'dropped-file'
+      const safeName =
+        path.basename(rawName).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_') || 'dropped-file'
+      const dir = makeTempDir('drop')
+      const target = path.join(dir, safeName)
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer)
+      fs.writeFileSync(target, bytes)
+      return target
+    }
+  )
+
   /** 把一条回答导出为 Word（复用移植的 DocxBuilder，含 LaTeX → OMML） */
   ipcMain.handle(
     INVOKE.messageExportDocx,
@@ -398,20 +416,15 @@ export function registerIpcHandlers(session: SessionManager): void {
     if (result.canceled) {
       return []
     }
-    const picked: PickedAttachmentDto[] = await Promise.all(
-      result.filePaths.map(async (filePath) => ({
-        path: filePath,
-        name: path.basename(filePath),
-        size: fs.existsSync(filePath) ? fs.statSync(filePath).size : 0,
-        thumbnail: await makeAttachmentThumbnail(filePath),
-        status: 'parsing' as const
-      }))
-    )
-    // 刻意**不 await** 解析：一 await 就成了「等解析完才返回」——
-    // 多模态解析要几秒，卡片会一直不出现（正是本次要修掉的行为）。
-    // 每个文件解析完，主进程会推 attachment:parsed 事件。
-    void session.preparseAttachments(picked.map((a) => a.path))
-    return picked
+    return await enqueueAttachmentPaths(session, result.filePaths)
+  })
+
+  /**
+   * 拖拽文件进聊天窗口 / 输入区时，直接把路径列表变成附件卡片并启动后台解析。
+   * 与 attachmentsPick 共用同一条入队与先行解析链路。
+   */
+  ipcMain.handle(INVOKE.attachmentsAddPaths, async (_e, filePaths: string[]) => {
+    return await enqueueAttachmentPaths(session, Array.isArray(filePaths) ? filePaths : [])
   })
 
   // ===== 插话（工作模式执行中补充要求） =====
@@ -574,6 +587,54 @@ function markReported(key: string, marker: string, message: string): void {
 
 /** 供启动阶段使用的临时目录（保留导出，便于后续调试） */
 export { makeTempDir }
+
+/**
+ * 把一组文件路径转成附件预览卡片，并在后台启动先行解析（attachments:pick 与
+ * attachments:addPaths 共用）。
+ *
+ * 目录（如用户把整个文件夹拖进聊天输入区）在附件直传中没有意义，直接跳过；
+ * 不存在的文件保留，由 preparseAttachments 统一回报 status='error' 与原因。
+ */
+async function enqueueAttachmentPaths(
+  session: SessionManager,
+  filePaths: string[]
+): Promise<PickedAttachmentDto[]> {
+  const uniquePaths: string[] = []
+  const seen = new Set<string>()
+  for (const raw of filePaths) {
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      continue
+    }
+    if (seen.has(raw)) {
+      continue
+    }
+    try {
+      if (fs.existsSync(raw) && fs.statSync(raw).isDirectory()) {
+        continue
+      }
+    } catch {
+      // 忽略探测异常，交给后续解析报错
+    }
+    seen.add(raw)
+    uniquePaths.push(raw)
+  }
+  if (uniquePaths.length === 0) {
+    return []
+  }
+  const picked: PickedAttachmentDto[] = await Promise.all(
+    uniquePaths.map(async (filePath) => ({
+      path: filePath,
+      name: path.basename(filePath),
+      size: fs.existsSync(filePath) ? fs.statSync(filePath).size : 0,
+      thumbnail: await makeAttachmentThumbnail(filePath),
+      status: 'parsing' as const
+    }))
+  )
+  // 刻意**不 await** 解析：一 await 就成了「等解析完才返回」——
+  // 多模态解析要几秒，卡片会一直不出现。每个文件解析完，主进程会推 attachment:parsed 事件。
+  void session.preparseAttachments(picked.map((a) => a.path))
+  return picked
+}
 
 /**
  * 图片的小缩略图（data URL），给附件预览条用。

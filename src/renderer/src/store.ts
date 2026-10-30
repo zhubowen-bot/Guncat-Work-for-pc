@@ -101,6 +101,29 @@ export function isLoopMode(mode: string): boolean {
   return mode === 'work' || mode === 'interactive'
 }
 
+/** 窗口拖拽文件的去向：工作区（工作/交互模式，或直接拖到工作区面板） vs 附件区（聊天模式） */
+export type DropTarget = 'workspace' | 'attachment'
+
+/**
+ * 窗口拖拽文件的目标判定：
+ *   · 悬停在右侧「工作区」面板上 → 无论当前是什么模式，都导入当前会话工作区；
+ *   · 其余区域（对话区 / 输入区 / 附件预览条等）→ 聊天模式自动加入「附件区」，
+ *     工作模式与交互模式自动导入「当前会话工作区」。
+ */
+export function resolveDropTarget(mode: string, overWorkspacePanel: boolean): DropTarget {
+  if (overWorkspacePanel) {
+    return 'workspace'
+  }
+  return mode === 'chat' ? 'attachment' : 'workspace'
+}
+
+/** 拖拽遮罩层的主提示文案 */
+export function dropzoneCopy(target: DropTarget): string {
+  return target === 'attachment'
+    ? '松开即可把文件加入附件区'
+    : '松开即可把文件导入当前会话工作区'
+}
+
 /**
  * 一次请求真正要下发的思考参数（对齐原版 loopEffortForRequest / loopThinkingEnabled）。
  *
@@ -196,6 +219,8 @@ interface State {
   scrollFreezeUntil: number
   /** 「填入输入框 / 重新编辑」请求：由消息操作行写入，输入框消费后清空 */
   pendingDraft: { text: string; at: number } | null
+  /** 拖拽到聊天窗口/输入区的文件路径队列：由 Composer 消费并加入附件预览条 */
+  pendingAttachmentPaths: string[]
   /**
    * 当前挂起的提问（无 = null）。非空时时间线末尾渲染提问卡片 ——
    * 原版 ChatPage 也是在时间线末尾渲染 AskUserCard，三种形态共用一条时间线，
@@ -252,6 +277,11 @@ interface State {
   /** 把一段文本填进输入框（消息操作行的「编辑 / 重新编辑」） */
   fillDraft(text: string): void
   consumeDraft(): void
+  /** 把拖拽进来的文件路径排进聊天附件队列（由 Composer 消费） */
+  enqueueAttachmentFiles(paths: string[]): void
+  consumeAttachmentFiles(): void
+  /** 拖拽文件松手后的统一分发：按目标加入附件区或导入当前会话工作区 */
+  dropFiles(paths: string[], target: DropTarget): Promise<void>
   /** 提交一次提问卡片（原版 ChatViewModel.answerAsk） */
   answerAsk(requestId: string, selections: string[], note: string): Promise<void>
   /** 跳过提问，由智能体自行决定（原版 ChatViewModel.cancelAsk） */
@@ -446,6 +476,7 @@ export const useStore = create<State>((set, get) => {
     workspacePreview: null,
     scrollFreezeUntil: 0,
     pendingDraft: null,
+    pendingAttachmentPaths: [],
     pendingAsk: null,
 
     async init() {
@@ -925,6 +956,46 @@ export const useStore = create<State>((set, get) => {
       set({ pendingDraft: null })
     },
 
+    enqueueAttachmentFiles(paths) {
+      if (paths.length === 0) {
+        return
+      }
+      set((state) => {
+        const seen = new Set(state.pendingAttachmentPaths)
+        const added: string[] = []
+        for (const p of paths) {
+          if (p !== '' && !seen.has(p)) {
+            seen.add(p)
+            added.push(p)
+          }
+        }
+        if (added.length === 0) {
+          return {}
+        }
+        return { pendingAttachmentPaths: [...state.pendingAttachmentPaths, ...added] }
+      })
+    },
+
+    consumeAttachmentFiles() {
+      set({ pendingAttachmentPaths: [] })
+    },
+
+    async dropFiles(paths, target) {
+      const valid = paths.filter((p) => p !== '')
+      if (valid.length === 0) {
+        return
+      }
+      if (target === 'attachment') {
+        if (get().running) {
+          get().pushNotice('warn', 'AI 正在回复中，请稍候')
+          return
+        }
+        get().enqueueAttachmentFiles(valid)
+        return
+      }
+      await get().intakeFiles(valid)
+    },
+
     // ===== 提问卡片（原版 ChatViewModel.answerAsk / cancelAsk） =====
     //
     // 两处都先本地收卡片、再发通道：
@@ -972,6 +1043,9 @@ export const useStore = create<State>((set, get) => {
       try {
         const result = await window.guncat.intake.importPaths(activeId, paths)
         await get().loadWorkspace()
+        if (result.imported > 0 && !get().workspaceOpen) {
+          set({ workspaceOpen: true })
+        }
         const parts: string[] = []
         if (result.imported > 0) {
           parts.push(`已导入 ${result.imported} 个文件到工作区：${result.names.join('、')}`)

@@ -42,6 +42,8 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
 
   const pendingDraft = useStore((s) => s.pendingDraft)
   const consumeDraft = useStore((s) => s.consumeDraft)
+  const pendingAttachmentPaths = useStore((s) => s.pendingAttachmentPaths)
+  const consumeAttachmentFiles = useStore((s) => s.consumeAttachmentFiles)
   const pushNotice = useStore((s) => s.pushNotice)
   const activeId = useStore((s) => s.activeId)
 
@@ -169,8 +171,57 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
     }
   }
 
+  /**
+   * 把拖拽进来的文件路径直接加入附件预览条（聊天模式下拖入窗口或输入区时触发）。
+   * 后台先行解析与回形针按钮走同一条链路，解析完由 attachment:parsed 事件推进状态。
+   */
+  async function addAttachmentPaths(paths: string[]): Promise<void> {
+    if (paths.length === 0) {
+      return
+    }
+    if (running) {
+      pushNotice('warn', 'AI 正在回复中，请稍候')
+      return
+    }
+    if (parsing) {
+      pushNotice('warn', '文件解析中，请稍候')
+      return
+    }
+    try {
+      const picked = await window.guncat.attachments.addPaths(paths)
+      if (picked.length === 0) {
+        pushNotice('warn', '没有可添加的附件（文件夹不支持直接作为附件发送）')
+        return
+      }
+      const existing = new Set(attachments.map((a) => a.path))
+      const fresh = picked.filter((a) => !existing.has(a.path))
+      setAttachments((prev) => {
+        const seen = new Set(prev.map((a) => a.path))
+        return [...prev, ...picked.filter((a) => !seen.has(a.path))]
+      })
+      if (fresh.length > 0) {
+        pushNotice('info', `已加入附件区：${fresh.map((a) => a.name).join('、')}`)
+      }
+    } catch (e) {
+      pushNotice('error', `添加附件失败：${String(e)}`)
+    }
+  }
+
   /** 还有附件在主进程后台解析时：既不能发，也不能再叠加新文件 */
   const parsing = attachments.some((a) => a.status === 'parsing')
+
+  // 消费拖拽投递到聊天附件区的文件路径队列
+  useEffect(() => {
+    if (pendingAttachmentPaths.length === 0) {
+      return
+    }
+    const batch = pendingAttachmentPaths.slice()
+    consumeAttachmentFiles()
+    if (mode === 'chat') {
+      void addAttachmentPaths(batch)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAttachmentPaths, consumeAttachmentFiles, mode])
 
   function submit(): void {
     const value = text.trim()
@@ -318,7 +369,11 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
           <button
             type="button"
             className={`composer__clip${parsing ? ' composer__clip--parsing' : ''}`}
-            title={parsing ? '文件解析中，请稍候' : '添加图片或文档（发送给模型直接查看）'}
+            title={
+              parsing
+                ? '文件解析中，请稍候'
+                : '添加图片或文档（点击选择或直接把文件拖入窗口，发送给模型直接查看）'
+            }
             // 解析中不可点（对齐原版 buildUploadButton 的 `!isParsing`）：此时再加一批文件
             // 只会让「哪张卡对应哪次解析」变得难懂，也让解析队列越排越长。
             // 录音中同样不可点（原版还多一个 `!isListening`）。
