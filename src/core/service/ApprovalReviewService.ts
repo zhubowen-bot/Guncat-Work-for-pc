@@ -215,6 +215,8 @@ export class ApprovalReviewService {
     probe.baseUrl = config.baseUrl;
     probe.apiKey = config.apiKey;
     probe.model = config.model;
+    probe.models = config.effectiveModels();
+    probe.sessionId = config.sessionId;
     probe.extraBody = config.extraBody;
     probe.autoSuffix = config.autoSuffix;
     probe.temperature = 0;

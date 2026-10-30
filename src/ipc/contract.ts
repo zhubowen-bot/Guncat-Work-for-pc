@@ -147,7 +147,13 @@ export interface ApiConfigDto {
   provider: string
   baseUrl: string
   apiKey: string
+  /** 当前生效的模型（请求体里的 model） */
   model: string
+  /**
+   * 该方案下可选的模型列表（一个服务商可以填多个模型）。
+   * 老数据/老渲染层不带这个字段时按 [model] 处理。
+   */
+  models?: string[]
   temperature: number
   topP: number
   maxTokens: number

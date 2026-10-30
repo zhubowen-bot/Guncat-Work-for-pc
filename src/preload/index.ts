@@ -28,9 +28,9 @@ const api = {
       ipcRenderer.invoke(INVOKE.settingsSaveApiConfig, dto),
     saveApiProfiles: (profiles: ApiProfileDto[]): Promise<void> =>
       ipcRenderer.invoke(INVOKE.settingsSaveApiProfiles, profiles),
-    /** 配置方案：选中（会同时把该方案写回运行时生效的配置） */
-    selectApiProfile: (profileId: string): Promise<void> =>
-      ipcRenderer.invoke(INVOKE.settingsSelectApiProfile, profileId),
+    /** 配置方案：选中（会同时把该方案写回运行时生效的配置；传 model 时顺带切换该方案下的模型） */
+    selectApiProfile: (profileId: string, model?: string): Promise<void> =>
+      ipcRenderer.invoke(INVOKE.settingsSelectApiProfile, profileId, model),
     /** 配置方案：新建（复制当前配置，返回新方案） */
     addApiProfile: (): Promise<ApiProfileDto> => ipcRenderer.invoke(INVOKE.settingsAddApiProfile),
     /** 配置方案：删除（至少保留一份） */

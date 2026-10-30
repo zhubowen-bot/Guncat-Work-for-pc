@@ -9,6 +9,9 @@ export class Constants {
   static readonly LS_KEY_MULTIMODAL_CONFIG: string = 'guncat_mm_config';
   static readonly LS_KEY_API_PROFILES: string = 'guncat_api_profiles';
   static readonly LS_KEY_CURRENT_API_PROFILE_ID: string = 'guncat_current_api_profile';
+  // 预置方案是否已经播种过：只在首次读取时补进来，之后用户删掉就不再自动恢复，
+  // 避免「删了又回来」以及每次读设置都改写方案列表。
+  static readonly LS_KEY_API_PRESETS_SEEDED: string = 'guncat_api_presets_seeded';
   static readonly LS_KEY_THINKING_ENABLED: string = 'guncat_thinking_enabled';
   // 本地内置联网搜索配置(JSON: 引擎选择 + 各引擎 API Key/BaseUrl), 与服务端联网搜索开关独立
   static readonly LS_KEY_LOCAL_SEARCH_CONFIG: string = 'guncat_local_search_config';

@@ -25,6 +25,7 @@ import { PromptBuilder } from '../common/PromptBuilder';
 import { ToolRegistry } from '../common/ToolRegistry';
 import { PromptBudget, PromptBudgetSnapshot } from '../common/PromptBudget';
 import { LLMProtocol } from '../common/LLMProtocol';
+import { ProviderHeaders } from '../common/ProviderHeaders';
 import { ToolDefAdapter } from '../common/ToolDefAdapter';
 import { SSEProtocolAdapter, SSEParseContext } from '../common/SSEProtocolAdapter';
 import { RetryPolicy } from '../common/RetryPolicy';
@@ -418,6 +419,7 @@ export class AgentLoopService {
         } else {
           headers['Authorization'] = 'Bearer ' + config.apiKey;
         }
+        ProviderHeaders.apply(config, headers);
         let retryAfterHeader: string = '';
         try {
           httpRequest.on('headersReceive', (header: Object) => {

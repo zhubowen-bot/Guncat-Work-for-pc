@@ -5,6 +5,7 @@
 import { http } from '@kit.NetworkKit';
 import { util } from '@kit.ArkTS';
 import { ApiConfig } from '../model/ApiConfig';
+import { ProviderHeaders } from '../common/ProviderHeaders';
 
 function sanitizeFileName(name: string): string {
   return name.replace(/["\r\n]/g, '_');
@@ -91,6 +92,7 @@ export class FileUploadService {
           } else {
             headers['Authorization'] = 'Bearer ' + config.apiKey;
           }
+          ProviderHeaders.apply(config, headers);
           httpRequest.request(url, {
             method: http.RequestMethod.POST,
             header: headers,

@@ -11,6 +11,7 @@ import { ToolCallRecord } from '../model/ToolCallRecord';
 import { StreamCallbacks, AbortSignal } from '../common/Types';
 import { Constants } from '../common/Constants';
 import { LLMProtocol } from '../common/LLMProtocol';
+import { ProviderHeaders } from '../common/ProviderHeaders';
 import { SSEProtocolAdapter, SSEParseContext } from '../common/SSEProtocolAdapter';
 import { SSEAdapterFactory } from './SSEAdapterFactory';
 import { util } from '@kit.ArkTS';
@@ -1208,6 +1209,7 @@ export class ChatService {
         } else {
           headers['Authorization'] = 'Bearer ' + config.apiKey;
         }
+        ProviderHeaders.apply(config, headers);
         httpRequest.requestInStream(url, {
           method: http.RequestMethod.POST,
           header: headers,

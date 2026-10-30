@@ -33,6 +33,7 @@ import { Message } from '@core/model/Message'
 import { Attachment } from '@core/model/Attachment'
 import { ApiConfig } from '@core/model/ApiConfig'
 import { ApiProfile } from '@core/model/ApiProfile'
+import { ApiProfilePresets } from '@core/model/ApiProfilePresets'
 import { MultimodalConfig } from '@core/model/MultimodalConfig'
 import { Agent } from '@core/model/Agent'
 import { ToolCallRecord } from '@core/model/ToolCallRecord'
@@ -327,13 +328,97 @@ export class SessionManager {
         // 迁移失败不阻断：本次仍按这份内存里的方案工作
       })
     }
+    // 预置方案只播种一次：老用户升级后自动多出 Deepseek / Opencode Go 两项，
+    // 且已有 api.deepseek.com 的方案会被合并进 Deepseek，避免出现两个同名同址的方案。
+    const seeded: boolean = await StorageManager.loadBoolean(
+      ctx,
+      Constants.LS_KEY_API_PRESETS_SEEDED,
+      false
+    ).catch((): boolean => false)
+    if (!seeded) {
+      profiles = SessionManager.seedPresetProfiles(profiles)
+      await StorageManager.saveApiProfiles(ctx, profiles).catch(() => {
+        // 落盘失败不阻断本次读取；下次启动还会再尝试一次播种
+      })
+      await StorageManager.saveBoolean(ctx, Constants.LS_KEY_API_PRESETS_SEEDED, true).catch(() => {
+        // 同上
+      })
+    }
     const saved: string = await StorageManager.loadString(
       ctx,
       Constants.LS_KEY_CURRENT_API_PROFILE_ID,
       ''
     ).catch((): string => '')
     const currentId: string = profiles.some((p) => p.id === saved) ? saved : profiles[0].id
+    // 兼容合并会把原来选中的 DeepSeek 方案合并掉：此时运行时仍停在旧配置上，
+    // 必须把兜底选中的方案写回运行时键，否则界面显示预置项、请求却还走旧协议。
+    if (saved !== '' && !profiles.some((p) => p.id === saved)) {
+      const current: ApiProfile | undefined = profiles.find((p) => p.id === currentId)
+      if (current !== undefined) {
+        await this.applyProfile(ctx, current)
+      }
+    }
     return { profiles, currentId }
+  }
+
+  /**
+   * 把预置方案补进列表。
+   *
+   * Deepseek 的兼容合并：如果用户已经有一套 api.deepseek.com 的方案，不新增重复项，
+   * 而是把那份方案的 Key、模型与多模态配置搬进预置项（预置项本身的接入方式与地址
+   * 保持不变，确保走 Anthropic Messages），旧方案从列表里移除。
+   */
+  private static seedPresetProfiles(input: ApiProfile[]): ApiProfile[] {
+    let profiles: ApiProfile[] = input.slice()
+    const defs = ApiProfilePresets.all()
+    for (let i: number = 0; i < defs.length; i++) {
+      const def = defs[i]
+      if (profiles.some((p) => p.id === def.id)) {
+        continue
+      }
+      if (def.id === ApiProfilePresets.DEEPSEEK_ID) {
+        const sources: ApiProfile[] = profiles.filter(
+          (p) => !ApiProfilePresets.isPresetId(p.id) &&
+            ApiProfilePresets.isDeepseekBaseUrl(p.apiConfig.baseUrl)
+        )
+        if (sources.length > 0) {
+          const preset: ApiProfile = ApiProfilePresets.toProfile(def)
+          SessionManager.mergeProfileContents(preset, sources)
+          profiles = profiles.filter((p) => !sources.some((s) => s.id === p.id))
+          profiles.push(preset)
+          continue
+        }
+      }
+      profiles.push(ApiProfilePresets.toProfile(def))
+    }
+    return profiles
+  }
+
+  /**
+   * 合并内容：Key / 模型列表 / 当前模型 / 多模态配置。
+   * 预置项已有的非空字段优先，避免用户已经在预置项里填过的东西被旧方案覆盖。
+   */
+  private static mergeProfileContents(target: ApiProfile, sources: ApiProfile[]): void {
+    let models: string[] = target.apiConfig.effectiveModels()
+    for (let i: number = 0; i < sources.length; i++) {
+      const src: ApiProfile = sources[i]
+      if (target.apiConfig.apiKey === '' && src.apiConfig.apiKey !== '') {
+        target.apiConfig.apiKey = src.apiConfig.apiKey
+      }
+      if (target.apiConfig.model === '' && src.apiConfig.model !== '') {
+        target.apiConfig.model = src.apiConfig.model
+      }
+      const srcModels: string[] = src.apiConfig.effectiveModels()
+      for (let j: number = 0; j < srcModels.length; j++) {
+        if (models.indexOf(srcModels[j]) < 0) {
+          models.push(srcModels[j])
+        }
+      }
+      if (target.multimodalConfig.apiKey === '' && src.multimodalConfig.apiKey !== '') {
+        target.multimodalConfig = src.multimodalConfig
+      }
+    }
+    target.apiConfig.models = ApiConfig.normalizeModels(models, target.apiConfig.model)
   }
 
   /** 当前生效的配置方案（id 对不上时退回第一份，保证永远有一个可用方案） */
@@ -371,17 +456,37 @@ export class SessionManager {
     if (name !== undefined && name.trim() !== '') {
       profile.name = name.trim()
     }
-    profile.apiConfig = SessionManager.fromApiConfigDto(apiDto)
+    const incoming: ApiConfig = SessionManager.fromApiConfigDto(apiDto)
+    if (ApiProfilePresets.isPresetId(profile.id)) {
+      // 预置方案的接入方式 / 地址 / 预留模型是固定的：运行时那份旧配置
+      // （升级场景里可能还是 OpenAI 协议）不能在保存时把预置项改回原样。
+      incoming.provider = profile.apiConfig.provider
+      incoming.baseUrl = profile.apiConfig.baseUrl
+      const models: string[] = profile.apiConfig.effectiveModels().concat(incoming.effectiveModels())
+      incoming.models = ApiConfig.normalizeModels(models, incoming.model)
+      if (incoming.model === '') {
+        incoming.model = incoming.models.length > 0 ? incoming.models[0] : ''
+      }
+    }
+    profile.apiConfig = incoming
     profile.multimodalConfig = SessionManager.fromMultimodalDto(mmDto)
     await StorageManager.saveApiProfiles(ctx, profiles)
   }
 
-  async selectApiProfile(profileId: string): Promise<void> {
+  async selectApiProfile(profileId: string, model?: string): Promise<void> {
     const ctx: Context = this.ctx()
     const { profiles } = await this.readApiProfiles(ctx)
     const profile: ApiProfile | undefined = profiles.find((p) => p.id === profileId)
     if (profile === undefined) {
       return
+    }
+    // 顶栏模型胶囊按「方案 + 模型」切换：同一方案下换模型也要把当前模型写回方案并应用。
+    const wanted: string = (model ?? '').trim()
+    if (wanted !== '') {
+      const models: string[] = profile.apiConfig.effectiveModels()
+      profile.apiConfig.models = ApiConfig.normalizeModels(models, wanted)
+      profile.apiConfig.model = wanted
+      await StorageManager.saveApiProfiles(ctx, profiles)
     }
     await this.applyProfile(ctx, profile)
   }
@@ -929,6 +1034,8 @@ export class SessionManager {
       this.emit({ type: 'notice', level: 'error', text: '请先在设置里配置 API Key 与模型' })
       return
     }
+    // Opencode Go 等网关按会话识别请求：会话 id 在整轮里保持稳定。
+    config.sessionId = request.conversationId
 
     const attachments: Attachment[] = await this.makeAttachments(request.attachmentPaths ?? [])
     const userMsg: Message = Message.ofUser(
@@ -979,6 +1086,7 @@ export class SessionManager {
       this.emit({ type: 'notice', level: 'error', text: '请先在设置里配置 API Key 与模型' })
       return
     }
+    config.sessionId = request.conversationId
 
     let lastUserIndex: number = -1
     for (let i: number = conv.messages.length - 1; i >= 0; i--) {
@@ -1342,6 +1450,7 @@ export class SessionManager {
       this.emit({ type: 'notice', level: 'error', text: '请先在设置里配置 API Key 与模型' })
       return
     }
+    config.sessionId = request.conversationId
 
     const ctx: Context = this.ctx()
     WorkFileService.ensureWorkspace(ctx, conv.id)
@@ -2035,6 +2144,7 @@ export class SessionManager {
     if (config === null || config.apiKey === '') {
       return
     }
+    config.sessionId = conv.id
     try {
       const title: string = await AgentLoopService.generateSessionTitle(config, userText, answerText)
       if (title === '' || this.find(conv.id) === undefined) {
@@ -2749,12 +2859,14 @@ export class SessionManager {
     const wanted: string = model.trim()
     if (wanted !== '') {
       const { profiles } = await this.readApiProfiles(ctx)
-      const matched = profiles.find((p) => p.apiConfig.model === wanted)
-      if (matched !== undefined && matched.apiConfig.apiKey !== '') {
+      const matched = profiles.find(
+        (p) => p.apiConfig.apiKey !== '' && p.apiConfig.effectiveModels().indexOf(wanted) >= 0
+      )
+      if (matched !== undefined) {
         const fromProfile: MultimodalConfig = MultimodalConfig.default()
         fromProfile.baseUrl = matched.apiConfig.baseUrl
         fromProfile.apiKey = matched.apiConfig.apiKey
-        fromProfile.model = matched.apiConfig.model
+        fromProfile.model = wanted
         return fromProfile
       }
     }
@@ -2842,6 +2954,7 @@ export class SessionManager {
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
       model: config.model,
+      models: config.effectiveModels(),
       temperature: config.temperature ?? 0,
       topP: config.topP ?? 0,
       maxTokens: config.maxTokens ?? 0,
@@ -2865,6 +2978,7 @@ export class SessionManager {
     config.baseUrl = dto.baseUrl
     config.apiKey = dto.apiKey
     config.model = dto.model
+    config.models = ApiConfig.normalizeModels(dto.models ?? [], dto.model)
     config.temperature = dto.temperature > 0 ? dto.temperature : null
     config.topP = dto.topP > 0 ? dto.topP : null
     config.maxTokens = dto.maxTokens > 0 ? dto.maxTokens : null

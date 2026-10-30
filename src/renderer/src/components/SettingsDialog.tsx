@@ -185,11 +185,24 @@ const EMPTY: ApiConfigDto = {
   baseUrl: '',
   apiKey: '',
   model: '',
+  models: [],
   temperature: 0,
   topP: 0,
   maxTokens: 0,
   extraParams: '',
   autoSuffix: true
+}
+
+/** 把「每行/逗号分隔」的模型输入拆成去重后的列表 */
+export function parseModelNames(text: string): string[] {
+  const result: string[] = []
+  for (const part of text.split(/[\n,，;；]+/)) {
+    const name = part.trim()
+    if (name !== '' && !result.includes(name)) {
+      result.push(name)
+    }
+  }
+  return result
 }
 
 /**
@@ -198,12 +211,25 @@ const EMPTY: ApiConfigDto = {
  * 以「看似填了其实无效」的方式失败（URL 带空格、Authorization 头带换行）。
  */
 export function normalizeApiConfig(draft: ApiConfigDto): ApiConfigDto {
+  const model = draft.model.trim()
+  const models: string[] = []
+  for (const raw of draft.models ?? []) {
+    const name = raw.trim()
+    if (name !== '' && !models.includes(name)) {
+      models.push(name)
+    }
+  }
+  // 当前生效的模型必须留在列表里：老数据只有 model、没有 models 时也能原样保存
+  if (model !== '' && !models.includes(model)) {
+    models.unshift(model)
+  }
   return {
     ...draft,
     provider: draft.provider.trim(),
     baseUrl: draft.baseUrl.trim(),
     apiKey: draft.apiKey.trim(),
-    model: draft.model.trim(),
+    model,
+    models,
     extraParams: draft.extraParams.trim()
   }
 }
@@ -301,6 +327,8 @@ export function SettingsDialog({ open: openOverride }: SettingsDialogProps = {})
   const setAutoRead = useSpeech((s) => s.setAutoRead)
 
   const [draft, setDraft] = useState<ApiConfigDto>(EMPTY)
+  /** 模型名称输入框：每行一个（也接受逗号分隔），保存时拆成 models 列表 */
+  const [modelText, setModelText] = useState('')
   const [mmBaseUrl, setMmBaseUrl] = useState('')
   const [mmApiKey, setMmApiKey] = useState('')
   const [mmModel, setMmModel] = useState('')
@@ -324,6 +352,16 @@ export function SettingsDialog({ open: openOverride }: SettingsDialogProps = {})
       return
     }
     setDraft(settings?.apiConfig ?? EMPTY)
+    {
+      const cfg = settings?.apiConfig
+      const list =
+        cfg !== null && cfg !== undefined && (cfg.models ?? []).length > 0
+          ? (cfg.models ?? [])
+          : cfg !== null && cfg !== undefined && cfg.model !== ''
+            ? [cfg.model]
+            : []
+      setModelText(list.join('\n'))
+    }
     setMmBaseUrl(settings?.multimodalConfig.baseUrl ?? '')
     setMmApiKey(settings?.multimodalConfig.apiKey ?? '')
     setMmModel(settings?.multimodalConfig.model ?? '')
@@ -437,12 +475,18 @@ export function SettingsDialog({ open: openOverride }: SettingsDialogProps = {})
   async function save(): Promise<void> {
     setSaving(true)
     try {
+      // 模型名可以填多个（每行一个或逗号分隔）。当前生效的模型沿用顶栏选中的那个；
+      // 如果它被从列表里删掉了，就退回列表里的第一个。
+      const models = parseModelNames(modelText)
+      const activeModel = models.includes(draft.model.trim())
+        ? draft.model.trim()
+        : (models[0] ?? '')
       // 一次性保存当前配置方案（名称 + API 配置 + 多模态配置）。
       // 走这条而不是分开调 saveApiConfig / saveMultimodalConfig：
       // 方案才是这几项配置的归属，分开调会让「名称改了但没落到方案上」这类半更新出现。
       await window.guncat.settings.saveCurrentApiProfile(
         profileName.trim(),
-        normalizeApiConfig(draft),
+        normalizeApiConfig({ ...draft, model: activeModel, models }),
         normalizeMultimodal({
           baseUrl: mmBaseUrl,
           apiKey: mmApiKey,
@@ -570,12 +614,18 @@ export function SettingsDialog({ open: openOverride }: SettingsDialogProps = {})
           </div>
 
           <div className="field">
-            <label>模型</label>
-            <input
-              value={draft.model}
+            <label>模型（可填多个，每行一个或逗号分隔）</label>
+            <textarea
+              rows={3}
+              value={modelText}
               placeholder={provider.modelPlaceholder}
-              onChange={(e) => update('model', e.target.value)}
+              onChange={(e) => setModelText(e.target.value)}
             />
+            <div className="field__hint">
+              {draft.model !== ''
+                ? `当前使用：${draft.model}（在顶栏的模型胶囊里切换具体模型）`
+                : '填写后，当前模型会在顶栏的模型胶囊里显示并切换'}
+            </div>
           </div>
 
           {/* 高级模型参数（对齐原版 buildAdvancedSection 379-475）：缺省收起 */}

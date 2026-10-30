@@ -15,7 +15,7 @@ import { TableOcrDialog } from './components/TableOcrDialog'
 import { ImageLightbox } from './components/ImageLightbox'
 import { WorkspacePreviewOverlay } from './components/WorkspacePreview'
 import { useSpeech, speechTextOf } from './speech/speechStore'
-import { IconBrain, IconGlobe, IconTable } from './icons'
+import { IconBrain, IconChevronDown, IconGlobe, IconTable } from './icons'
 
 /**
  * 提示条（对齐原版 ToastView + ChatPage 的 10 拍定时器）。
@@ -81,16 +81,61 @@ export default function App() {
   const profiles = settings?.apiProfiles ?? []
   const pushNotice = useStore((s) => s.pushNotice)
 
-  /** 顶栏模型胶囊：切配置方案（主进程会把该方案写回运行时生效的配置） */
-  async function switchProfile(profileId: string): Promise<void> {
-    if (profileId === settings?.currentApiProfileId) {
+  // 模型胶囊只列「已经填了 API Key」的方案下的模型：预置方案在没填 Key 前只是
+  // 设置面板里的快速填充项，不应该出现在可切换的模型列表里。
+  // 一个方案可以填多个模型，这里把它们展开成「方案 + 模型」的选项。
+  const modelChoices: Array<{ profileId: string; model: string; provider: string }> = []
+  for (const profile of profiles) {
+    if (profile.config.apiKey.trim() === '') {
+      continue
+    }
+    const models =
+      (profile.config.models ?? []).length > 0
+        ? (profile.config.models ?? [])
+        : profile.config.model !== ''
+          ? [profile.config.model]
+          : []
+    for (const raw of models) {
+      const model = raw.trim()
+      if (
+        model !== '' &&
+        !modelChoices.some((c) => c.profileId === profile.id && c.model === model)
+      ) {
+        modelChoices.push({ profileId: profile.id, model, provider: profile.name })
+      }
+    }
+  }
+  const currentChoice =
+    modelChoices.find(
+      (c) =>
+        c.profileId === settings?.currentApiProfileId && c.model === settings?.apiConfig?.model
+    ) ??
+    modelChoices.find((c) => c.profileId === settings?.currentApiProfileId) ??
+    modelChoices[0]
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const modelMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!modelMenuOpen) {
       return
     }
+    const onPointerDown = (event: MouseEvent): void => {
+      if (modelMenuRef.current !== null && !modelMenuRef.current.contains(event.target as Node)) {
+        setModelMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [modelMenuOpen])
+
+  /** 顶栏模型胶囊：按「方案 + 模型」切换，主进程会把该方案写回运行时生效的配置 */
+  async function selectModel(choice: { profileId: string; model: string }): Promise<void> {
     try {
-      await window.guncat.settings.selectApiProfile(profileId)
+      await window.guncat.settings.selectApiProfile(choice.profileId, choice.model)
       await reloadSettings()
+      setModelMenuOpen(false)
     } catch (e) {
-      pushNotice('error', `切换配置失败：${String(e)}`)
+      pushNotice('error', `切换模型失败：${String(e)}`)
     }
   }
   // 文件预览：侧栏工作区面板与对话流末尾的产物汇总卡都走这一个入口（弹层在根部渲染一份）
@@ -298,22 +343,49 @@ export default function App() {
               )}
             </label>
           ) : null}
-          {/* 模型胶囊（对齐原版 ChatPage 输入区左下角那颗）：直接在这儿换配置，
-              不必进设置。原版弹层上半部分就是配置列表 —— 这里用一个下拉等价表达。 */}
-          {profiles.length > 0 ? (
-            <label className="topbar__model" title="当前配置方案（切换即换模型与接入地址）">
-              <select
-                value={settings?.currentApiProfileId ?? ''}
+          {/* 模型胶囊（对齐原版 ChatPage 输入区左下角那颗）：直接在这儿换模型，
+              不必进设置。胶囊本身只显示模型名，点开后的菜单才显示服务商。 */}
+          {modelChoices.length > 0 ? (
+            <div className="topbar__model" ref={modelMenuRef}>
+              <button
+                type="button"
+                className="topbar__modelbtn"
+                title="当前模型（点击切换）"
                 disabled={running}
-                onChange={(e) => void switchProfile(e.target.value)}
+                aria-haspopup="menu"
+                aria-expanded={modelMenuOpen}
+                onClick={() => setModelMenuOpen((v) => !v)}
               >
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.config.model !== '' ? `${p.config.model} · ${p.name}` : p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <span className="topbar__modelname">{currentChoice?.model ?? '选择模型'}</span>
+                <span className="topbar__modelcaret" data-open={modelMenuOpen}>
+                  <IconChevronDown size={12} />
+                </span>
+              </button>
+              {modelMenuOpen ? (
+                <div className="modelmenu" role="menu">
+                  {modelChoices.map((choice) => (
+                    <button
+                      key={`${choice.profileId}::${choice.model}`}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={
+                        choice.profileId === settings?.currentApiProfileId &&
+                        choice.model === settings?.apiConfig?.model
+                      }
+                      className="modelmenu__item"
+                      data-on={
+                        choice.profileId === settings?.currentApiProfileId &&
+                        choice.model === settings?.apiConfig?.model
+                      }
+                      onClick={() => void selectModel(choice)}
+                    >
+                      <span className="modelmenu__name">{choice.model}</span>
+                      <span className="modelmenu__provider">{choice.provider}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           ) : null}
           {/* 表格提取：原版唯一不依赖对话的独立工具页，入口在顶栏（桌面端没有 pages/ 概念） */}
           <button

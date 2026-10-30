@@ -52,6 +52,8 @@ export { preferences as kitPreferences, secretStorageState, bindSafeStorage, __s
 export { SubagentService } from '@core/service/SubagentService'
 // 界面消息切分：裸围栏算不算界面是纯逻辑，直接对生产实现下断言
 export { GuncatUiParts } from '@core/common/GuncatUiParts'
+export { ProviderHeaders } from '@core/common/ProviderHeaders'
+export { ApiConfig } from '@core/model/ApiConfig'
 `
 )
 
@@ -216,11 +218,99 @@ const cfg = {
   maxTokens: 4096,
   extraParams: '{"enable_search":true}'
 }
+// 老用户已经有一套 api.deepseek.com 的方案：首次读取要把它合并进预置的 Deepseek，
+// 而不是留下「同名同址」的两份。
+await inv('settings:saveApiProfiles', [
+  {
+    id: 'legacy-deepseek',
+    name: '我的 DeepSeek',
+    config: {
+      ...cfg,
+      provider: 'openai-responses',
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'sk-legacy-deepseek',
+      model: 'deepseek-chat'
+    },
+    multimodalConfig: {
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+      apiKey: 'mm-key',
+      model: 'glm-4v-flash',
+      preparseEnabled: true
+    }
+  }
+])
 await inv('settings:saveApiConfig', cfg)
 const settings = await inv('settings:load')
 check('settings:saveApiConfig → load 往返一致', settings.apiConfig?.apiKey === cfg.apiKey && settings.apiConfig?.model === cfg.model)
 check('provider 类型保留', settings.apiConfig?.provider === 'openai-responses')
 check('温度等数值保留', settings.apiConfig?.temperature === 0.7)
+
+// --- 预置配置方案 ---
+const presetDeepseek = settings.apiProfiles.find((p) => p.name === 'Deepseek')
+const presetOpencode = settings.apiProfiles.find((p) => p.name === 'Opencode Go')
+check(
+  '预置 Deepseek 方案存在，且接入方式是 Anthropic Messages',
+  presetDeepseek !== undefined && presetDeepseek.config.provider === 'anthropic-messages' &&
+    presetDeepseek.config.baseUrl === 'https://api.deepseek.com',
+  presetDeepseek?.config.provider
+)
+check(
+  '预置 Deepseek 只预留 deepseek-flash（合并进来的旧模型也保留在列表里）',
+  presetDeepseek?.config.models.includes('deepseek-flash'),
+  (presetDeepseek?.config.models ?? []).join(',')
+)
+check(
+  '已有 api.deepseek.com 方案被合并进预置项（旧方案不再单列）',
+  presetDeepseek?.config.apiKey !== '' &&
+    !settings.apiProfiles.some((p) => p.id === 'legacy-deepseek'),
+  `${presetDeepseek?.config.apiKey} / ${settings.apiProfiles.map((p) => p.name).join(',')}`
+)
+check(
+  '预置 Opencode Go 方案存在，接入方式为 Anthropic Messages，只预留 deepseek-v4.1-flash',
+  presetOpencode !== undefined && presetOpencode.config.provider === 'anthropic-messages' &&
+    presetOpencode.config.models.length === 1 &&
+    presetOpencode.config.models[0] === 'deepseek-v4.1-flash',
+  `${presetOpencode?.config.provider} / ${(presetOpencode?.config.models ?? []).join(',')}`
+)
+
+// Opencode Go 要求每个请求带稳定的 x-opencode-session，缺了会被网关拒绝。
+const opencodeConfig = new mod.ApiConfig()
+opencodeConfig.baseUrl = 'https://opencode.ai/inference/go/anthropic'
+opencodeConfig.sessionId = 'conv-session-1'
+const opencodeHeaders = mod.ProviderHeaders.apply(opencodeConfig, {})
+check(
+  'Opencode Go 请求会带上 x-opencode-session（按会话稳定）',
+  opencodeHeaders['x-opencode-session'] === 'conv-session-1',
+  opencodeHeaders['x-opencode-session']
+)
+const plainConfig = new mod.ApiConfig()
+plainConfig.baseUrl = 'https://api.deepseek.com'
+plainConfig.sessionId = 'conv-session-1'
+check(
+  '其它服务商不会被塞入 Opencode 的会话头',
+  mod.ProviderHeaders.apply(plainConfig, {})['x-opencode-session'] === undefined
+)
+
+// 一个方案可以填多个模型；切换其中任意一个都要写回运行时配置。
+await inv('settings:saveApiConfig', {
+  ...cfg,
+  model: 'model-a',
+  models: ['model-a', 'model-b']
+})
+const multiModel = await inv('settings:load')
+check(
+  '一个方案可以保存多个模型名称',
+  multiModel.apiConfig?.models?.includes('model-a') &&
+    multiModel.apiConfig?.models?.includes('model-b'),
+  (multiModel.apiConfig?.models ?? []).join(',')
+)
+await inv('settings:selectApiProfile', multiModel.currentApiProfileId, 'model-b')
+const switchedModel = await inv('settings:load')
+check(
+  '顶栏按「方案 + 模型」切换后，运行时模型跟着变',
+  switchedModel.apiConfig?.model === 'model-b',
+  switchedModel.apiConfig?.model
+)
 
 await inv('settings:saveMultimodalConfig', {
   baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
