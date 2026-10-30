@@ -1262,15 +1262,24 @@ check(
   settingsHtml.includes('dialog__body') && settingsText.includes('设置')
 )
 check(
-  '三个可折叠小节都在：高级模型参数 / 本地联网搜索 / 多模态解析 API',
+  '五个可折叠小节都在：高级模型参数 / 本地联网搜索 / 多模态解析 API / 自动朗读 / 语音输入',
   settingsText.includes('高级模型参数') &&
     settingsText.includes('本地联网搜索') &&
-    settingsText.includes('多模态解析 API (可选)')
+    settingsText.includes('多模态解析 API (可选)') &&
+    settingsText.includes('自动朗读') &&
+    settingsText.includes('语音输入（录音转文字）')
 )
 check(
   '小节缺省全部收起（高级参数与多模态字段首帧不出现）',
   !settingsText.includes('数值越低回答越确定') && !settingsText.includes('先行解析附件'),
   '开合状态由 data-open 与条件渲染共同决定'
+)
+check(
+  '自动朗读开关与语音输入三字段也收在折叠栏里（首帧不露出勾选项与转写字段）',
+  !settingsText.includes('开启后每轮回答生成完会自动念一遍') &&
+    !settingsText.includes('桌面端没有端侧识别可用') &&
+    !settingsText.includes('转写模型'),
+  '两节标题在、正文收起'
 )
 check(
   '开合指示是 SVG 图标而不是几何符号（check-emoji 会拦 ▲ / ▼）',

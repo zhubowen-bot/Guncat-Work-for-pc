@@ -309,7 +309,7 @@ export interface SettingsDialogProps {
   /**
    * 覆盖「是否打开」。平时不传，由 store 的 settingsOpen 决定。
    * 之所以提成 props：SSR 断言里 zustand 只会读到初始状态（settingsOpen=false），
-   * 面板会整块不渲染，无头环境就钉不住「三个小节默认收起」这类首帧口径。
+   * 面板会整块不渲染，无头环境就钉不住「几个小节默认收起」这类首帧口径。
    */
   open?: boolean
 }
@@ -340,12 +340,14 @@ export function SettingsDialog({ open: openOverride }: SettingsDialogProps = {})
   const [engines, setEngines] = useState<SearchEngineDto[]>([])
   const [profileName, setProfileName] = useState('')
   const [saving, setSaving] = useState(false)
-  // 三个可折叠小节的开合。缺省全部收起（对齐原版 advancedOpen / multimodalOpen /
-  // searchOpen 的初值 false）：设置面板一打开就是「常用项 + 三个标题」，
-  // 高级参数、搜索、多模态三块不抢视线。
+  // 五个可折叠小节的开合。缺省全部收起（对齐原版 advancedOpen / multimodalOpen /
+  // searchOpen 的初值 false）：设置面板一打开就是「常用项 + 五个标题」，
+  // 高级参数、搜索、多模态、朗读、语音输入几块都不抢视线。
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [multimodalOpen, setMultimodalOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [autoReadOpen, setAutoReadOpen] = useState(false)
+  const [voiceInputOpen, setVoiceInputOpen] = useState(false)
 
   useEffect(() => {
     if (!open) {
@@ -810,63 +812,65 @@ export function SettingsDialog({ open: openOverride }: SettingsDialogProps = {})
           </SettingsSection>
 
           {/* 自动朗读开关：对应原版 ChatPage 顶栏的 autoReadEnabled。
-              放在「语音输入」分隔线之前 —— 它属于朗读，不属于转写。 */}
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={autoRead}
-              onChange={(e) => setAutoRead(e.target.checked)}
-            />
-            <span>
-              自动朗读回答
-              <em>
-                开启后每轮回答生成完会自动念一遍（音色与语速在朗读控制条里调）；
-                关掉时正在念的会立刻停下
-              </em>
-            </span>
-          </label>
-
-          <div
-            style={{
-              borderTop: '1px solid var(--border)',
-              margin: '18px 0 14px',
-              paddingTop: 14,
-              fontSize: 12,
-              color: 'var(--text-muted)'
-            }}
+              与上面三节同款折叠栏，缺省收起 —— 常用项区只留标题，不抢视线。 */}
+          <SettingsSection
+            title="自动朗读"
+            open={autoReadOpen}
+            onToggle={() => setAutoReadOpen((v) => !v)}
           >
-            语音输入（录音转文字）
-          </div>
-          <div className="field__hint" style={{ marginBottom: 10, marginTop: -6 }}>
-            桌面端没有端侧识别可用，走 OpenAI 兼容的 /audio/transcriptions 接口。
-            留空则复用上面的「多模态解析」地址与 Key。
-          </div>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={autoRead}
+                onChange={(e) => setAutoRead(e.target.checked)}
+              />
+              <span>
+                自动朗读回答
+                <em>
+                  开启后每轮回答生成完会自动念一遍（音色与语速在朗读控制条里调）；
+                  关掉时正在念的会立刻停下
+                </em>
+              </span>
+            </label>
+          </SettingsSection>
 
-          <div className="field">
-            <label>转写 Base URL（可选）</label>
-            <input
-              value={asrBaseUrl}
-              placeholder={mmBaseUrl !== '' ? `默认复用：${mmBaseUrl}` : 'https://api.openai.com/v1'}
-              onChange={(e) => setAsrBaseUrl(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label>转写 API Key（可选）</label>
-            <input
-              type="password"
-              value={asrApiKey}
-              placeholder={mmApiKey !== '' ? '默认复用多模态解析的 Key' : 'sk-…'}
-              onChange={(e) => setAsrApiKey(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label>转写模型</label>
-            <input
-              value={asrModel}
-              placeholder="whisper-1"
-              onChange={(e) => setAsrModel(e.target.value)}
-            />
-          </div>
+          {/* 语音输入（录音转文字）：三个转写字段同样收进折叠栏，缺省收起。 */}
+          <SettingsSection
+            title="语音输入（录音转文字）"
+            open={voiceInputOpen}
+            onToggle={() => setVoiceInputOpen((v) => !v)}
+          >
+            <div className="field__hint" style={{ marginBottom: 10 }}>
+              桌面端没有端侧识别可用，走 OpenAI 兼容的 /audio/transcriptions 接口。
+              留空则复用上面的「多模态解析」地址与 Key。
+            </div>
+
+            <div className="field">
+              <label>转写 Base URL（可选）</label>
+              <input
+                value={asrBaseUrl}
+                placeholder={mmBaseUrl !== '' ? `默认复用：${mmBaseUrl}` : 'https://api.openai.com/v1'}
+                onChange={(e) => setAsrBaseUrl(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label>转写 API Key（可选）</label>
+              <input
+                type="password"
+                value={asrApiKey}
+                placeholder={mmApiKey !== '' ? '默认复用多模态解析的 Key' : 'sk-…'}
+                onChange={(e) => setAsrApiKey(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label>转写模型</label>
+              <input
+                value={asrModel}
+                placeholder="whisper-1"
+                onChange={(e) => setAsrModel(e.target.value)}
+              />
+            </div>
+          </SettingsSection>
 
           {/* 接入方式说明（原版 getHint() 828-839 的三段文案，随接入方式变化）。
               原版把它放在表单最底部、保存按钮之前，这里保持同一位置。 */}
