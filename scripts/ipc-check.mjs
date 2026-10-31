@@ -3479,7 +3479,7 @@ const RISKY_CMDS = isWin
   ? ['del report.txt', 'git push origin main', 'curl -O https://x.example/y.zip', 'npm install -g typescript', 'taskkill /im node.exe /f']
   : ['rm -f report.txt', 'git push origin main', 'curl -O https://x.example/y.zip', 'npm install -g typescript', 'kill -9 1234']
 check(
-  '常见但有外溢的命令判为危险（默认档要批准）',
+  '常见但有外溢的命令判为危险（默认档也要过判官）',
   RISKY_CMDS.every((c) => CommandGuard.assess(c, cmdRoot).risky),
   RISKY_CMDS.filter((c) => !CommandGuard.assess(c, cmdRoot).risky).join(' | ')
 )
@@ -4005,9 +4005,14 @@ check(
   CommandGuard.PERMISSIONS.join(',') === 'ask,ask-risk,auto,full-access'
 )
 check(
-  '旧数据/未设置的空档位落到默认档（不是 auto，也不是 full-access）',
-  CommandGuard.normalizePermission('') === CommandGuard.PERMISSION_ASK_RISK &&
-    CommandGuard.normalizePermission('乱写的') === CommandGuard.PERMISSION_ASK_RISK
+  '旧数据/未设置的空档位落到默认档「自动审批」（不是危险需批准，更不是完全权限）',
+  CommandGuard.normalizePermission('') === CommandGuard.PERMISSION_AUTO &&
+    CommandGuard.normalizePermission('乱写的') === CommandGuard.PERMISSION_AUTO &&
+    CommandGuard.usesModelReview(CommandGuard.normalizePermission('')) === true &&
+    CommandGuard.needsApproval(CommandGuard.assess('del x.txt', cmdRoot),
+      CommandGuard.normalizePermission('')) === true &&
+    CommandGuard.needsApproval(CommandGuard.assess('echo hi', cmdRoot),
+      CommandGuard.normalizePermission('')) === false
 )
 check(
   '老存档的 auto 按语义搬到 full-access，搬过一次就不再动（用户后来选的 auto 是新语义，不能被再搬一次）',
@@ -4220,8 +4225,8 @@ const neverSet = JSON.parse(convFile).find(
   (c) => c.commandPermission === '' || c.commandPermission === undefined
 )
 check(
-  '没设置过的会话落到默认档（旧数据不会悄悄变成 auto）',
-  neverSet !== undefined && CommandService.permissionFor(neverSet.id) === CommandGuard.PERMISSION_ASK_RISK
+  '没设置过的会话落到默认档「自动审批」（旧数据不会悄悄变成完全权限）',
+  neverSet !== undefined && CommandService.permissionFor(neverSet.id) === CommandGuard.PERMISSION_AUTO
 )
 
 const echoResult = await CommandService.run(convCmd.id, cmdRoot, { command: 'echo hi' }, null)
@@ -4267,7 +4272,7 @@ check(
   timedRun.output.slice(0, 120)
 )
 
-// —— 审批链路：默认档下危险命令要人批准，且没人批准就是不执行 ——
+// —— 审批链路：危险命令需批准档下要人批准，且没人批准就是不执行 ——
 await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_ASK_RISK)
 const riskyCmd = isWin ? 'del nothing-here.txt' : 'rm -f nothing-here.txt'
 
@@ -4290,7 +4295,7 @@ async function askOnce(answer) {
 
 const denied = await askOnce({ selections: ['拒绝'] })
 check(
-  '危险命令在默认档下弹出审批卡（问题里写清目录、风险与命令原文）',
+  '危险命令在「危险命令需批准」档下弹出审批卡（问题里写清目录、风险与命令原文）',
   denied.askEvent !== null &&
     denied.askEvent.question.includes('需要你批准') &&
     denied.askEvent.question.includes(riskyCmd) &&
@@ -4543,6 +4548,21 @@ check(
   '结论裹在代码围栏里也认（Anthropic 协议不吃 json 模式，不能因为格式白白多问一次）',
   fencedAllow.ok === true && !events.some((e) => e.type === 'ask:user'),
   fencedAllow.output.slice(0, 120)
+)
+
+// 默认档位就是「自动审批」：把会话档位清空（等价于新会话/旧数据没设置过），
+// 同一条危险命令应直接走模型审阅，而不是按「危险命令需批准」弹人工卡。
+CommandService.setPermission(convCmd.id, '')
+reviewReply = '{"risk":"low","decision":"allow","reason":"默认档位放行"}'
+reviewCalls = 0
+events.length = 0
+const defaultAutoRun = await CommandService.run(convCmd.id, cmdRoot, { command: autoCmd }, null)
+check(
+  '空档位（新会话/旧数据）默认走自动审批：模型放行即执行，不弹人工卡',
+  defaultAutoRun.ok === true && reviewCalls === 1 &&
+    !events.some((e) => e.type === 'ask:user') &&
+    defaultAutoRun.output.includes('自动审阅已放行(low)'),
+  defaultAutoRun.output.slice(0, 160)
 )
 
 reviewReply = '{"risk":"low","decision":"allow","reason":"可以"}'
@@ -5033,7 +5053,7 @@ fs.rmSync(auditDir, { recursive: true, force: true })
 
 // —— 后台任务 ——
 // 这一段验的是「任务注册表 + 增量读 + 杀树」，跟审批无关，所以切到完全权限档：
-// `node -e` 现在是危险项（解释器内联代码读不出真实意图），留在默认档会卡在审批上等不到答案。
+// `node -e` 现在是危险项（解释器内联代码读不出真实意图），留在默认档也可能等到审批卡。
 await inv('workspace:setCommandPermission', convCmd.id, CommandGuard.PERMISSION_FULL_ACCESS)
 const bgRun = await CommandService.run(
   convCmd.id,
@@ -5096,7 +5116,7 @@ check(
   '删除会话会带走它的后台进程与档位（不留孤儿进程）',
   leakId !== '' &&
     CommandService.listJobs(convLeak.id).output.includes('没有后台任务') &&
-    CommandService.permissionFor(convLeak.id) === CommandGuard.PERMISSION_ASK_RISK
+    CommandService.permissionFor(convLeak.id) === CommandGuard.PERMISSION_AUTO
 )
 const stillRunning = CommandService.listJobs(convCmd.id)
 CommandService.killAllJobs()

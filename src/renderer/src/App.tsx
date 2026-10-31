@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { dropzoneCopy, resolveDropTarget, useStore, type DropTarget } from './store'
+import { extractFilePaths } from './intakeFiles'
 import { reportStage } from './bootReport'
 import { Sidebar } from './components/Sidebar'
 import { Composer } from './components/Composer'
@@ -45,35 +46,6 @@ function isOverWorkspacePanel(target: EventTarget | null): boolean {
     return target.closest('.workspace') !== null
   }
   return false
-}
-
-/**
- * 从拖拽的 FileList 中提取本机路径。
- * 优先走 preload 的 webUtils.getPathForFile；若拖拽源只有内存字节（如从浏览器或截图工具直接拖入），
- * 则通过 stageTemp 落入临时目录后再返回绝对路径，确保两条路径都能走通。
- */
-async function extractDroppedPaths(fileList: FileList): Promise<string[]> {
-  const files = Array.from(fileList)
-  const paths: string[] = []
-  for (const file of files) {
-    const direct = window.guncat.files.pathForFile(file)
-    if (direct !== '') {
-      paths.push(direct)
-      continue
-    }
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      if (bytes.byteLength > 0) {
-        const staged = await window.guncat.files.stageTemp(file.name || 'dropped-file', bytes)
-        if (staged !== '') {
-          paths.push(staged)
-        }
-      }
-    } catch {
-      // 忽略无法读取的条目
-    }
-  }
-  return paths
 }
 
 function Notice() {
@@ -359,7 +331,9 @@ export default function App() {
         e.preventDefault()
         const target = resolveDropTarget(mode, isOverWorkspacePanel(e.target))
         setDragTarget(null)
-        void extractDroppedPaths(e.dataTransfer.files).then((paths) => dropFiles(paths, target))
+        void extractFilePaths(Array.from(e.dataTransfer.files), 'dropped-file').then((paths) =>
+          dropFiles(paths, target)
+        )
       }}
     >
       {dragTarget !== null ? (

@@ -681,8 +681,17 @@ check(
     permRows.guardPermissions.every((v) => permRows.rows.some((r) => r.value === v))
 )
 check(
-  '默认档是「危险命令需批准」，且排在第一个（新用户开箱不会是全自助）',
-  permRows.rows[0].value === 'ask-risk' && permRows.rows[0].label.includes('危险')
+  '默认档是「自动审批」：模型先审一轮、判危险仍弹卡（不是无人看管，也不是危险命令需批准）',
+  (() => {
+    const auto = permRows.rows.find((r) => r.value === 'auto')
+    return (
+      auto !== undefined &&
+      auto.hint.includes('默认档') &&
+      auto.hint.includes('模型') &&
+      auto.hint.includes('弹卡')
+    )
+  })(),
+  '默认档标记没有落在自动审批那一档'
 )
 check(
   '「完全权限」那一档把话说清楚：毁灭性操作仍然会被拒（不能让人以为开了就什么都跑得动）',
@@ -742,6 +751,10 @@ check('聊天模式的输入区有附件入口（回形针）', composerChat.inc
 check(
   '附件入口的提示说清是「发给模型直接看」',
   composerChat.includes('添加图片或文档')
+)
+check(
+  '输入框写明可以直接粘贴图片或文件（聊天进附件区、工作/交互模式进工作区）',
+  composerChat.includes('粘贴') && composerWork.includes('粘贴文件到工作区')
 )
 check(
   '工作/交互模式不给附件入口（那两种形态的素材入口是工作区）',

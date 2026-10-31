@@ -68,9 +68,9 @@ have somewhere for a human to see and approve them.
   report before delivery.
 - **Native Markdown**: syntax highlighting, tables, task lists, inline and block LaTeX, Mermaid diagrams
   (laid out for **desktop widescreen** and scrollable horizontally), with automatic light/dark theming.
-- **Attachments and export**: upload images / documents directly or pre-parse them, drag files into the
-  window to import them into the workspace, and export a Markdown answer to Word (including
-  LaTeX → native OMML equations).
+- **Attachments and export**: upload images / documents directly, pre-parse them, paste them into the
+  composer, or drag files into the window to import them into the workspace; export a Markdown answer to
+  Word (including LaTeX → native OMML equations).
 - **Speech**: read-aloud (Web Speech API, with selectable system voices and speed) and voice input
   (recording + provider transcription endpoint).
 - **Multiple API profiles**: save and switch between several access methods / base URLs / keys / models;
@@ -107,8 +107,8 @@ keys… 37 rules in total.
 | Tier | Who decides for a dangerous command |
 | --- | --- |
 | `ask` | Every command needs human approval |
-| `ask-risk` (default) | Dangerous commands raise an approval card; everything else runs |
-| `auto` | A model reviews first; runs silently only when it says low/medium **and** explicitly allows |
+| `ask-risk` | Dangerous commands raise an approval card; everything else runs |
+| `auto` (default) | A model reviews first; runs silently only when it says low/medium **and** explicitly allows |
 | `full-access` | No review, no questions — only hard-deny remains |
 
 `auto` is not "fully automatic": a high verdict, a self-contradictory answer, a non-JSON reply, a
@@ -408,13 +408,15 @@ Research material from the HarmonyOS project:
 - Chat requests and attachments are sent only to the model service you configure.
 - File reads and writes in work mode happen entirely inside the app's sandbox workspace; **no additional
   permissions are requested**.
-- Command execution always goes through the security audit: destructive operations are rejected; commands
-  that need approval show the working directory, the risk and the command text, and rejecting, skipping
-  or not answering all count as denial; the child environment is whitelisted, so the main process's keys
-  never reach the command.
-- Files received through command-line arguments, a second instance or a window drag-and-drop go into the
-  **sandbox workspace** (the model reads them with file tools); they are not automatically sent as
-  attachments.
+- Command execution always goes through the security audit: destructive operations are rejected;
+  dangerous commands are reviewed by a model first by default (executed silently only when it explicitly
+  allows, otherwise the human approval card is shown) and you can switch to human-only approval tiers;
+  rejecting, skipping or not answering all count as denial; the child environment is whitelisted, so the
+  main process's keys never reach the command.
+- Files received through command-line arguments or a second instance go into the **sandbox workspace**
+  (the model reads them with file tools); images/files pasted into the composer or dropped onto the
+  window follow the current mode: chat mode adds them to the **attachment strip** (sent only after you
+  confirm), while work/interactive mode imports them into the session workspace.
 - Network requests use HTTPS; actual data-handling policies are those of your configured model provider.
 
 ## FAQ

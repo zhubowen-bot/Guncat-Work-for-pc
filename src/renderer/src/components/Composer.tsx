@@ -2,7 +2,8 @@
 import type { PickedAttachmentDto, WorkspaceEntryDto } from '@ipc/contract'
 import { useAutoResize } from '../hooks/useAutoResize'
 import { useVoiceInput } from '../speech/useVoiceInput'
-import { useStore } from '../store'
+import { clipboardFiles, extractFilePaths } from '../intakeFiles'
+import { resolveDropTarget, useStore } from '../store'
 import { MODE_HINT } from '../conversations'
 import { AttachmentBar } from './AttachmentBar'
 import {
@@ -44,6 +45,7 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
   const consumeDraft = useStore((s) => s.consumeDraft)
   const pendingAttachmentPaths = useStore((s) => s.pendingAttachmentPaths)
   const consumeAttachmentFiles = useStore((s) => s.consumeAttachmentFiles)
+  const dropFiles = useStore((s) => s.dropFiles)
   const pushNotice = useStore((s) => s.pushNotice)
   const activeId = useStore((s) => s.activeId)
 
@@ -172,7 +174,7 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
   }
 
   /**
-   * 把拖拽进来的文件路径直接加入附件预览条（聊天模式下拖入窗口或输入区时触发）。
+   * 把拖拽/粘贴进来的文件路径直接加入附件预览条（聊天模式下触发）。
    * 后台先行解析与回形针按钮走同一条链路，解析完由 attachment:parsed 事件推进状态。
    */
   async function addAttachmentPaths(paths: string[]): Promise<void> {
@@ -209,6 +211,27 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
 
   /** 还有附件在主进程后台解析时：既不能发，也不能再叠加新文件 */
   const parsing = attachments.some((a) => a.status === 'parsing')
+
+  /**
+   * 输入框粘贴图片或文件：去向与拖拽共用同一套判定（聊天模式 → 附件区；
+   * 工作 / 交互模式 → 当前会话工作区），分发也走同一个 store.dropFiles。
+   * 只在剪贴板里真的带文件时接管，普通文字粘贴不受影响。
+   */
+  function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>): void {
+    const files = clipboardFiles(e.clipboardData)
+    if (files.length === 0) {
+      return
+    }
+    e.preventDefault()
+    const target = resolveDropTarget(mode, false)
+    void extractFilePaths(files, 'pasted-image').then((paths) => {
+      if (paths.length === 0) {
+        pushNotice('warn', '剪贴板里的图片或文件读不出来，请改用回形针选择')
+        return
+      }
+      void dropFiles(paths, target)
+    })
+  }
 
   // 消费拖拽投递到聊天附件区的文件路径队列
   useEffect(() => {
@@ -302,10 +325,10 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
   const mentionHint = mode === 'chat' ? '' : '，@ 引用工作区文件'
   const placeholder =
     (mode === 'chat'
-      ? '输入消息，Enter 发送，Shift+Enter 换行'
+      ? '输入消息，Enter 发送，Shift+Enter 换行（可直接粘贴图片或文件）'
       : mode === 'interactive'
-        ? '描述你想要的界面，例如「做一个季度销售复盘仪表盘」'
-        : '描述任务，工作模式会自主调用工具并交付产物') + mentionHint
+        ? '描述你想要的界面，例如「做一个季度销售复盘仪表盘」（可直接粘贴文件到工作区）'
+        : '描述任务，工作模式会自主调用工具并交付产物（可直接粘贴文件到工作区）') + mentionHint
 
   return (
     <div className="composer">
@@ -358,6 +381,7 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
             syncMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
           }}
           onClick={(e) => syncMention(text, e.currentTarget.selectionStart ?? text.length)}
+          onPaste={onPaste}
           onBlur={() => setMention(null)}
           onKeyDown={onKeyDown}
           rows={1}
@@ -372,7 +396,7 @@ export function Composer({ running, mode, onSend, onSteer, onAbort }: Props) {
             title={
               parsing
                 ? '文件解析中，请稍候'
-                : '添加图片或文档（点击选择或直接把文件拖入窗口，发送给模型直接查看）'
+                : '添加图片或文档（点击选择，或把文件拖入窗口、直接粘贴到输入框，发送给模型直接查看）'
             }
             // 解析中不可点（对齐原版 buildUploadButton 的 `!isParsing`）：此时再加一批文件
             // 只会让「哪张卡对应哪次解析」变得难懂，也让解析队列越排越长。

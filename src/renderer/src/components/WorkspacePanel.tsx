@@ -811,7 +811,7 @@ export const COMMAND_PERMISSIONS: { value: string; label: string; hint: string }
   {
     value: 'ask-risk',
     label: '危险命令需批准',
-    hint: '默认档。删除文件、改系统配置或服务、安装全局包、git push、从网络下载等有风险命令会先请你批准，其余直接执行'
+    hint: '删除文件、改系统配置或服务、安装全局包、git push、从网络下载等有风险命令会先请你批准，其余直接执行'
   },
   {
     value: 'ask',
@@ -821,7 +821,7 @@ export const COMMAND_PERMISSIONS: { value: string; label: string; hint: string }
   {
     value: 'auto',
     label: '自动审批',
-    hint: '危险命令先交给模型审阅一轮：它判定安全的直接执行（结果里写明是自动审阅放行），判危险的仍然弹卡请你批准；审阅失败一律按危险处理'
+    hint: '默认档。危险命令先交给模型审阅一轮：它判定安全的直接执行（结果里写明是自动审阅放行），判危险的仍然弹卡请你批准；审阅失败一律按危险处理'
   },
   {
     value: 'full-access',
