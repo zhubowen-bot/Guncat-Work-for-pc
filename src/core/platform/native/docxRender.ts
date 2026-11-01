@@ -22,7 +22,6 @@ export class DocxRenderResult {
   endPage: number = 0
   nextStartPage: number = 0
   converter: string = ''
-  pdfPath: string = ''
 }
 
 class ProcResult {
@@ -194,7 +193,6 @@ export async function renderDocxToPng(docxAbs: string, outDir: string, startPage
     r.endPage = batch.endPage
     r.nextStartPage = batch.nextStartPage
     r.converter = converted.converter
-    r.pdfPath = converted.pdfPath
     return r
   } finally {
     try {
