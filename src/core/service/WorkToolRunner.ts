@@ -8,8 +8,9 @@ import { http } from '@kit.NetworkKit';
 import { image } from '@kit.ImageKit';
 import { WorkFileService, ToolExecResult } from './WorkFileService';
 import { PdfTextExtractor, PdfPagesResult, PdfSearchHit, PdfRenderResult } from './PdfTextExtractor';
-import { DocxBuilder, DocxImagePart, DocImageResolver } from '../export/DocxBuilder';
+import { DocxBuilder, DocxBuildResult, DocxImagePart, DocImageResolver } from '../export/DocxBuilder';
 import { DocxImporter, DocxImportResult } from '../export/DocxImporter';
+import { renderDocxToPng, DocxRenderResult } from '../platform/native/docxRender';
 import { Doc, DocParser, DocOps, MdToDoc } from '../export/DocModel';
 import { XlsxExporter } from '../export/XlsxExporter';
 import { XlsxBuilder } from '../export/XlsxBuilder';
@@ -185,6 +186,9 @@ export class WorkToolRunner {
     }
     if (name === 'edit_docx') {
       return await WorkToolRunner.toolEditDocx(context, convId, argsJson);
+    }
+    if (name === 'docx_render') {
+      return await WorkToolRunner.toolDocxRender(context, convId, argsJson);
     }
     if (name === 'write_xlsx') {
       return await WorkToolRunner.toolWriteXlsx(context, convId, argsJson);
@@ -368,18 +372,21 @@ export class WorkToolRunner {
       doc.style = style;
     }
     try {
-      let bytes: Uint8Array = await DocxBuilder.buildDocxBytes(doc,
+      let built: DocxBuildResult = await DocxBuilder.buildDocxWithReport(doc,
         WorkToolRunner.docxResolver(context, root));
+      let bytes: Uint8Array = built.bytes;
       let result: ToolExecResult = WorkFileService.writeBytesAt(context, convId, rel, bytes);
       if (result.ok) {
         result.output = '已生成《' + doc.title + '》(' + doc.blocks.length.toString() + ' 块' +
           (doc.cover ? ', 含封面' : '') + (doc.toc ? ', 含目录' : '') + ', 样式 ' + doc.style +
           ') → ' + rel + ' (' + WorkFileService.formatSize(bytes.length) + ')' +
-          '\n—— 用 read_docx 或 read_file 抽查内容; 需要改图/改字用 edit_docx。';
+          '\n自检: ' + built.audit.report() +
+          '\n—— 用 read_docx 或 read_file 抽查内容; 需要看版式/公式实际渲染效果用 docx_render; 需要改图/改字用 edit_docx。';
       }
       return result;
     } catch (e) {
-      return WorkToolRunner.failMsg('生成 Word 文档失败: ' + WorkToolRunner.extractErrMessage(e as Object));
+      return WorkToolRunner.failMsg('生成 Word 文档失败(未写入任何文件): ' +
+        WorkToolRunner.extractErrMessage(e as Object));
     }
   }
 
@@ -475,16 +482,93 @@ export class WorkToolRunner {
           backupNote = '\n原文件已备份为 ' + backupRel + '(外来 docx 为近似导入, 重建后不保留原版式细节)';
         }
       }
-      let bytes: Uint8Array = await DocxBuilder.buildDocxBytes(r.doc,
+      let built: DocxBuildResult = await DocxBuilder.buildDocxWithReport(r.doc,
         WorkToolRunner.docxResolver(context, root));
+      let bytes: Uint8Array = built.bytes;
       let result: ToolExecResult = WorkFileService.writeBytesAt(context, convId, rel, bytes);
       if (result.ok) {
         result.output = '《' + rel + '》已更新(' + r.doc.blocks.length.toString() + ' 块, ' +
-          WorkFileService.formatSize(bytes.length) + '):\n' + summary + backupNote;
+          WorkFileService.formatSize(bytes.length) + '):\n' + summary + backupNote +
+          '\n自检: ' + built.audit.report() +
+          '\n—— 版式/公式自查用 docx_render 渲染成 PNG 后用 view_image 查看。';
       }
       return result;
     } catch (e) {
-      return WorkToolRunner.failMsg('编辑 Word 文档失败: ' + WorkToolRunner.extractErrMessage(e as Object));
+      return WorkToolRunner.failMsg('编辑 Word 文档失败(原文件未改动): ' +
+        WorkToolRunner.extractErrMessage(e as Object));
+    }
+  }
+
+  // ===== docx_render: .docx -> 逐页 PNG(交付前自查版式/公式) =====
+  private static async toolDocxRender(context: common.UIAbilityContext, convId: string,
+    argsJson: string): Promise<ToolExecResult> {
+    let args: Record<string, Object> | null = WorkToolRunner.parseArgs(argsJson);
+    if (args === null) {
+      return WorkToolRunner.argError();
+    }
+    let rel: string = WorkToolRunner.strArg(args, 'path', '');
+    if (rel === '') {
+      return WorkToolRunner.failMsg('缺少参数 path');
+    }
+    if (!rel.toLowerCase().endsWith('.docx')) {
+      return WorkToolRunner.failMsg('docx_render 仅支持 .docx');
+    }
+    let root: string = WorkFileService.workspaceRoot(context, convId);
+    let abs: string | null = WorkFileService.resolveSafe(root, rel);
+    if (abs === null) {
+      return WorkToolRunner.failMsg('非法路径: ' + rel);
+    }
+    if (!WorkFileService.accessPath(abs)) {
+      return WorkToolRunner.failMsg('文件不存在: ' + rel);
+    }
+    if (WorkFileService.isDirPath(abs)) {
+      return WorkToolRunner.failMsg('路径是目录而非文件: ' + rel);
+    }
+    let startPage: number = WorkToolRunner.intArg(args, 'page', 1);
+    let pageLimit: number = WorkToolRunner.intArg(args, 'page_count', 10);
+    if (pageLimit < 1) {
+      pageLimit = 1;
+    } else if (pageLimit > 30) {
+      pageLimit = 30;
+    }
+    let width: number = WorkToolRunner.intArg(args, 'width', 1400);
+    if (width < 600) {
+      width = 600;
+    } else if (width > 2400) {
+      width = 2400;
+    }
+    let base: string = WorkToolRunner.baseNameNoExt(rel);
+    let outRelBase: string = 'docx_render/' + base;
+    let outDir: string = root + '/' + outRelBase;
+    try {
+      let r: DocxRenderResult = await renderDocxToPng(abs, outDir, startPage, pageLimit, width);
+      if (r.pageCount <= 0) {
+        return WorkToolRunner.failMsg('该 .docx 没有可渲染页面(可能已损坏或不是有效的 Word 文档)');
+      }
+      if (r.files.length === 0) {
+        return WorkToolRunner.failMsg('共 ' + r.pageCount.toString() + ' 页, 传入的 page=' +
+          r.startPage.toString() + ' 超出范围(1-' + r.pageCount.toString() + ')');
+      }
+      let out: string = '已渲染《' + rel + '》第 ' + r.startPage.toString() + '-' +
+        r.endPage.toString() + ' 页(共 ' + r.pageCount.toString() + ' 页, 转换器: ' +
+        r.converter + ') → ' + outRelBase + '/:\n';
+      for (let i: number = 0; i < r.files.length; i++) {
+        let shown: string = r.files[i];
+        if (shown.startsWith(root + '/')) {
+          shown = shown.substring(root.length + 1);
+        }
+        out += shown + ' (第 ' + (r.startPage + i).toString() + ' 页)\n';
+      }
+      if (r.nextStartPage > 0) {
+        out += '—— 用 view_image 逐张查看(每次传一个 path); 需要更多页: docx_render 传 {"path":"' +
+          rel + '","page":' + r.nextStartPage.toString() + '}。';
+      } else {
+        out += '—— 已是全部页面。用 view_image 逐张查看(每次传一个 path), 确认版式/公式/字体后交付。';
+      }
+      return WorkToolRunner.okMsg(out);
+    } catch (e) {
+      return WorkToolRunner.failMsg('渲染 Word 文档失败: ' +
+        WorkToolRunner.extractErrMessage(e as Object));
     }
   }
 

@@ -12,10 +12,10 @@
 ![Electron](https://img.shields.io/badge/Electron-38-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
-![version](https://img.shields.io/badge/version-7.0.0-blue)
+![version](https://img.shields.io/badge/version-7.1.0-blue)
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 ![forms](https://img.shields.io/badge/Agent%20Forms-Intelligent%20UI%20%2B%20Harness-blueviolet)
-![tools](https://img.shields.io/badge/built--in%20tools-45-informational)
+![tools](https://img.shields.io/badge/built--in%20tools-46-informational)
 ![skills](https://img.shields.io/badge/skills-37-informational)
 ![shell audit](https://img.shields.io/badge/shell%20audit-163%20rules-red)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
@@ -26,11 +26,11 @@
 | Mode | Inspiration | What it does |
 | --- | --- | --- |
 | ✦ **Interactive mode** | GPT's **Intelligent UI** | One prompt produces a working interface; zero tool calls and a single render pass by default, controls recompute instantly as you drag them |
-| 🛠 **Work mode** | **DeepSeek Harness** (dsh, Codex-style agent loop) | Multi-turn tool loops + a per-session sandbox workspace + 45 built-in tools, so long-running tasks run autonomously |
+| 🛠 **Work mode** | **DeepSeek Harness** (dsh, Codex-style agent loop) | Multi-turn tool loops + a per-session sandbox workspace + 46 built-in tools, so long-running tasks run autonomously |
 | Chat mode | — | Plain conversation, no sandbox workspace |
 
 Work mode and interactive mode **share the same agent loop and sandbox workspace**; what differs is
-behavioural discipline and **the tool surface exposed** — work mode gets all 45 tools, multi-turn tool
+behavioural discipline and **the tool surface exposed** — work mode gets all 46 tools, multi-turn tool
 loops and long-horizon delivery, while interactive mode only receives **27** (read material / compute
 real numbers / verify external facts / emit files). Long-horizon tools (`todo_write` / `goal_*` /
 `schedule_*` / `subagent`) never appear in its requests, which is what makes it a "fast lane, one-shot
@@ -58,7 +58,7 @@ have somewhere for a human to see and approve them.
 - **Office output straight from the desktop**: PPT / Word / Excel / SVG are produced by local generators
   on a JSON intermediate layer, and documents can be **read back losslessly and edited with operators**;
   PDF and Office files are parsed entirely locally, **consuming no multimodal quota**.
-- **45 built-in tools**: file create / read / update / delete and pattern-based search, task lists,
+- **46 built-in tools**: file create / read / update / delete and pattern-based search, task lists,
   image viewing, network downloads, PDF parsing, Office read/write, data-pipeline cleaning,
   transformation and format conversion, command execution with background jobs, and a `run_js` code
   sandbox built on `node:vm` (no network, no filesystem access, **infinite loops are hard-interrupted
@@ -202,7 +202,7 @@ npm run dist       # produces release/Guncat Work-<version>/
 Output layout:
 
 ```text
-release/Guncat Work-7.0.0/
+release/Guncat Work-7.1.0/
 ├── Guncat Work.exe              ← double-click this
 ├── create-desktop-shortcut.cmd  ← double-click once to add a desktop shortcut (with the app icon)
 ├── run-compat.cmd               ← starts with --no-sandbox, without elevation

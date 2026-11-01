@@ -64,7 +64,7 @@
 
 ### 六、验证
 
-- `npm run typecheck:node` / `typecheck:web` 通过。
+- `npm run typecheck:node` / `typecheck:web` 通过；`npm run smoke`（构建 + guard-corpus + run-smoke + render-check + ipc-check + startup-check + emoji）全过。
 - `run-smoke` 156 项全过，新增公式回归：`\mu_0` / `\alpha_2` / `\bar{I}^2` 上下标绑定、
   `\bar` 只有一层、正常公式无空 `m:t`、未知命令被自检拒绝、`docx_render` 已注册。
 - 用本机 Microsoft Word 实测 `docx_render`：含封面/目录/行内公式/显示公式/矩阵/中文的

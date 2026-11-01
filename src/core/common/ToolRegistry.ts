@@ -76,6 +76,11 @@ export class ToolRegistry {
     }
   }
 
+  // 注册中心是否已经同步过(插件热加载会先 set, 核心工具需要据此判断是否补同步)
+  static isSynced(): boolean {
+    return ToolRegistry.synced;
+  }
+
   static findDef(name: string): Record<string, Object> | null {
     let entry: ToolRegistryEntry | null = ToolRegistry.findEntry(name);
     return entry !== null ? entry.def : null;
@@ -312,7 +317,7 @@ export class ToolRegistry {
     'web_fetch', 'local_web_search',
     // 出文件: 只在用户明确要导出时破例; 生成后从工作区引用素材
     'write_file', 'append_file', 'create_dir', 'write_csv', 'write_svg',
-    'write_docx', 'write_xlsx', 'write_pptx', 'download_file',
+    'write_docx', 'write_xlsx', 'write_pptx', 'download_file', 'docx_render',
     // 技能名册(导出走简化流程, 只加载对应格式技能)
     'list_skills', 'load_skill'
   ];

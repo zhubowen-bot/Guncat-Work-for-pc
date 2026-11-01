@@ -15,10 +15,10 @@
 ![Electron](https://img.shields.io/badge/Electron-38-blue)
 ![React](https://img.shields.io/badge/React-19-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)
-![version](https://img.shields.io/badge/version-7.0.0-blue)
+![version](https://img.shields.io/badge/version-7.1.0-blue)
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 ![forms](https://img.shields.io/badge/Agent%20Forms-Intelligent%20UI%20%2B%20Harness-blueviolet)
-![tools](https://img.shields.io/badge/%E5%86%85%E7%BD%AE%E5%B7%A5%E5%85%B7-45-informational)
+![tools](https://img.shields.io/badge/%E5%86%85%E7%BD%AE%E5%B7%A5%E5%85%B7-46-informational)
 ![skills](https://img.shields.io/badge/%E6%8A%80%E8%83%BD-37-informational)
 ![shell audit](https://img.shields.io/badge/shell%20audit-163%20rules-red)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
@@ -29,11 +29,11 @@
 | 形态          | 对标                                           | 说明                                      |
 | ----------- | -------------------------------------------- | --------------------------------------- |
 | ✦ **交互模式**  | GPT 的 **Intelligent UI**                     | 一句话直出可操作界面，默认零工具调用、一轮渲染，控件取值即时重算        |
-| 🛠 **工作模式** | **DeepSeek Harness**（dsh，Codex 式 Agent Loop） | 多轮工具循环 + 每会话独立沙箱工作区 + 45 个内置工具，长程任务自主执行 |
+| 🛠 **工作模式** | **DeepSeek Harness**（dsh，Codex 式 Agent Loop） | 多轮工具循环 + 每会话独立沙箱工作区 + 46 个内置工具，长程任务自主执行 |
 | 聊天模式        | —                                            | 纯对话，不带沙箱工作区                             |
 
 工作模式与交互模式**共用同一套 Agent Loop 与沙箱工作区**，差别在行为纪律与**下发的工具面** ——
-工作模式是「45 个内置工具全量 + 多轮工具循环 + 长程交付」，交互模式只下发 **27 个**
+工作模式是「46 个内置工具全量 + 多轮工具循环 + 长程交付」，交互模式只下发 **28 个**
 （读素材 / 算真实数字 / 核实外部事实 / 出文件），长程工具（`todo_write` / `goal_*` /
 `schedule_*` / `subagent`）根本不出现在它的请求里，所以是「快车道、一轮直出界面」。
 `run_command` 同样不在交互模式的工具面里：能跑命令的形态，必须有地方让人看见与批准。
@@ -55,7 +55,7 @@
   不受制于服务端联网开关。
 - **桌面端直出 Office**：PPT / Word / Excel / SVG 由本地生成器产出，基于 JSON 中间层，
   文档可**无损读回、算子式编辑**；PDF 与 Office 全部本地解析，**不消耗多模态配额**。
-- **45 个内置工具**：文件增删改查与模式匹配搜索、任务清单、图片查看、网络下载、PDF 解析、
+- **46 个内置工具**：文件增删改查与模式匹配搜索、任务清单、图片查看、网络下载、PDF 解析、
   Office 读写、数据管道清洗转换与格式互转、命令执行与后台任务，以及基于 `node:vm` 的
   `run_js` 代码沙箱（不联网、不读写文件系统，**死循环可被引擎硬中断**）。
 - **37 项技能**：5 个主 Skill 路由 + 7 个格式分支 + 25 个领域分支，命中即按需加载；
@@ -171,7 +171,7 @@ npm run dist       # 产出 release/Guncat Work-<版本>/
 产物：
 
 ```text
-release/Guncat Work-7.0.0/
+release/Guncat Work-7.1.0/
 ├── Guncat Work.exe              ← 双击这个
 ├── create-desktop-shortcut.cmd  ← 想放桌面就双击一次（带应用图标）
 ├── run-compat.cmd               ← 不提权，直接带 --no-sandbox 启动

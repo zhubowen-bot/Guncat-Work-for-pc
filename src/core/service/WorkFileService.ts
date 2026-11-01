@@ -56,6 +56,8 @@ export class WorkFileService {
     abortSignal?: AbortSignal | null) => Promise<ToolExecResult>) | null = null;
   // @deprecated 工具定义查找已迁移到 ToolRegistry(findToolDef 内部实现), 此字段仅保留兼容。
   private static toolDefMap: Record<string, Record<string, Object>> | null = null;
+  // 核心工具是否已经同步过(插件热加载会先占用 ToolRegistry.synced, 不能只依赖它)
+  private static coreToolsSynced: boolean = false;
 
   // 按名称取工具定义(供工具执行层做结构化参数校验); 找不到返回 null
   static findToolDef(name: string): Record<string, Object> | null {
@@ -74,7 +76,13 @@ export class WorkFileService {
       // 命令执行: run_command 当然算变更; job_output 虽名为"读", 但它会推进"读后即弃"的游标,
       // 放进只读并行池会让同一任务的输出被两次调用各读一半 —— 必须串行。
       'run_command', 'job_output', 'job_kill']);
-    ToolRegistry.ensure(WorkFileService.toolDefs(false), readOnly, mutating);
+    // 插件热加载会先把 ToolRegistry.synced 置 true(只同步插件工具), 之后 ToolRegistry.ensure()
+    // 就不会再补核心工具 —— 结果是核心工具的定义/只读标记/schema 校验全部缺失。
+    // 这里用独立标记判断核心工具是否真的同步过, 并用 sync(幂等合并)而不是 ensure。
+    if (!WorkFileService.coreToolsSynced || !ToolRegistry.isSynced()) {
+      ToolRegistry.sync(WorkFileService.toolDefs(false), readOnly, mutating);
+      WorkFileService.coreToolsSynced = true;
+    }
     // 并行安全标注(核心工具, 独立于只读/变更分类): subagent 是独立上下文/独立 LLM 循环的
     // 嵌套代理, 可与其他 subagent 并发派发; 由 ToolScheduler 归入并行组。
     let parallelSafe: string[] = WorkFileService.workParallelSafeNames();
@@ -111,7 +119,7 @@ export class WorkFileService {
   // 工作区文件类变更工具名(与 ToolRegistry 同步用)
   private static workMutatingNames(): string[] {
     return ['write_file', 'append_file', 'delete_file', 'create_dir', 'move_file',
-      'write_docx', 'edit_docx', 'write_xlsx', 'edit_xlsx', 'write_pptx',
+      'write_docx', 'edit_docx', 'docx_render', 'write_xlsx', 'edit_xlsx', 'write_pptx',
       'edit_ppt', 'write_csv', 'download_file', 'write_svg', 'todo_write', 'record_search',
       LOCAL_SEARCH_TOOL_NAME, LOCAL_SEARCH_LEGACY_TOOL_NAME, 'transform_file'];
   }
@@ -1655,6 +1663,14 @@ export class WorkFileService {
         'path', WorkFileService.strProp('要编辑的 .docx 文件相对路径'),
         'ops', WorkFileService.strProp('操作 JSON 数组, 如 [{"op":"update_block","index":2,"block":{"text":"新标题"}}]')),
       ['path', 'ops']));
+    defs.push(WorkFileService.makeTool('docx_render',
+      '把 .docx 渲染成逐页 PNG 预览, 用于交付前自查版式、公式、字体兜底是否正常。经 LibreOffice(优先)或 Microsoft Word 转 PDF 后栅格化, 返回图片相对路径数组; 用 view_image 逐张查看。本机未安装 LibreOffice/Word 时会返回明确错误(结构自检仍随 write_docx 返回, 不依赖渲染)。page/page_count 控制分页(默认第 1 页起 10 页, 最多 30 页), width 控制渲染宽度(默认 1400px, 600~2400)。',
+      WorkFileService.props4(
+        'path', WorkFileService.strProp('要渲染的 .docx 文件相对路径'),
+        'page', WorkFileService.strProp('起始页码(从 1 起), 默认 1'),
+        'page_count', WorkFileService.strProp('本次渲染页数, 默认 10, 最大 30'),
+        'width', WorkFileService.strProp('渲染宽度(px), 默认 1400, 范围 600~2400')),
+      ['path']));
     defs.push(WorkFileService.makeTool('write_xlsx',
       '把结构化 Workbook JSON 或表格文本生成 Excel 文件(.xlsx)写入工作区。正式表格用 workbook(Workbook JSON 结构化源: 多工作表/表头加粗/公式(单元格值以 = 开头, 如 "=SUM(B2:B9)")/数字格式(formats 列格式: money/int/percent/year/date/number/text)/列宽(colWidths)/冻结窗格(freeze))或 workbook_file(工作区中 Workbook JSON 文件路径, 长表先 write_file/append_file 分块写好再导出); 简单表格直接传 table(Markdown 表格/CSV/TSV, 首行作表头)。name 可选工作簿名, style 可选样式预设 default/academic/minimal。做正式 Excel 前必须先 load_skill("xlsx") 全量加载；新建前 ask_user_question 前置提问；交付前写 xlsx_qa_report.md。',
       WorkFileService.props6(

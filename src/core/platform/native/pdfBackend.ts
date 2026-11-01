@@ -171,6 +171,65 @@ export async function renderPdfPageToPng(
   }
 }
 
+/** 批量渲染结果（页码均为 1-based） */
+export interface PdfPngBatchResult {
+  pageCount: number
+  startPage: number
+  endPage: number
+  nextStartPage: number
+  files: string[]
+}
+
+/**
+ * 打开 PDF，把 [startPage, startPage+maxPages) 渲染成 outDir/pNNN.png。
+ * 与 renderPdfPageToPng 共用同一套 canvas / PDF.js 后端，只是复用一次文档句柄。
+ */
+export async function renderPdfPagesToPng(
+  absPath: string,
+  outDir: string,
+  startPage: number,
+  maxPages: number,
+  targetWidth: number
+): Promise<PdfPngBatchResult> {
+  const canvasMod: CanvasModule | null = await loadCanvasModule()
+  if (canvasMod === null) {
+    throw new Error(PDF_RENDER_UNAVAILABLE)
+  }
+  const pdfjs: PdfJsModule = await loadPdfjs()
+  const doc: PdfJsRawDocument = await pdfjs
+    .getDocument(buildSource(absPath))
+    .promise
+  const result: PdfPngBatchResult = {
+    pageCount: doc.numPages,
+    startPage: 0,
+    endPage: 0,
+    nextStartPage: 0,
+    files: []
+  }
+  try {
+    const s: number = Math.max(1, Math.floor(startPage))
+    result.startPage = s
+    if (doc.numPages <= 0 || s > doc.numPages) {
+      return result
+    }
+    fs.mkdirSync(outDir, { recursive: true })
+    const limit: number = Math.max(1, Math.floor(maxPages))
+    for (let i: number = s; i <= doc.numPages && i < s + limit; i++) {
+      const raw: PdfJsRawPage = await doc.getPage(i)
+      const png: Buffer = await renderRawPageToPng(raw, canvasMod, targetWidth, 0)
+      const file: string = path.join(outDir, 'p' + String(i).padStart(3, '0') + '.png')
+      fs.writeFileSync(file, png)
+      result.files.push(file)
+      result.endPage = i
+    }
+    result.nextStartPage =
+      result.endPage > 0 && result.endPage < doc.numPages ? result.endPage + 1 : 0
+    return result
+  } finally {
+    void doc.destroy()
+  }
+}
+
 // ===== 文本拼装 =====
 
 /**

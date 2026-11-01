@@ -95,8 +95,28 @@ Doc JSON 是 Word 文档的结构化中间层：AI 写 JSON → 渲染为 .docx�
 | `![说明](assets/icon.png)` | 行内图片（按需嵌入，最大宽 ≈5.8 英寸） |
 | `$E=mc^2$` | 行内公式（渲染为 OMML） |
 | `$$\\sum_{i=1}^n i$$` | 显示公式（独立成行） |
+| `$\\mu_0$` / `$\\alpha_2$` / `$\\bar{I}^2$` | 命令后的上下标会绑定到前一个原子（希腊字母、重音组、分式、定界符均可） |
+| `$\\frac{a}{b}$` `$\\sqrt[3]{x}$` `$\\int_0^1 f(x)dx$` | 分式 / 根式 / 积分（求和、连乘同理） |
+| `$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$` | 矩阵（pmatrix/bmatrix/cases/array/aligned 等） |
+| `$\\left\\langle x \\right\\rangle$` | 自动缩放定界符（`\\left\\{` / `\\right.` / `\\langle` 等） |
+| `$\\mathbb{R}^n$` `$\\vec{AB}$` `$\\overbrace{a+b}$` | 双线体 / 向量 / 上下括号 |
 | `~~删除线~~` | 删除线 |
 | `\\n` | 段落内换行 |
+
+> **公式失败会硬错**：未知命令、空 `m:t`、LaTeX 残留、`m:oMathPara` 父元素不合规都会让 `write_docx` 拒绝写盘并返回具体原因，不会生成「看起来成功」的坏文件。返回值里的「自检」行会给出公式段数、行内公式数、空节点数、残留数与父元素合规数。
+
+## 渲染自查（docx_render）
+
+`docx_render(path, page?, page_count?, width?)` 把 .docx 渲染成逐页 PNG：
+
+```json
+{"path":"report.docx","page":1,"page_count":3,"width":1400}
+```
+
+- 经 LibreOffice（优先）或 Microsoft Word 转 PDF，再用 PDF.js 栅格化；返回 `docx_render/<文件名>/p001.png` 等相对路径。
+- 用 `view_image` 逐张查看，重点看：公式是否缺笔画/缺上下标、中文是否变怪字、表格是否溢出、分页是否符合预期。
+- 本机未安装 LibreOffice/Word 时返回明确错误；此时仍可用 `write_docx` 返回的结构自检判断公式是否解析成功。
+
 
 ## 模板/仿制/占位符填充
 

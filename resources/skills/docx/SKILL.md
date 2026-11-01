@@ -178,7 +178,9 @@ description: 用 Doc JSON 制作与编辑 Word 文档（write_docx / read_docx /
 
 ## 能力边界（重要：不要承诺做不到的功能）
 
-**支持**：分级标题(H1~H6)、正文/列表/表格/图片/引用/代码块/公式(OMML)/封面/目录(Word TOC 域，打开后右键“更新域”生成)/分页/分隔线；三种样式预设；图片支持工作区路径、data URL、http、svg 自动栅格化。
+**支持**：分级标题(H1~H6)、正文/列表/表格/图片/引用/代码块/公式(LaTeX → OMML，支持上下标/分式/根式/求和积分/矩阵/希腊字母/重音/定界符)、封面/目录(Word TOC 域，打开后右键“更新域”生成)/分页/分隔线；三种样式预设；图片支持工作区路径、data URL、http、svg 自动栅格化。
+
+**渲染自查**：`docx_render(path, page?, page_count?, width?)` 会把 .docx 经 LibreOffice/Word 转 PDF 后逐页渲染成 PNG，返回图片路径；用 `view_image` 逐张查看即可确认版式、公式和字体兜底。需要本机安装 LibreOffice 或 Microsoft Word；缺失时会明确报错，不影响 `write_docx` 的结构自检。
 
 **不支持**（用户要求时**明确说明做不到**，并给替代方案）：
 - 修订/批注（track changes/comments）
@@ -274,6 +276,7 @@ description: 用 Doc JSON 制作与编辑 Word 文档（write_docx / read_docx /
 - [ ] 强附件场景忠实原文、缺失用占位符标注？
 - [ ] 模板场景：固定内容/样式/结构未误改？示例与占位已按计划处理？
 - [ ] read_docx/read_file 抽查过最终文件内容？
+- [ ] 公式/版式关键页用 `docx_render` 渲染并 `view_image` 看过（无 LibreOffice/Word 时记录「无法渲染」）？
 ## 发现与修复记录
 - 问题1：… → 修复动作：… → 复验：PASS
 ## 结论
