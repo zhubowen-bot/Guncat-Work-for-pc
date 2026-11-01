@@ -32,6 +32,8 @@ export interface BudgetMessage {
   role: string;
   content: string;
   toolCalls: BudgetToolCall[];
+  // 跨轮次回传的思考内容(OpenAI 兼容协议的 reasoning_content)同样占上下文预算
+  reasoning?: string;
 }
 
 // usage 锚定值: 上一请求真实的 prompt tokens, 以及与之配对的「那次请求的字符量」。
@@ -80,11 +82,15 @@ export class ContextBudget {
     return Constants.WORK_CONTEXT_WINDOW_TOKENS * Constants.WORK_COMPACT_TOKEN_RATIO;
   }
 
-  // 单条消息字符量: 正文 + 工具调用参数与结果(对齐原版 msgChars)
+  // 单条消息字符量: 正文 + 工具调用参数与结果 + 回传的思考内容(对齐原版 msgChars)
   static messageChars(m: BudgetMessage): number {
     let n: number = m.content.length;
     for (let c: number = 0; c < m.toolCalls.length; c++) {
       n += m.toolCalls[c].argsJson.length + m.toolCalls[c].result.length;
+    }
+    let reasoning: string | undefined = m.reasoning;
+    if (reasoning !== undefined) {
+      n += reasoning.length;
     }
     return n;
   }

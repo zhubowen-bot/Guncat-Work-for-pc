@@ -1253,6 +1253,108 @@ check(
     !capturedBodies.some((b) => b.includes('turbo'))
 )
 
+// --- 跨轮次思考记忆：历史 assistant 的 reasoning_content 必须回传给 API ---
+//
+// 事故形状：上一轮的深度思考只落在界面里，第二轮请求只回传正文，模型等于"忘了"上一轮
+// 推理过的结论。DeepSeek 思考模式 + tools 要求历史 reasoning_content 完整回传，否则 400。
+// 这里用一个本地服务模拟「每轮都带思考」的响应，然后看第二轮的请求体。
+const reasoningBodies = []
+const reasoningServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    reasoningBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(
+      'data: ' +
+        JSON.stringify({ choices: [{ delta: { reasoning_content: '第一轮思考：先确认口径' } }] }) +
+        '\n\n'
+    )
+    res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: '第一轮回答' } }] }) + '\n\n')
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => reasoningServer.listen(0, '127.0.0.1', () => resolve()))
+const reasoningPort = reasoningServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-completions',
+  baseUrl: 'http://127.0.0.1:' + String(reasoningPort),
+  apiKey: 'sk-reasoning-test',
+  model: 'reasoning-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+
+// 工作模式（Agent Loop：历史由 historyMessages 重建）
+const convReasonWork = await inv('conversations:create', agents[0].id, 'work')
+await inv('work:run', {
+  conversationId: convReasonWork.id,
+  text: '第一轮提问',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+const workReasonMsg = ((await inv('conversation:get', convReasonWork.id))?.messages ?? [])
+  .filter((m) => m.role === 'assistant')
+  .pop()
+check(
+  '深度思考已落进会话（跨轮次回传的前提）',
+  String(workReasonMsg?.reasoning ?? '').includes('第一轮思考'),
+  String(workReasonMsg?.reasoning ?? '').slice(0, 40)
+)
+reasoningBodies.length = 0
+await inv('work:run', {
+  conversationId: convReasonWork.id,
+  text: '第二轮提问',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+check(
+  '工作模式第二轮请求回传了上一轮的 reasoning_content',
+  reasoningBodies.some((b) => b.includes('"reasoning_content":"第一轮思考：先确认口径"')),
+  (reasoningBodies[0] ?? '').slice(0, 200)
+)
+check(
+  'reasoning_content 与 content 同级挂在同一条 assistant 消息上',
+  reasoningBodies.some(
+    (b) =>
+      b.includes('"role":"assistant","content":"第一轮回答","reasoning_content":"第一轮思考：先确认口径"')
+  ),
+  (reasoningBodies[0] ?? '').slice(0, 300)
+)
+
+// 聊天模式（ChatService：历史直接来自 Message[]）
+const convReasonChat = await inv('conversations:create', agents[0].id, 'chat')
+await inv('chat:send', {
+  conversationId: convReasonChat.id,
+  text: '第一轮提问',
+  mode: 'chat',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+reasoningBodies.length = 0
+await inv('chat:send', {
+  conversationId: convReasonChat.id,
+  text: '第二轮提问',
+  mode: 'chat',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+check(
+  '聊天模式第二轮请求同样回传了 reasoning_content',
+  reasoningBodies.some((b) => b.includes('"reasoning_content":"第一轮思考：先确认口径"')),
+  (reasoningBodies[0] ?? '').slice(0, 200)
+)
+reasoningServer.closeAllConnections?.()
+reasoningServer.close()
+
 // --- 插话（审计 P1-4）：此前全库 `steer` 零命中，想补充要求只能中止重来 ---
 //
 // 真正的判据不是「接口返回 true」，而是**插话文本真的出现在下一轮请求体里**。

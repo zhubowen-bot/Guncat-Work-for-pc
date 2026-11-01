@@ -137,8 +137,9 @@ function buildChatCompletionsBody(config: ApiConfig, agent: Agent | null,
   }
   for (let i: number = 0; i < history.length; i++) {
     let m: Message = history[i];
-    // 只带工具调用的 assistant 消息(content 为空)不能跳过, 工具结果回灌依赖它
-    if (m.content === '' && m.toolCalls.length === 0) {
+    // 只带工具调用的 assistant 消息(content 为空)不能跳过, 工具结果回灌依赖它;
+    // 只有思考、没有正文的 assistant 消息同样保留(跨轮次思考记忆)。
+    if (m.content === '' && m.toolCalls.length === 0 && m.reasoning === '') {
       continue;
     }
     if (m.role !== 'user' && m.role !== 'assistant') {
@@ -197,11 +198,16 @@ function buildChatCompletionsBody(config: ApiConfig, agent: Agent | null,
           function: { name: call.name, arguments: call.argsJson === '' ? '{}' : call.argsJson }
         });
       }
-      messages.push({
+      let toolMsg: Record<string, Object> = {
         role: 'assistant',
         content: m.content === '' ? null : m.content,
         tool_calls: callArr
-      });
+      };
+      // 思考模式 + tools: 历史 assistant 的 reasoning_content 必须完整回传(否则 400)
+      if (m.reasoning !== '') {
+        toolMsg['reasoning_content'] = m.reasoning;
+      }
+      messages.push(toolMsg);
       for (let c: number = 0; c < m.toolCalls.length; c++) {
         let call: ToolCallRecord = m.toolCalls[c];
         messages.push({
@@ -213,8 +219,9 @@ function buildChatCompletionsBody(config: ApiConfig, agent: Agent | null,
       continue;
     }
     let chatMsg: Record<string, Object> = { role: m.role, content: m.content };
-    // 请求携带 tools（联网搜索）时，DeepSeek 要求回传中间 assistant 的 reasoning_content，否则多轮可能 400。
-    if (m.role === 'assistant' && webSearchEnabled && m.reasoning !== '') {
+    // 历史轮次的深度思考必须以 reasoning_content(与 content 同级)回传, 否则跨轮次丢失思考记忆。
+    // 无论请求是否携带 tools 都带上: 未带 tools 时服务端会忽略该字段, 带上无害。
+    if (m.role === 'assistant' && m.reasoning !== '') {
       chatMsg['reasoning_content'] = m.reasoning;
     }
     messages.push(chatMsg);
@@ -278,6 +285,9 @@ function buildResponsesBody(config: ApiConfig, agent: Agent | null,
   history: Message[], userText: string,
   thinkingEnabled: boolean, webSearchEnabled: boolean): Record<string, Object> {
   let input: Record<string, Object>[] = [];
+  // Responses 协议没有 reasoning_content 字段: 思考只能以 reasoning input item(需要服务端签发的
+  // id / encrypted_content)回传, 纯文本层级直接塞字段会被拒绝。本项目未持久化 reasoning item,
+  // 故这里不回传思考(与改动前一致), 避免为拿回思考反而让请求 400。
   for (let i: number = 0; i < history.length; i++) {
     let m: Message = history[i];
     // 只带工具调用的 assistant 消息(content 为空)不能跳过, 工具结果回灌依赖它

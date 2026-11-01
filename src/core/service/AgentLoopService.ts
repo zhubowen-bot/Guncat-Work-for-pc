@@ -52,6 +52,10 @@ export class LoopMessage {
   reasoning: string = '';
   thinkingSignature: string = '';
   redactedThinking: string = '';
+  // 由会话历史(Message)重建的思考文本: 只有正文、没有 Anthropic 签名。
+  // OpenAI 兼容协议照常回传(reasoning_content); Anthropic 协议不能当 thinking 块回传
+  // (官方会校验签名, 无签名反而 400), 由 anthropicThinkingBlocks 跳过。
+  reasoningFromHistory: boolean = false;
 
   static system(content: string): LoopMessage {
     let m: LoopMessage = new LoopMessage();
@@ -156,13 +160,23 @@ export class AgentLoopService {
     let out: LoopMessage[] = [];
     for (let i: number = 0; i < history.length; i++) {
       let msg: Message = history[i];
-      if (msg.content.trim() === '') {
+      // 只调工具、正文为空的 assistant 消息也带着思考: 不能因为正文为空就把思考一起丢掉
+      if (msg.content.trim() === '' && msg.reasoning === '') {
         continue;
       }
       if (msg.role === 'user') {
+        if (msg.content.trim() === '') {
+          continue;
+        }
         out.push(LoopMessage.user(msg.content));
       } else if (msg.role === 'assistant') {
-        out.push(LoopMessage.assistant(msg.content, []));
+        // 跨轮次思考记忆: 把历史 assistant 消息的 reasoning 一并带上, 由各协议构建器决定
+        // 以什么形式回传(OpenAI 兼容 → reasoning_content; Anthropic → 仅回传带签名的
+        // thinking 块, 故标记 reasoningFromHistory)。
+        let m: LoopMessage = LoopMessage.assistant(msg.content, []);
+        m.reasoning = msg.reasoning;
+        m.reasoningFromHistory = true;
+        out.push(m);
       }
     }
     return out;
@@ -937,17 +951,28 @@ export class AgentLoopService {
               function: { name: call.name, arguments: call.argsJson === '' ? '{}' : call.argsJson }
             });
           }
-          msgs.push({
+          let assistantMsg: Record<string, Object> = {
             role: 'assistant',
             content: m.content === '' ? null : m.content,
             tool_calls: callArr
-          });
+          };
+          // DeepSeek 思考模式要求: 带 tools 的请求必须把历史 assistant 的 reasoning_content
+          // 完整回传(带 tool_calls 的消息尤其必须), 否则后续轮次 400。
+          if (m.reasoning !== '') {
+            assistantMsg['reasoning_content'] = m.reasoning;
+          }
+          msgs.push(assistantMsg);
           for (let c: number = 0; c < m.toolCalls.length; c++) {
             let call: ToolCallRecord = m.toolCalls[c];
             msgs.push({ role: 'tool', tool_call_id: call.id, content: call.result });
           }
-        } else if (m.content !== '') {
-          msgs.push({ role: 'assistant', content: m.content });
+        } else if (m.content !== '' || m.reasoning !== '') {
+          // 无论请求是否携带 tools 都回传: 未带 tools 时服务端会忽略该字段, 带上无害
+          let assistantMsg: Record<string, Object> = { role: 'assistant', content: m.content };
+          if (m.reasoning !== '') {
+            assistantMsg['reasoning_content'] = m.reasoning;
+          }
+          msgs.push(assistantMsg);
         }
       }
     }
@@ -992,6 +1017,8 @@ export class AgentLoopService {
   }
 
   // openai Responses: function_call / function_call_output 输入项
+  // 注意: Responses 没有 reasoning_content 字段, 历史思考只能以 reasoning output item(带 id /
+  // encrypted_content)回传; 直接把思考文本塞进 assistant 消息会被拒绝。这里不回传思考。
   private static buildResponsesBody(config: ApiConfig, messages: LoopMessage[],
     tools: Record<string, Object>[], thinkingEnabled: boolean, reasoningEffort: string,
     webSearchEnabled: boolean, jsonMode: boolean = false): Record<string, Object> {
@@ -1101,8 +1128,6 @@ export class AgentLoopService {
           AgentLoopService.appendAnthropicText(msgs, 'user', m.content);
         }
       } else if (m.role === 'assistant') {
-        // 思考模式下必须把上一轮 assistant 的思考块回传(置于消息首位), 否则服务端 400;
-        // 思考文本与签名仅内存循环内的消息携带(fromTurn), 历史重建的消息不回传
         let thinking: Object[] = AgentLoopService.anthropicThinkingBlocks(m, thinkingEnabled);
         if (m.toolCalls.length > 0) {
           let blocks: Object[] = thinking.slice();
@@ -1227,9 +1252,17 @@ export class AgentLoopService {
 
   // Anthropic 思考回传块(assistant 消息的首位块): 思考模式开启且本轮确有思考内容时生成。
   // 签名仅在流式捕获到时携带(官方 API 校验签名; 部分兼容服务不返回签名则省略该字段)。
+  // 三种协议对"思维链回传"的要求不同:
+  //   - OpenAI Chat Completions: 同级的 reasoning_content 纯文本字段(见 buildCompletionsBody);
+  //   - Anthropic Messages: thinking 内容块 + 服务端签发的 signature, 签名缺失/被改动会 400;
+  //   - OpenAI Responses: 只能回传 reasoning output item(含 id/encrypted_content), 没有纯文本字段。
+  // 因此历史重建的消息(只有正文、没有签名)在这里不当 thinking 块回传, 否则官方 API 直接 400。
   private static anthropicThinkingBlocks(m: LoopMessage, thinkingEnabled: boolean): Object[] {
     let blocks: Object[] = [];
     if (!thinkingEnabled) {
+      return blocks;
+    }
+    if (m.reasoningFromHistory) {
       return blocks;
     }
     if (m.redactedThinking !== '') {
