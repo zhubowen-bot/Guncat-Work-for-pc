@@ -73,26 +73,33 @@
   文档成功转 PDF 并渲染出 3 页 PNG。
 - 版本号进 **7.1.0**；安装包产物见 `release/Guncat-Work-7.1.0-setup.exe`。
 
-### 七、修复：跨轮次深度思考记忆丢失（`reasoning_content` 不回传）
+### 七、修复：跨轮次深度思考记忆丢失（三种协议全部回传）
 
 - **根因**：历史轮次的 `reasoning` 一直存在会话里，但重建请求时被整段丢掉 ——
   工作 / 交互模式的 `historyMessages()` 只搬正文；Chat Completions 请求体里普通 assistant
-  消息不写 `reasoning_content`，聊天模式还只在「服务端联网搜索」开启时才回传。结果是
-  从第二轮起模型看不到自己上一轮推理过的结论；带 `tools` 的 DeepSeek 思考模式甚至会直接 400。
-- **修复（按协议分别处理，已对照官方文档）**：
+  消息不写 `reasoning_content`，聊天模式还只在「服务端联网搜索」开启时才回传；Anthropic 的
+  thinking 签名只存内存、没随消息持久化；Responses 的 reasoning output item 则完全没有保存。
+  结果是第二轮起模型看不到自己上一轮推理过的结论；带 `tools` 的 DeepSeek 思考模式甚至会直接 400。
+- **修复（三种协议按各自规范回传，已对照 DeepSeek / Anthropic / OpenAI 文档）**：
   - **OpenAI 兼容 Chat Completions**：assistant 消息只要历史里有思考，就回传与 `content`
     同级的 `reasoning_content`；带 `tool_calls` 的消息同样回传。无论请求是否携带 `tools`
     都带上 —— 不带 `tools` 时服务端会自动忽略该字段，不改变既有行为。
-  - **Anthropic Messages**：同一次工具循环内仍按签名规则回传 thinking 块；从历史重建的
-    消息没有服务端签发的 `signature`，不再伪造成 thinking 块，避免 `Invalid signature` 400。
-  - **OpenAI / DeepSeek Responses**：协议没有 `reasoning_content` 字段，思考只能通过
-    `reasoning` output item（`id` / `encrypted_content`）回传；不塞纯文本字段，避免请求被拒。
+  - **Anthropic Messages**：`thinking` 块随历史一起回传（置于消息首位）。`signature` /
+    `redacted_thinking` 现在随消息持久化，跨轮次与重启后都原样带回；DeepSeek / Opencode 等
+    兼容端点接受无签名 thinking 块（历史遗留消息照常回传），官方 `api.anthropic.com` 仅对
+    「历史 + 无签名」跳过，避免 `Invalid signature` 400。历史被修剪 / 摘要压缩 / 整条裁剪后，
+    旧签名绑定的前缀已失效，会主动清掉签名再发（避免 400），后续轮次重新拿新签名。
+  - **OpenAI / DeepSeek Responses**：保存 `response.output_item.done` 里的 reasoning
+    output item（JSON），下一轮原样作为 `reasoning` input item 回传；DeepSeek 等兼容端点额外
+    支持明文 `content` 兜底（历史遗留消息），官方 OpenAI 只回传带 `id`/`encrypted_content`
+    的原始 item。请求同时声明 `include: ["reasoning.encrypted_content"]`（DeepSeek 文档说明
+    不支持该参数时静默忽略），无状态模式下也能拿到可回传的思考。
 - **顺带**：只有思考、没有正文的 assistant 历史消息不再被整条跳过；上下文预算把回传的
   思考一并计入字符量，长任务不会因为多带思考而悄悄超出预算。
-- **验证**：`ipc-check` 新增 4 条回归（工作模式 / 聊天模式第二轮必须带回上一轮
-  `reasoning_content`，且与 `content` 同级），`ipc-check` 521 项、`run-smoke` 156 项全过，
-  `typecheck:node` 与 `node --check scripts/ipc-check.mjs` 通过；安装包同为
-  `release/Guncat-Work-7.1.0-setup.exe`。
+- **验证**：`ipc-check` 新增 10 条回归（三种协议 × 工作 / 聊天模式：第二轮请求必须带回上一轮
+  思考，含 Anthropic 签名与 Responses reasoning item 的持久化往返），`ipc-check` 529 项、
+  `run-smoke` 156 项全过，`typecheck:node` 与 `node --check scripts/ipc-check.mjs` 通过；
+  安装包同为 `release/Guncat-Work-7.1.0-setup.exe`。
 
 ---
 

@@ -54,6 +54,8 @@ export { SubagentService } from '@core/service/SubagentService'
 export { GuncatUiParts } from '@core/common/GuncatUiParts'
 export { ProviderHeaders } from '@core/common/ProviderHeaders'
 export { ApiConfig } from '@core/model/ApiConfig'
+// 消息持久化往返(思考签名必须跨重启保留)
+export { Message } from '@core/model/Message'
 `
 )
 
@@ -1354,6 +1356,262 @@ check(
 )
 reasoningServer.closeAllConnections?.()
 reasoningServer.close()
+
+// --- Anthropic 协议：历史思考块必须带着签名回传 ---
+//
+// Anthropic 没有 reasoning_content 字段，思考只能以 content 块回传:
+//   {"type":"thinking","thinking":"...","signature":"..."}
+// 签名由服务端随流式响应下发(signature_delta)，必须随消息持久化并在后续轮次原样带回。
+// 事故形状: 历史重建时只搬正文，模型第二轮"忘了"上一轮推理过的结论。
+const anthropicBodies = []
+const anthropicServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    anthropicBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(
+      'data: ' +
+        JSON.stringify({
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'thinking_delta', thinking: '第一轮思考：先确认口径' }
+        }) +
+        '\n\n'
+    )
+    res.write(
+      'data: ' +
+        JSON.stringify({
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'signature_delta', signature: 'sig-test-123' }
+        }) +
+        '\n\n'
+    )
+    res.write(
+      'data: ' +
+        JSON.stringify({
+          type: 'content_block_delta',
+          index: 1,
+          delta: { type: 'text_delta', text: '第一轮回答' }
+        }) +
+        '\n\n'
+    )
+    res.write(
+      'data: ' +
+        JSON.stringify({
+          type: 'message_delta',
+          delta: { stop_reason: 'end_turn' },
+          usage: { input_tokens: 10, output_tokens: 5 }
+        }) +
+        '\n\n'
+    )
+    res.write('data: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n')
+    res.end()
+  })
+})
+await new Promise((resolve) => anthropicServer.listen(0, '127.0.0.1', () => resolve()))
+const anthropicPort = anthropicServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'anthropic-messages',
+  baseUrl: 'http://127.0.0.1:' + String(anthropicPort),
+  apiKey: 'sk-anthropic-test',
+  model: 'anthropic-reasoning-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const THINKING_BLOCK =
+  '"content":[{"type":"thinking","thinking":"第一轮思考：先确认口径","signature":"sig-test-123"},'
+
+// 工作模式
+const convAnthWork = await inv('conversations:create', agents[0].id, 'work')
+await inv('work:run', {
+  conversationId: convAnthWork.id,
+  text: '第一轮提问',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+const anthWorkMsg = ((await inv('conversation:get', convAnthWork.id))?.messages ?? [])
+  .filter((m) => m.role === 'assistant')
+  .pop()
+const sigMsg = mod.Message.ofAssistant('m_sig', '正文')
+sigMsg.reasoning = '思考'
+sigMsg.thinkingSignature = 'sig-test-123'
+sigMsg.redactedThinking = 'redacted-xyz'
+const sigBack = mod.Message.fromJson(sigMsg.toJson())
+check(
+  'Anthropic: 思考签名/加密思考随消息持久化（重启后仍可回传）',
+  sigBack.thinkingSignature === 'sig-test-123' && sigBack.redactedThinking === 'redacted-xyz',
+  `signature=${sigBack.thinkingSignature}`
+)
+check(
+  'Anthropic: 思考正文正常落在会话里',
+  String(anthWorkMsg?.reasoning ?? '').includes('第一轮思考'),
+  String(anthWorkMsg?.reasoning ?? '').slice(0, 30)
+)
+anthropicBodies.length = 0
+await inv('work:run', {
+  conversationId: convAnthWork.id,
+  text: '第二轮提问',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+check(
+  'Anthropic 工作模式第二轮回传了带签名的 thinking 块',
+  anthropicBodies.some((b) => b.includes(THINKING_BLOCK)),
+  (anthropicBodies[0] ?? '').slice(0, 300)
+)
+
+// 聊天模式
+const convAnthChat = await inv('conversations:create', agents[0].id, 'chat')
+await inv('chat:send', {
+  conversationId: convAnthChat.id,
+  text: '第一轮提问',
+  mode: 'chat',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+anthropicBodies.length = 0
+await inv('chat:send', {
+  conversationId: convAnthChat.id,
+  text: '第二轮提问',
+  mode: 'chat',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+check(
+  'Anthropic 聊天模式第二轮同样回传了带签名的 thinking 块',
+  anthropicBodies.some((b) => b.includes(THINKING_BLOCK)),
+  (anthropicBodies[0] ?? '').slice(0, 300)
+)
+anthropicServer.closeAllConnections?.()
+anthropicServer.close()
+
+// --- Responses 协议：reasoning output item 必须回传 ---
+//
+// Responses 没有 reasoning_content 字段，思考只能以 reasoning input item 回传:
+// OpenAI 用服务端下发的 item(id/summary/encrypted_content)，DeepSeek 还支持明文 content。
+// 事故形状: 不保存 output_item.done 里的 reasoning item，第二轮等于把思考全丢了。
+const responsesBodies = []
+const responsesServer = http.createServer((req, res) => {
+  let raw = ''
+  req.on('data', (chunk) => {
+    raw += chunk.toString('utf8')
+  })
+  req.on('end', () => {
+    responsesBodies.push(raw)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(
+      'data: ' +
+        JSON.stringify({
+          type: 'response.output_item.done',
+          item: {
+            type: 'reasoning',
+            id: 'rs_test_1',
+            summary: [],
+            content: [{ type: 'reasoning_text', text: '第一轮思考：先确认口径' }],
+            encrypted_content: 'enc-test-xyz'
+          }
+        }) +
+        '\n\n'
+    )
+    res.write(
+      'data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: '第一轮回答' }) + '\n\n'
+    )
+    res.write(
+      'data: ' +
+        JSON.stringify({
+          type: 'response.completed',
+          response: { status: 'completed', usage: { input_tokens: 10, output_tokens: 5 } }
+        }) +
+        '\n\n'
+    )
+    res.end()
+  })
+})
+await new Promise((resolve) => responsesServer.listen(0, '127.0.0.1', () => resolve()))
+const responsesPort = responsesServer.address().port
+await inv('settings:saveApiConfig', {
+  provider: 'openai-responses',
+  baseUrl: 'http://127.0.0.1:' + String(responsesPort),
+  apiKey: 'sk-responses-test',
+  model: 'responses-reasoning-model',
+  temperature: 0,
+  topP: 0,
+  maxTokens: 0,
+  extraParams: '',
+  autoSuffix: true
+})
+const convRespWork = await inv('conversations:create', agents[0].id, 'work')
+await inv('work:run', {
+  conversationId: convRespWork.id,
+  text: '第一轮提问',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+const respMsg = mod.Message.ofAssistant('m_resp', '正文')
+respMsg.reasoningItems = '[{"type":"reasoning","id":"rs_x","encrypted_content":"enc_x"}]'
+const respBack = mod.Message.fromJson(respMsg.toJson())
+check(
+  'Responses: reasoning item 随消息持久化',
+  respBack.reasoningItems.includes('enc_x'),
+  respBack.reasoningItems.slice(0, 60)
+)
+responsesBodies.length = 0
+await inv('work:run', {
+  conversationId: convRespWork.id,
+  text: '第二轮提问',
+  mode: 'work',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+check(
+  'Responses 工作模式第二轮回传了 reasoning item',
+  responsesBodies.some(
+    (b) => b.includes('"type":"reasoning","id":"rs_test_1"') && b.includes('"encrypted_content":"enc-test-xyz"')
+  ),
+  (responsesBodies[0] ?? '').slice(0, 300)
+)
+check(
+  'Responses 请求声明了 reasoning.encrypted_content（无状态模式拿回可回传的思考）',
+  responsesBodies.some((b) => b.includes('"include":["reasoning.encrypted_content"]')),
+  (responsesBodies[0] ?? '').slice(0, 200)
+)
+
+// 聊天模式
+const convRespChat = await inv('conversations:create', agents[0].id, 'chat')
+await inv('chat:send', {
+  conversationId: convRespChat.id,
+  text: '第一轮提问',
+  mode: 'chat',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+responsesBodies.length = 0
+await inv('chat:send', {
+  conversationId: convRespChat.id,
+  text: '第二轮提问',
+  mode: 'chat',
+  thinkingEnabled: true,
+  webSearchEnabled: false
+})
+check(
+  'Responses 聊天模式第二轮回传了 reasoning item',
+  responsesBodies.some(
+    (b) => b.includes('"type":"reasoning","id":"rs_test_1"') && b.includes('"encrypted_content":"enc-test-xyz"')
+  ),
+  (responsesBodies[0] ?? '').slice(0, 300)
+)
+responsesServer.closeAllConnections?.()
+responsesServer.close()
 
 // --- 插话（审计 P1-4）：此前全库 `steer` 零命中，想补充要求只能中止重来 ---
 //

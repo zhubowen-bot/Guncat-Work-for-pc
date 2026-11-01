@@ -10,6 +10,7 @@ import { StreamAccumulator,
   extractResponsesDelta, extractResponsesReasoning, extractResponsesUsage, extractResponsesFailure,
   extractAnthropicDelta, extractAnthropicReasoning, extractAnthropicUsage, extractAnthropicFailure,
   extractAnthropicSignature, extractAnthropicRedactedThinking,
+  responsesReasoningItems, appendReasoningItem,
   deriveStreamStats } from './ChatService';
 import { ToolCallAccumulator, collectCompletionsToolDelta, collectResponsesToolItem,
   collectAnthropicToolEvent, genToolCallId } from './ToolCallStream';
@@ -42,8 +43,9 @@ export { LoopError };
 // 与协议无关的循环消息: assistant 消息的工具调用与执行结果都挂在 toolCalls 上
 // (构建协议请求体时再拆分为 assistant(tool_calls) + tool/function_call_output/tool_result 消息)
 // imageDataUrl 仅用于 user 消息携带工作区图片(view_image 工具注入), 不持久化。
-// reasoning/thinkingSignature/redactedThinking 仅在内存循环内使用: Anthropic 协议思考模式下
-// 工具循环的 assistant 消息必须把思考块原样回传(置于消息首位), 否则服务端 400。
+// reasoning/thinkingSignature/redactedThinking: 三种协议回传思考的载体不同 ——
+// OpenAI 兼容用 reasoning_content 纯文本, Anthropic 用 thinking 块(签名随消息持久化),
+// Responses 用 reasoning output item。循环内与历史重建都携带, 由各协议构建器决定下发表单。
 export class LoopMessage {
   role: string = 'user'; // 'system' | 'user' | 'assistant'
   content: string = '';
@@ -52,9 +54,10 @@ export class LoopMessage {
   reasoning: string = '';
   thinkingSignature: string = '';
   redactedThinking: string = '';
-  // 由会话历史(Message)重建的思考文本: 只有正文、没有 Anthropic 签名。
-  // OpenAI 兼容协议照常回传(reasoning_content); Anthropic 协议不能当 thinking 块回传
-  // (官方会校验签名, 无签名反而 400), 由 anthropicThinkingBlocks 跳过。
+  // Responses 协议: 服务端下发的 reasoning output item(JSON 数组字符串), 跨轮次回传思考所需
+  reasoningItems: string = '';
+  // 是否由会话历史(Message)重建: 只影响 Anthropic 的签名兜底 ——
+  // 历史消息的签名随消息持久化, 有签名就原样回传; 无签名时官方端点会 400, 兼容端点照常回传。
   reasoningFromHistory: boolean = false;
 
   static system(content: string): LoopMessage {
@@ -95,6 +98,7 @@ export class LoopMessage {
     m.reasoning = turn.reasoning;
     m.thinkingSignature = turn.thinkingSignature;
     m.redactedThinking = turn.redactedThinking;
+    m.reasoningItems = turn.reasoningItems;
     return m;
   }
 }
@@ -107,6 +111,8 @@ export class LoopTurnResult {
   // 回传 thinking 块时随块携带, 供服务端校验
   thinkingSignature: string = '';
   redactedThinking: string = '';
+  // Responses 协议: reasoning output item(JSON 数组字符串), 跨轮次回传思考的唯一载体
+  reasoningItems: string = '';
   toolCalls: ToolCallRecord[] = [];
   tokenSpeed: number = -1;
   cacheHitRate: number = -1;
@@ -175,6 +181,11 @@ export class AgentLoopService {
         // thinking 块, 故标记 reasoningFromHistory)。
         let m: LoopMessage = LoopMessage.assistant(msg.content, []);
         m.reasoning = msg.reasoning;
+        // Anthropic 协议回传 thinking 块时必须原样带上服务端签发的签名与加密思考块,
+        // 否则官方 API 会以签名缺失/被改动拒绝(400)。签名随消息持久化。
+        m.thinkingSignature = msg.thinkingSignature;
+        m.redactedThinking = msg.redactedThinking;
+        m.reasoningItems = msg.reasoningItems;
         m.reasoningFromHistory = true;
         out.push(m);
       }
@@ -335,6 +346,9 @@ export class AgentLoopService {
       };
       ctx.onRedactedThinking = (data: string): void => {
         result.redactedThinking = data;
+      };
+      ctx.onReasoningItem = (itemJson: string): void => {
+        result.reasoningItems = appendReasoningItem(result.reasoningItems, itemJson);
       };
       ctx.onUsage = (usageObj: Record<string, Object> | null): void => {
         let stats: number[] = deriveStreamStats(usageObj, Date.now() - startTime);
@@ -1016,13 +1030,14 @@ export class AgentLoopService {
     return body;
   }
 
-  // openai Responses: function_call / function_call_output 输入项
-  // 注意: Responses 没有 reasoning_content 字段, 历史思考只能以 reasoning output item(带 id /
-  // encrypted_content)回传; 直接把思考文本塞进 assistant 消息会被拒绝。这里不回传思考。
+  // openai Responses: reasoning? + function_call / function_call_output 输入项
+  // 注意: Responses 没有 reasoning_content 字段, 思考必须以 reasoning input item 回传:
+  // 优先用服务端下发的原始 item(OpenAI 带 id/encrypted_content), 兼容端点(DeepSeek)支持明文 content。
   private static buildResponsesBody(config: ApiConfig, messages: LoopMessage[],
     tools: Record<string, Object>[], thinkingEnabled: boolean, reasoningEffort: string,
     webSearchEnabled: boolean, jsonMode: boolean = false): Record<string, Object> {
     let input: Record<string, Object>[] = [];
+    let allowPlainReasoning: boolean = !LLMProtocol.isOfficialOpenAI(config.baseUrl);
     let systemText: string = messages.length > 0 ? messages[0].content : '';
     for (let i: number = 0; i < messages.length; i++) {
       let m: LoopMessage = messages[i];
@@ -1041,6 +1056,12 @@ export class AgentLoopService {
           input.push({ role: 'user', content: m.content });
         }
       } else if (m.role === 'assistant') {
+        // reasoning item 必须紧邻其 assistant 消息之前(DeepSeek 会把明文 content 归并进该消息)
+        let reasoningItems: Record<string, Object>[] = responsesReasoningItems(
+          m.reasoningItems, m.reasoning, allowPlainReasoning);
+        for (let r: number = 0; r < reasoningItems.length; r++) {
+          input.push(reasoningItems[r]);
+        }
         if (m.content !== '') {
           input.push({
             role: 'assistant',
@@ -1070,7 +1091,10 @@ export class AgentLoopService {
       model: config.model,
       input: input,
       stream: true,
-      store: false
+      store: false,
+      // 无状态模式(store:false): 需要 encrypted reasoning item 才能在下一轮回传思考。
+      // DeepSeek 不支持 include(文档说明静默忽略), 兼容端点不受影响。
+      include: ['reasoning.encrypted_content']
     };
     if (finalTools.length > 0) {
       body['tools'] = finalTools;
@@ -1128,7 +1152,9 @@ export class AgentLoopService {
           AgentLoopService.appendAnthropicText(msgs, 'user', m.content);
         }
       } else if (m.role === 'assistant') {
-        let thinking: Object[] = AgentLoopService.anthropicThinkingBlocks(m, thinkingEnabled);
+        let allowUnsignedHistory: boolean = !LLMProtocol.isOfficialAnthropic(config.baseUrl);
+        let thinking: Object[] = AgentLoopService.anthropicThinkingBlocks(m, thinkingEnabled,
+          allowUnsignedHistory);
         if (m.toolCalls.length > 0) {
           let blocks: Object[] = thinking.slice();
           if (m.content !== '') {
@@ -1250,32 +1276,35 @@ export class AgentLoopService {
     return out;
   }
 
-  // Anthropic 思考回传块(assistant 消息的首位块): 思考模式开启且本轮确有思考内容时生成。
-  // 签名仅在流式捕获到时携带(官方 API 校验签名; 部分兼容服务不返回签名则省略该字段)。
+  // Anthropic 思考回传块(assistant 消息的首位块): 思考模式开启且确有思考内容时生成。
   // 三种协议对"思维链回传"的要求不同:
   //   - OpenAI Chat Completions: 同级的 reasoning_content 纯文本字段(见 buildCompletionsBody);
-  //   - Anthropic Messages: thinking 内容块 + 服务端签发的 signature, 签名缺失/被改动会 400;
+  //   - Anthropic Messages: thinking 内容块 + 服务端签发的 signature, 签名被改动会 400;
   //   - OpenAI Responses: 只能回传 reasoning output item(含 id/encrypted_content), 没有纯文本字段。
-  // 因此历史重建的消息(只有正文、没有签名)在这里不当 thinking 块回传, 否则官方 API 直接 400。
-  private static anthropicThinkingBlocks(m: LoopMessage, thinkingEnabled: boolean): Object[] {
+  // 本方法负责 Anthropic: 历史消息同样回传(跨轮次思考记忆), 有签名就带上;
+  // 官方 API 对无签名的 thinking 块会拒绝, 因此仅对官方端点跳过"历史 + 无签名"的组合,
+  // 兼容端点(DeepSeek / Opencode 等)照常回传无签名思考块。
+  private static anthropicThinkingBlocks(m: LoopMessage, thinkingEnabled: boolean,
+    allowUnsignedHistory: boolean): Object[] {
     let blocks: Object[] = [];
     if (!thinkingEnabled) {
-      return blocks;
-    }
-    if (m.reasoningFromHistory) {
       return blocks;
     }
     if (m.redactedThinking !== '') {
       blocks.push({ type: 'redacted_thinking', data: m.redactedThinking });
       return blocks;
     }
-    if (m.reasoning !== '') {
-      let block: Record<string, Object> = { type: 'thinking', thinking: m.reasoning };
-      if (m.thinkingSignature !== '') {
-        block['signature'] = m.thinkingSignature;
-      }
-      blocks.push(block);
+    if (m.reasoning === '') {
+      return blocks;
     }
+    if (m.thinkingSignature === '' && m.reasoningFromHistory && !allowUnsignedHistory) {
+      return blocks;
+    }
+    let block: Record<string, Object> = { type: 'thinking', thinking: m.reasoning };
+    if (m.thinkingSignature !== '') {
+      block['signature'] = m.thinkingSignature;
+    }
+    blocks.push(block);
     return blocks;
   }
 
