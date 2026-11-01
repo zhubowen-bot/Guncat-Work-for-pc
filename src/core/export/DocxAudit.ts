@@ -97,7 +97,9 @@ export class DocxAudit {
     let m: RegExpExecArray | null = re.exec(xml);
     while (m !== null) {
       let text: string = m[1];
-      let residueRe: RegExp = /\\[A-Za-z]+|\$/g;
+      // 只检测反斜杠命令残留。不要检测 '$' —— \text{cost $5} 里的美元符号是正文内容,
+      // 不是 LaTeX 残留; 把它算进去会误杀合法文档。
+      let residueRe: RegExp = /\\[A-Za-z]+/g;
       let r: RegExpExecArray | null = residueRe.exec(text);
       while (r !== null) {
         this.latexResidue++;

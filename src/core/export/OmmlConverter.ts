@@ -365,6 +365,7 @@ class LatexParser {
     // 不能把 marker.start 之后的内容整段替换掉 —— 那是静默丢内容。
     for (let i: number = stack.length - 1; i >= 0; i--) {
       let marker: DelimMarker = stack[i];
+      LatexAudit.issue('\\left 缺少配对的 \\right(已保留内容, 但定界符不会自动缩放)');
       if (marker.beg !== '') {
         parts.splice(marker.start, 0, LatexParser.run(marker.beg));
       }
@@ -623,6 +624,7 @@ class LatexParser {
       }
       // right: 弹栈 wrap
       if (stack.length === 0) {
+        LatexAudit.issue('\\right 缺少配对的 \\left');
         if (visible !== '') {
           parts.push(LatexParser.run(visible));
         }
