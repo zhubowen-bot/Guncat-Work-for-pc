@@ -10,70 +10,7 @@
 
 ## 7.1.0（2026-11-01）
 
-> **版本定位**：Word 工具链的正确性修复版。重点不是加功能，而是把「工具说成功、文件却是坏的」
-> 这条最坏路径堵死：公式解析失败会拒绝写盘，成功时把结构自检证据放进返回值，并新增
-> `docx_render` 让模型自己看渲染结果。
-
-### 一、致命：命令后的上下标不再被吞
-
-- **根因**：行内 LaTeX 解析器把 `\mu`、`\alpha`、`\bar{...}` 等命令直接写入结果后，
-  后续的 `^` / `_` 找不到「前一个原子」，只能退化成空 `m:t` + 普通文本。于是
-  `\mu_0`、`\alpha_2`、`\bar{I}^2` 的上下标全部丢失，Word 里留下空节点。
-- **修复**：命令、字符、`{...}` 组、`\left...\right` 定界符统一走同一条「原子 + 上下标」
-  绑定路径；`\left(...\right)^2` 这类整体上标也正确绑定。`\sum_{i=1}^n` 没有上下限时
-  改用合法的 `<m:sub/>` / `<m:sup/>`，不再制造空 `m:t`。
-- **同类问题一并修**：`\left\langle` / `\right\rangle` 等命名定界符不再被截成 `l`/`r`；
-  `array` / `alignedat` 的列格式参数不再混进公式；未知环境、`\tag{}`、`\hline`、
-  `\not=`、`\mathbb{R}`、`\overset`、`\underbrace` 等常见写法有了明确处理。
-
-### 二、致命：失败不再报「已生成」
-
-- **生成后自检**：`write_docx` / `edit_docx` 在写盘前扫描 `document.xml`，统计
-  公式段、行内公式、空 `m:t`、LaTeX 残留、未识别命令，以及 `m:oMathPara` / `m:oMath`
-  的父元素合规数。任何一项不合格都**拒绝写盘**，返回具体原因（含示例命令），不会留下坏文件。
-- **返回值给证据而不是结论**：成功时附带一行可核对的自检结果，例如
-  `2 公式段 / 4 行内公式 / 空 m:t 节点 0 / LaTeX 残留 0 / 未识别命令 0`、
-  `oMathPara 父元素合规 2/2, oMath 父元素合规 6/6`。
-- **未知命令不再静默改名**：以前 `\foo` 会被输出成 `foo`；现在保留原文并记录，
-  由自检拒绝写盘，错误信息直接列出 `\foo`。
-- **定界符配对也纳入自检**：未闭合的 `\left` 或多余的 `\right` 会拒绝写盘（内容仍保留在
-  错误上下文里）；`\text{cost $5}` 这类正文美元符号不会被误判为 LaTeX 残留。
-
-### 三、中：结构与字体
-
-- **`\bar` / `\overline` 只加一层**：改用语义正确的 `m:bar`（top），不再走 `m:acc`，
-  一层上划线不会变成两层；`\underline` 用 `m:bar`（bottom），`\overbrace` / `\underbrace`
-  改用合法的 `m:groupChr`。
-- **公式父元素合规**：`m:oMath` 与 `m:oMathPara` 直接挂在 `w:p` 下，不再包在 `w:r` 里；
-  超链接内不支持公式时退化为纯文本，保证 ECMA-376 结构始终合法。
-- **字形兜底**：普通文本按字符范围拆 run —— CJK 用宋体、Unicode 下标/数学符号用
-  Cambria Math。`Uₐ` 这类下标字母不会再因为 Calibri 缺字形而打印成 `U`；数学公式里的
-  CJK（如 `\text{中文}`）也会显式指定中文字体。
-
-### 四、中：新增 `docx_render`，工具自己出图
-
-- `docx_render(path, page?, page_count?, width?)`：把 .docx 经 **LibreOffice（优先）**
-  或 **Microsoft Word COM** 转 PDF，再用 PDF.js + `@napi-rs/canvas` 逐页渲染成
-  `docx_render/<文件名>/pNNN.png`，返回图片相对路径数组，模型可直接 `view_image` 自查。
-- 本机未安装 LibreOffice/Word 时返回明确错误；结构自检不依赖渲染，仍然可用。
-- Word COM 路径只关闭自己创建的实例，不误伤用户已打开的 Word；宏在自动化时禁用。
-
-### 五、同类修复：插件热加载后核心工具定义不再丢失
-
-- 插件热加载会先把 `ToolRegistry.synced` 置 true，导致之后核心工具定义不再补同步，
-  schema 校验、只读/变更标记与工具清单都可能缺失。现在核心工具用独立标记 + 幂等
-  `sync` 补同步，插件与核心工具可以共存。
-
-### 六、验证
-
-- `npm run typecheck:node` / `typecheck:web` 通过；`npm run smoke`（构建 + guard-corpus + run-smoke + render-check + ipc-check + startup-check + emoji）全过。
-- `run-smoke` 156 项全过，新增公式回归：`\mu_0` / `\alpha_2` / `\bar{I}^2` 上下标绑定、
-  `\bar` 只有一层、正常公式无空 `m:t`、未知命令被自检拒绝、`docx_render` 已注册。
-- 用本机 Microsoft Word 实测 `docx_render`：含封面/目录/行内公式/显示公式/矩阵/中文的
-  文档成功转 PDF 并渲染出 3 页 PNG。
-- 版本号进 **7.1.0**；安装包产物见 `release/Guncat-Work-7.1.0-setup.exe`。
-
-### 七、修复：跨轮次深度思考记忆丢失（三种协议全部回传）
+### Agent 内核：跨轮次思考记忆
 
 - **根因**：历史轮次的 `reasoning` 一直存在会话里，但重建请求时被整段丢掉 ——
   工作 / 交互模式的 `historyMessages()` 只搬正文；Chat Completions 请求体里普通 assistant
@@ -85,21 +22,63 @@
     同级的 `reasoning_content`；带 `tool_calls` 的消息同样回传。无论请求是否携带 `tools`
     都带上 —— 不带 `tools` 时服务端会自动忽略该字段，不改变既有行为。
   - **Anthropic Messages**：`thinking` 块随历史一起回传（置于消息首位）。`signature` /
-    `redacted_thinking` 现在随消息持久化，跨轮次与重启后都原样带回；DeepSeek / Opencode 等
-    兼容端点接受无签名 thinking 块（历史遗留消息照常回传），官方 `api.anthropic.com` 仅对
-    「历史 + 无签名」跳过，避免 `Invalid signature` 400。历史被修剪 / 摘要压缩 / 整条裁剪后，
-    旧签名绑定的前缀已失效，会主动清掉签名再发（避免 400），后续轮次重新拿新签名。
+    `redacted_thinking` 随消息持久化，跨轮次与重启后原样带回；DeepSeek / Opencode 等
+    兼容端点接受无签名 thinking 块，官方 `api.anthropic.com` 仅对「历史 + 无签名」跳过，
+    避免 `Invalid signature` 400。历史被修剪 / 摘要压缩 / 整条裁剪后，旧签名绑定的前缀
+    已失效，会先清掉签名再发（避免 400），后续轮次重新拿新签名。
   - **OpenAI / DeepSeek Responses**：保存 `response.output_item.done` 里的 reasoning
-    output item（JSON），下一轮原样作为 `reasoning` input item 回传；DeepSeek 等兼容端点额外
-    支持明文 `content` 兜底（历史遗留消息），官方 OpenAI 只回传带 `id`/`encrypted_content`
-    的原始 item。请求同时声明 `include: ["reasoning.encrypted_content"]`（DeepSeek 文档说明
-    不支持该参数时静默忽略），无状态模式下也能拿到可回传的思考。
+    output item，下一轮原样作为 `reasoning` input item 回传；DeepSeek 等兼容端点额外支持
+    明文 `content` 兜底，官方 OpenAI 只回传带 `id` / `encrypted_content` 的原始 item。
+    请求同时声明 `include: ["reasoning.encrypted_content"]`（DeepSeek 文档说明不支持该参数
+    时静默忽略），无状态模式下也能拿到可回传的思考。
 - **顺带**：只有思考、没有正文的 assistant 历史消息不再被整条跳过；上下文预算把回传的
   思考一并计入字符量，长任务不会因为多带思考而悄悄超出预算。
-- **验证**：`ipc-check` 新增 10 条回归（三种协议 × 工作 / 聊天模式：第二轮请求必须带回上一轮
-  思考，含 Anthropic 签名与 Responses reasoning item 的持久化往返），`ipc-check` 529 项、
-  `run-smoke` 156 项全过，`typecheck:node` 与 `node --check scripts/ipc-check.mjs` 通过；
-  安装包同为 `release/Guncat-Work-7.1.0-setup.exe`。
+
+### Word 工具链：公式、自检与渲染
+
+- **命令后的上下标不再被吞**：行内 LaTeX 解析器此前把 `\mu`、`\alpha`、`\bar{...}` 等命令
+  直接写入结果，后续的 `^` / `_` 找不到「前一个原子」，只能退化成空 `m:t` + 普通文本。
+  现在命令、字符、`{...}` 组、`\left...\right` 定界符统一走同一条「原子 + 上下标」绑定路径，
+  `\left(...\right)^2` 这类整体上标也能正确绑定；`\sum_{i=1}^n` 没有上下限时改用合法的
+  `<m:sub/>` / `<m:sup/>`，不再制造空 `m:t`。
+- **同类解析问题**：`\left\langle` / `\right\rangle` 等命名定界符不再被截成 `l`/`r`；
+  `array` / `alignedat` 的列格式参数不再混进公式；未知环境、`\tag{}`、`\hline`、`\not=`、
+  `\mathbb{R}`、`\overset`、`\underbrace` 等常见写法有了明确处理。
+- **写盘前自检**：`write_docx` / `edit_docx` 在写盘前扫描 `document.xml`，统计公式段、
+  行内公式、空 `m:t`、LaTeX 残留、未识别命令，以及 `m:oMathPara` / `m:oMath` 的父元素
+  合规数。任何一项不合格都**拒绝写盘**并返回具体原因（含示例命令），不留下坏文件；
+  未闭合的 `\left` / 多余的 `\right` 也会被拦下，而 `\text{cost $5}` 里的美元符号不会被
+  误判成 LaTeX 残留。
+- **返回值给证据**：成功时附带可核对的自检结果，例如
+  `2 公式段 / 4 行内公式 / 空 m:t 节点 0 / LaTeX 残留 0 / 未识别命令 0`、
+  `oMathPara 父元素合规 2/2, oMath 父元素合规 6/6`；未知命令（如 `\foo`）不再静默改名，
+  而是保留原文并列出，由自检拒绝写盘。
+- **结构与字体**：`\bar` / `\overline` 改用一层 `m:bar`，`\underline` 用 `m:bar`（bottom），
+  `\overbrace` / `\underbrace` 用合法的 `m:groupChr`；`m:oMath` / `m:oMathPara` 直接挂在
+  `w:p` 下，超链接内不支持公式时退化为纯文本；普通文本按字符范围拆 run —— CJK 用宋体、
+  Unicode 下标/数学符号用 Cambria Math，`Uₐ` 不再因 Calibri 缺字形变成 `U`。
+- **新增 `docx_render`**：`docx_render(path, page?, page_count?, width?)` 把 .docx 经
+  LibreOffice（优先）或 Microsoft Word COM 转 PDF，再用 PDF.js + `@napi-rs/canvas`
+  逐页渲染成 `docx_render/<文件名>/pNNN.png`，返回图片相对路径数组供 `view_image` 自查；
+  未安装 LibreOffice/Word 时返回明确错误，结构自检不依赖渲染。Word COM 路径只关闭自己
+  创建的实例，宏在自动化时禁用。
+
+### 工具注册：插件热加载后核心工具定义不再丢失
+
+- 插件热加载会先把 `ToolRegistry.synced` 置 true，导致之后核心工具定义不再补同步，
+  schema 校验、只读/变更标记与工具清单都可能缺失。现在核心工具用独立标记 + 幂等
+  `sync` 补同步，插件与核心工具可以共存。
+
+### 验证
+
+- `npm run typecheck:node` / `typecheck:web`、`node --check scripts/ipc-check.mjs` 通过。
+- `run-smoke` 156 项通过：新增公式回归（`\mu_0` / `\alpha_2` / `\bar{I}^2` 上下标绑定、
+  `\bar` 只有一层、正常公式无空 `m:t`、未知命令被自检拒绝）与 `docx_render` 注册检查。
+- `ipc-check` 529 项通过：新增三种协议 × 工作 / 聊天模式的跨轮次思考回归，含 Anthropic
+  签名与 Responses reasoning item 的持久化往返。
+- 用本机 Microsoft Word 实测 `docx_render`：含封面/目录/行内公式/显示公式/矩阵/中文的
+  文档成功转 PDF 并渲染出 3 页 PNG。
+- 版本号 **7.1.0**；安装包：`release/Guncat-Work-7.1.0-setup.exe`。
 
 ---
 
