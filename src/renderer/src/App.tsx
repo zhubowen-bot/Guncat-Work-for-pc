@@ -95,6 +95,7 @@ export default function App() {
   const artifacts = useStore((s) => s.artifacts)
   const openTableOcr = useStore((s) => s.openTableOcr)
   const settings = useStore((s) => s.settings)
+  const settingsOpen = useStore((s) => s.settingsOpen)
   const reloadSettings = useStore((s) => s.reloadSettings)
   const profiles = settings?.apiProfiles ?? []
   const pushNotice = useStore((s) => s.pushNotice)
@@ -511,7 +512,7 @@ export default function App() {
           （弹层不能挤进 300 多像素宽的面板里，正文根本读不了） */}
       <WorkspacePreviewOverlay />
 
-      <SettingsPage />
+      {settingsOpen ? <SettingsPage /> : null}
       <TableOcrDialog />
       <ImageLightbox />
       <SpeechBar />

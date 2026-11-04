@@ -3453,15 +3453,12 @@ select {
   gap: 12px;
 }
 
-.settings-page__mark {
-  width: 36px;
-  height: 36px;
+.settings-page__icon {
   flex: none;
-  display: grid;
-  place-items: center;
-  border-radius: 11px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
 }
 
 .settings-page__brandcopy {
@@ -3809,11 +3806,20 @@ select {
   border-top: 1px solid var(--divider);
 }
 
-.settings-page__foot-hint {
+.settings-page__status {
   flex: 1;
   min-width: 0;
   font-size: 11.5px;
   color: var(--text-faint);
+  transition: color 0.15s;
+}
+
+.settings-page__status[data-state='saving'] {
+  color: var(--text-muted);
+}
+
+.settings-page__status[data-state='error'] {
+  color: var(--danger);
 }
 
 /* ===== 提问卡片（ask_user_question） =====

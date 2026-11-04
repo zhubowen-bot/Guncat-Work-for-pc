@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
   ApiConfigDto,
+  AppSettingsDto,
   CredentialStateDto,
   MultimodalConfigDto,
   SearchEngineDto
@@ -281,6 +282,66 @@ export function normalizeSearch(search: SearchDraft): SearchDraft {
   }
 }
 
+/**
+ * 本地草稿的签名：任一字段变化（含对象里的 provider / temperature 等）都会产生新值。
+ * 自动保存用它判断「这次渲染是用户改的还是刚回填的」，避免回填后又立刻写一遍。
+ */
+interface SettingsDraftValues {
+  profileName: string
+  draft: ApiConfigDto
+  modelText: string
+  mmBaseUrl: string
+  mmApiKey: string
+  mmModel: string
+  mmPreparse: boolean
+  asrBaseUrl: string
+  asrApiKey: string
+  asrModel: string
+  search: SearchDraft
+}
+
+function settingsDraftSignature(values: SettingsDraftValues): string {
+  return JSON.stringify([
+    values.profileName,
+    values.draft,
+    values.modelText,
+    values.mmBaseUrl,
+    values.mmApiKey,
+    values.mmModel,
+    values.mmPreparse,
+    values.asrBaseUrl,
+    values.asrApiKey,
+    values.asrModel,
+    values.search
+  ])
+}
+
+/** 输入停顿多久后自动保存。太短会在连续输入时写很多次，太长会让「改了就保存」显得迟钝。 */
+const AUTO_SAVE_DELAY = 450
+
+/** 从全局设置里读出整页草稿。首次挂载与切方案后回填共用同一套口径。 */
+function readSettingsDraft(settings: AppSettingsDto | null): SettingsDraftValues {
+  const api = settings?.apiConfig ?? EMPTY
+  const list =
+    (api.models ?? []).length > 0 ? (api.models ?? []) : api.model !== '' ? [api.model] : []
+  const current = (settings?.apiProfiles ?? []).find(
+    (p) => p.id === settings?.currentApiProfileId
+  )
+  return {
+    profileName: current?.name ?? '',
+    draft: api,
+    modelText: list.join('\n'),
+    mmBaseUrl: settings?.multimodalConfig.baseUrl ?? '',
+    mmApiKey: settings?.multimodalConfig.apiKey ?? '',
+    mmModel: settings?.multimodalConfig.model ?? '',
+    mmPreparse: settings?.multimodalConfig.preparseEnabled ?? false,
+    asrBaseUrl: settings?.prefs?.asr_baseUrl ?? '',
+    asrApiKey: settings?.prefs?.asr_apiKey ?? '',
+    asrModel: settings?.prefs?.asr_model ?? '',
+    search: parseSearchDraft(settings?.prefs?.[LOCAL_SEARCH_PREF_KEY])
+  }
+}
+
 /** 设置页的导航分类。每个分类对应右侧一块独立内容，不再用折叠栏把内容堆在一页。 */
 type SettingsTabId = 'model' | 'advanced' | 'search' | 'multimodal' | 'auto-read' | 'voice-input'
 
@@ -450,50 +511,45 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
   const autoRead = useSpeech((s) => s.autoRead)
   const setAutoRead = useSpeech((s) => s.setAutoRead)
 
+  const [initialForm] = useState(() => readSettingsDraft(useStore.getState().settings))
   const [activeTab, setActiveTab] = useState<SettingsTabId>('model')
-  const [draft, setDraft] = useState<ApiConfigDto>(EMPTY)
+  const [draft, setDraft] = useState<ApiConfigDto>(initialForm.draft)
   /** 模型名称输入框：每行一个（也接受逗号分隔），保存时拆成 models 列表 */
-  const [modelText, setModelText] = useState('')
-  const [mmBaseUrl, setMmBaseUrl] = useState('')
-  const [mmApiKey, setMmApiKey] = useState('')
-  const [mmModel, setMmModel] = useState('')
-  const [mmPreparse, setMmPreparse] = useState(true)
-  const [asrBaseUrl, setAsrBaseUrl] = useState('')
-  const [asrApiKey, setAsrApiKey] = useState('')
-  const [asrModel, setAsrModel] = useState('')
-  const [search, setSearch] = useState<SearchDraft>(EMPTY_SEARCH)
+  const [modelText, setModelText] = useState(initialForm.modelText)
+  const [mmBaseUrl, setMmBaseUrl] = useState(initialForm.mmBaseUrl)
+  const [mmApiKey, setMmApiKey] = useState(initialForm.mmApiKey)
+  const [mmModel, setMmModel] = useState(initialForm.mmModel)
+  const [mmPreparse, setMmPreparse] = useState(initialForm.mmPreparse)
+  const [asrBaseUrl, setAsrBaseUrl] = useState(initialForm.asrBaseUrl)
+  const [asrApiKey, setAsrApiKey] = useState(initialForm.asrApiKey)
+  const [asrModel, setAsrModel] = useState(initialForm.asrModel)
+  const [search, setSearch] = useState<SearchDraft>(initialForm.search)
   const [engines, setEngines] = useState<SearchEngineDto[]>([])
-  const [profileName, setProfileName] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [profileName, setProfileName] = useState(initialForm.profileName)
+  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
+  const [saveError, setSaveError] = useState('')
 
-  useEffect(() => {
-    if (!open) {
-      return
-    }
-    setDraft(settings?.apiConfig ?? EMPTY)
-    {
-      const cfg = settings?.apiConfig
-      const list =
-        cfg !== null && cfg !== undefined && (cfg.models ?? []).length > 0
-          ? (cfg.models ?? [])
-          : cfg !== null && cfg !== undefined && cfg.model !== ''
-            ? [cfg.model]
-            : []
-      setModelText(list.join('\n'))
-    }
-    setMmBaseUrl(settings?.multimodalConfig.baseUrl ?? '')
-    setMmApiKey(settings?.multimodalConfig.apiKey ?? '')
-    setMmModel(settings?.multimodalConfig.model ?? '')
-    setMmPreparse(settings?.multimodalConfig.preparseEnabled ?? false)
-    setAsrBaseUrl(settings?.prefs?.asr_baseUrl ?? '')
-    setAsrApiKey(settings?.prefs?.asr_apiKey ?? '')
-    setAsrModel(settings?.prefs?.asr_model ?? '')
-    setSearch(parseSearchDraft(settings?.prefs?.[LOCAL_SEARCH_PREF_KEY]))
-    const current = (settings?.apiProfiles ?? []).find(
-      (p) => p.id === settings?.currentApiProfileId
-    )
-    setProfileName(current?.name ?? '')
-  }, [open, settings])
+  const autoSaveTimerRef = useRef<number | null>(null)
+  const lastSyncedSignatureRef = useRef(settingsDraftSignature(initialForm))
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve())
+  const saveGenerationRef = useRef(0)
+  const closingRef = useRef(false)
+  const closePageRef = useRef<() => void>(() => {})
+
+  const form: SettingsDraftValues = {
+    profileName,
+    draft,
+    modelText,
+    mmBaseUrl,
+    mmApiKey,
+    mmModel,
+    mmPreparse,
+    asrBaseUrl,
+    asrApiKey,
+    asrModel,
+    search
+  }
+  const signature = settingsDraftSignature(form)
 
   // 每次打开都回到「模型配置」：设置页像独立页面一样，从最常用的一块进入。
   useEffect(() => {
@@ -514,6 +570,37 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
       .catch(() => setEngines([]))
   }, [open])
 
+  // 自动保存：任何字段变化后先等一小段输入停顿，再落盘。
+  // 这里刻意不 reloadSettings —— 设置页是整页覆盖，顶栏此刻不可见；
+  // 若每次按键都刷新全局设置，会让输入框反复重渲染，正是「顿挫」的来源。
+  // 关闭设置页时再统一刷新一次，顶栏的模型胶囊就能拿到最新配置。
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    if (signature === lastSyncedSignatureRef.current) {
+      // 改了又改回原值：已排队的定时器会被 cleanup 清掉，状态也要回到「已保存」
+      if (saveState === 'saving') {
+        setSaveState('saved')
+      }
+      return
+    }
+    setSaveState('saving')
+    setSaveError('')
+    const timer = window.setTimeout(() => {
+      autoSaveTimerRef.current = null
+      lastSyncedSignatureRef.current = signature
+      void enqueuePersist(form)
+    }, AUTO_SAVE_DELAY)
+    autoSaveTimerRef.current = timer
+    return () => {
+      window.clearTimeout(timer)
+      if (autoSaveTimerRef.current === timer) {
+        autoSaveTimerRef.current = null
+      }
+    }
+  }, [open, signature])
+
   // Esc 关闭设置页，和常见桌面应用的设置页一致。
   useEffect(() => {
     if (!open) {
@@ -521,27 +608,141 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
     }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
-        openSettings(false)
+        closePageRef.current()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, openSettings])
+  }, [open])
 
   if (!open) {
     return null
   }
 
   const profiles = settings?.apiProfiles ?? []
+  const parsedModels = parseModelNames(modelText)
+  /** 当前生效模型：列表里还留着就用它，删掉了就退回第一个（和落盘口径一致） */
+  const effectiveModel = parsedModels.includes(draft.model.trim())
+    ? draft.model.trim()
+    : (parsedModels[0] ?? '')
 
-  /** 切换配置方案：主进程会把该方案写回运行时生效的配置，这里只要重新读一次设置 */
+  /** 用最新设置回填整页草稿。切方案 / 新建 / 删除后调用，避免旧方案的内容串到新方案。 */
+  function hydrateFrom(next: AppSettingsDto | null): void {
+    const nextForm = readSettingsDraft(next)
+    setDraft(nextForm.draft)
+    setModelText(nextForm.modelText)
+    setProfileName(nextForm.profileName)
+    setMmBaseUrl(nextForm.mmBaseUrl)
+    setMmApiKey(nextForm.mmApiKey)
+    setMmModel(nextForm.mmModel)
+    setMmPreparse(nextForm.mmPreparse)
+    setAsrBaseUrl(nextForm.asrBaseUrl)
+    setAsrApiKey(nextForm.asrApiKey)
+    setAsrModel(nextForm.asrModel)
+    setSearch(nextForm.search)
+    setSaveState('saved')
+    setSaveError('')
+    lastSyncedSignatureRef.current = settingsDraftSignature(nextForm)
+  }
+
+  /** 把当前草稿排进保存队列。队列保证两次保存不会同时写盘。 */
+  function enqueuePersist(values: SettingsDraftValues): Promise<void> {
+    const generation = ++saveGenerationRef.current
+    const task = async (): Promise<void> => {
+      setSaveState('saving')
+      try {
+        const models = parseModelNames(values.modelText)
+        const activeModel = models.includes(values.draft.model.trim())
+          ? values.draft.model.trim()
+          : (models[0] ?? '')
+        // 一次性保存当前配置方案（名称 + API 配置 + 多模态配置）。
+        // 走这条而不是分开调 saveApiConfig / saveMultimodalConfig：
+        // 方案才是这几项配置的归属，分开调会让「名称改了但没落到方案上」这类半更新出现。
+        await window.guncat.settings.saveCurrentApiProfile(
+          values.profileName.trim(),
+          normalizeApiConfig({ ...values.draft, model: activeModel, models }),
+          normalizeMultimodal({
+            baseUrl: values.mmBaseUrl,
+            apiKey: values.mmApiKey,
+            model: values.mmModel,
+            preparseEnabled: values.mmPreparse
+          })
+        )
+        await window.guncat.settings.saveString('asr_baseUrl', values.asrBaseUrl.trim())
+        await window.guncat.settings.saveString('asr_apiKey', values.asrApiKey.trim())
+        await window.guncat.settings.saveString('asr_model', values.asrModel.trim())
+        await window.guncat.settings.saveString(
+          LOCAL_SEARCH_PREF_KEY,
+          JSON.stringify(normalizeSearch(values.search))
+        )
+        if (generation === saveGenerationRef.current) {
+          setSaveState('saved')
+          setSaveError('')
+        }
+      } catch (e) {
+        if (generation === saveGenerationRef.current) {
+          setSaveState('error')
+          setSaveError(String(e))
+        }
+      }
+    }
+    const next = saveChainRef.current.then(task, task)
+    saveChainRef.current = next
+    return next
+  }
+
+  function cancelScheduledSave(): void {
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
+  }
+
+  /** 立即落盘当前草稿（关闭页面、切换方案前调用）。 */
+  function flushPending(): Promise<void> {
+    cancelScheduledSave()
+    if (signature === lastSyncedSignatureRef.current && saveState !== 'error') {
+      return saveChainRef.current
+    }
+    lastSyncedSignatureRef.current = signature
+    return enqueuePersist(form)
+  }
+
+  /** 关闭设置页：先保存并刷新全局设置，再收起页面。 */
+  async function closePage(): Promise<void> {
+    if (closingRef.current) {
+      return
+    }
+    closingRef.current = true
+    try {
+      await flushPending()
+    } catch {
+      // 具体错误已由状态栏展示；关闭动作不能被一次写盘失败卡住
+    }
+    try {
+      await reloadSettings()
+    } catch {
+      // 刷新失败不影响关闭，下次打开设置页会重新读取
+    }
+    openSettings(false)
+    closingRef.current = false
+  }
+
+  closePageRef.current = () => {
+    void closePage()
+  }
+
+  /** 切换配置方案：先把当前方案存好，再让主进程把目标方案写回运行时配置 */
   async function switchProfile(profileId: string): Promise<void> {
     if (profileId === settings?.currentApiProfileId) {
       return
     }
     try {
+      await flushPending()
       await window.guncat.settings.selectApiProfile(profileId)
-      await reloadSettings()
+      const next = await window.guncat.settings.load()
+      useStore.setState({ settings: next })
+      hydrateFrom(next)
     } catch (e) {
       pushNotice('error', `切换配置方案失败：${String(e)}`)
     }
@@ -549,9 +750,12 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
 
   async function addProfile(): Promise<void> {
     try {
+      await flushPending()
       await window.guncat.settings.addApiProfile()
-      await reloadSettings()
-      pushNotice('info', '已新建配置方案（内容复制自当前方案，改名后保存即可）')
+      const next = await window.guncat.settings.load()
+      useStore.setState({ settings: next })
+      hydrateFrom(next)
+      pushNotice('info', '已新建配置方案（内容复制自当前方案，改名会自动保存）')
     } catch (e) {
       pushNotice('error', `新建配置方案失败：${String(e)}`)
     }
@@ -567,8 +771,13 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
       return
     }
     try {
+      // 正在保存的请求必须先落定，避免旧方案的内容在删除后写进新方案
+      cancelScheduledSave()
+      await saveChainRef.current
       await window.guncat.settings.deleteApiProfile(currentId)
-      await reloadSettings()
+      const next = await window.guncat.settings.load()
+      useStore.setState({ settings: next })
+      hydrateFrom(next)
       pushNotice('info', '已删除当前配置方案')
     } catch (e) {
       pushNotice('error', `删除配置方案失败：${String(e)}`)
@@ -614,45 +823,6 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
     }
   }
 
-  async function save(): Promise<void> {
-    setSaving(true)
-    try {
-      // 模型名可以填多个（每行一个或逗号分隔）。当前生效的模型沿用顶栏选中的那个；
-      // 如果它被从列表里删掉了，就退回列表里的第一个。
-      const models = parseModelNames(modelText)
-      const activeModel = models.includes(draft.model.trim())
-        ? draft.model.trim()
-        : (models[0] ?? '')
-      // 一次性保存当前配置方案（名称 + API 配置 + 多模态配置）。
-      // 走这条而不是分开调 saveApiConfig / saveMultimodalConfig：
-      // 方案才是这几项配置的归属，分开调会让「名称改了但没落到方案上」这类半更新出现。
-      await window.guncat.settings.saveCurrentApiProfile(
-        profileName.trim(),
-        normalizeApiConfig({ ...draft, model: activeModel, models }),
-        normalizeMultimodal({
-          baseUrl: mmBaseUrl,
-          apiKey: mmApiKey,
-          model: mmModel,
-          preparseEnabled: mmPreparse
-        })
-      )
-      await window.guncat.settings.saveString('asr_baseUrl', asrBaseUrl.trim())
-      await window.guncat.settings.saveString('asr_apiKey', asrApiKey.trim())
-      await window.guncat.settings.saveString('asr_model', asrModel.trim())
-      await window.guncat.settings.saveString(
-        LOCAL_SEARCH_PREF_KEY,
-        JSON.stringify(normalizeSearch(search))
-      )
-      await reloadSettings()
-      pushNotice('info', '设置已保存')
-      openSettings(false)
-    } catch (e) {
-      pushNotice('error', `保存失败：${String(e)}`)
-    } finally {
-      setSaving(false)
-    }
-  }
-
   const provider = providerCopy(draft.provider)
   const keyField = searchKeyField(search.engine)
   const baseUrlField = searchBaseUrlField(search.engine)
@@ -662,15 +832,15 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
     <div className="settings-page" role="dialog" aria-modal="true" aria-label="设置">
       <header className="settings-page__head">
         <div className="settings-page__brand">
-          <span className="settings-page__mark">
-            <IconSettings size={17} />
+          <span className="settings-page__icon" aria-hidden="true">
+            <IconSettings size={20} />
           </span>
           <div className="settings-page__brandcopy">
             <h1>设置</h1>
             <p>模型接入、联网搜索与语音偏好</p>
           </div>
         </div>
-        <button className="icon-btn" title="关闭设置" onClick={() => openSettings(false)}>
+        <button className="icon-btn" title="关闭设置" onClick={() => void closePage()}>
           <IconClose size={16} />
         </button>
       </header>
@@ -721,7 +891,9 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
                         >
                           {profiles.map((p) => (
                             <option key={p.id} value={p.id}>
-                              {p.name}
+                              {p.id === settings?.currentApiProfileId && profileName.trim() !== ''
+                                ? profileName
+                                : p.name}
                             </option>
                           ))}
                         </select>
@@ -811,8 +983,8 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
                     <SettingsField
                       label="模型（可填多个，每行一个或逗号分隔）"
                       hint={
-                        draft.model !== ''
-                          ? `当前使用：${draft.model}（在顶栏的模型胶囊里切换具体模型）`
+                        effectiveModel !== ''
+                          ? `当前使用：${effectiveModel}（在顶栏的模型胶囊里切换具体模型）`
                           : '填写后，当前模型会在顶栏的模型胶囊里显示并切换'
                       }
                     >
@@ -1079,14 +1251,26 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
       </div>
 
       <footer className="settings-page__foot">
-        <span className="settings-page__foot-hint">
-          模型、搜索与语音接口设置会在保存后写入当前配置方案
+        <span
+          className="settings-page__status"
+          data-state={saveState}
+          role="status"
+          aria-live="polite"
+          title={saveError !== '' ? saveError : undefined}
+        >
+          {saveState === 'saving'
+            ? '正在保存…'
+            : saveState === 'error'
+              ? '保存失败'
+              : '所有更改已自动保存'}
         </span>
-        <button className="btn" onClick={() => openSettings(false)}>
-          取消
-        </button>
-        <button className="btn btn--primary" onClick={() => void save()} disabled={saving}>
-          {saving ? '保存中…' : '保存'}
+        {saveState === 'error' ? (
+          <button className="btn btn--ghost btn--sm" onClick={() => void flushPending()}>
+            重试
+          </button>
+        ) : null}
+        <button className="btn" onClick={() => void closePage()}>
+          关闭
         </button>
       </footer>
     </div>

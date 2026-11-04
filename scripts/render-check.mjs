@@ -1293,10 +1293,12 @@ console.log('\n30. 设置页')
 const settingsHtml = mod.renderSettings()
 const settingsText = decode(settingsHtml)
 check(
-  '设置页整体可渲染（分类导航 + 内容区 + 底部保存）',
+  '设置页整体可渲染（分类导航 + 内容区 + 底部自动保存状态）',
   settingsHtml.includes('settings-page') &&
     settingsHtml.includes('settings-nav') &&
     settingsHtml.includes('settings-page__foot') &&
+    settingsHtml.includes('settings-page__status') &&
+    settingsText.includes('所有更改已自动保存') &&
     settingsText.includes('设置')
 )
 check(
@@ -1325,6 +1327,14 @@ check(
     settingsHtml.includes('data-active="true"') &&
     !settingsHtml.includes('settings-section') &&
     !settingsHtml.includes('aria-expanded')
+)
+check(
+  '保存按钮与取消按钮已移除（改为自动保存）',
+  !settingsHtml.includes('btn--primary') && !settingsHtml.includes('>取消<')
+)
+check(
+  '标题图标只是一个图标，没有纯色底块',
+  settingsHtml.includes('settings-page__icon') && !settingsHtml.includes('settings-page__mark')
 )
 check(
   'Base URL 占位符按当前接入方式给出',
