@@ -960,6 +960,54 @@ export function renderTextMarkdown(): string {
 }
 
 /**
+ * 卡片内各文本组件的 Markdown（用户报障：只有 TextContent 渲染粗体，
+ * 其它卡片组件仍把 `**` 原样显示）。一次覆盖标题、提示、指标、标签、表格、
+ * 卡片块、列表、步骤、表单等所有会显示模型文字的位置。
+ */
+export function renderCardMarkdown(): string {
+  const program = [
+    'root = Card([',
+    '  CardHeader("**季度**复盘", "来源 **sales.csv**"),',
+    '  Callout("info", "**结论**", "营收 **1,284 万**，同比 `+18.6%`。"),',
+    '  InlineHeader("**小节**", "说明 **重点**"),',
+    '  Text("text", "**数值** `42`", "**下标**"),',
+    '  BoldText("text", "**加粗**", "**副注**"),',
+    '  IconText(Icon("chart"), "**营收**", "[**万元**](https://example.com/unit)"),',
+    '  ImageText("https://example.com/a.png", "**图片**", "**说明**"),',
+    '  MetricIndicatorInline("**1,284**", "**同比**", {direction: "up", value: 18.6}),',
+    '  MetricIndicatorWithStrikethrough("**1,284**", "**同比**", "**1,100**"),',
+    '  Tag("**标签**"),',
+    '  TagBlock(["**甲**", "**乙**"]),',
+    '  Table([Col("**季度**", ["**Q1**"], "string")]),',
+    '  EntityList([{left: "**合计**", right: "**1,280**"}]),',
+    '  Steps([StepsItem("**立项**", "**已完成**")]),',
+    '  ListBlock([ListItem("**标题**", "**副标题**")]),',
+    '  ContextCardBlock([ContextCardItem("**标题**", "**正文**")]),',
+    '  CompositeCardBlock([CompositeCardItem(Text("text", "**头部**"), [Text("text", "**主体**")], {text: "**底部**"})]),',
+    '  OptionCards("pick", "single", [OptionCard("a", "**方案**", "**说明**")]),',
+    '  RadioGroup("r", [RadioItem("**单选**", "**描述**", "a")]),',
+    '  CheckBoxGroup("c", [CheckBoxItem("**多选**", "**描述**", "a")]),',
+    '  SwitchGroup("s", [SwitchItem("**开关**", "a", "**描述**")]),',
+    '  Chips("chips", "single", [ChipItem("a", "**标签**")]),',
+    '  Select("pick", [SelectItem("a", "**选项**")], "**请选择**"),',
+    '  Form("f", Buttons([Button("**提交**")]), [FormControl("**字段**", Input("x"), "**提示**")]),',
+    '  Buttons([Button("**按钮**")]),',
+    '  Tabs([TabItem("t", "**选项卡**", [TextContent("内容")])]),',
+    '  Accordion([AccordionItem("a", "**折叠**", [TextContent("内容")])]),',
+    '  SectionBlock([SectionItem("s", "**分节**", [TextContent("内容")])]),',
+    '  FollowUpBlock([FollowUpItem("**追问**")])',
+    '])'
+  ].join('\n')
+  return renderToStaticMarkup(
+    createElement(GuncatUiBlock, {
+      content: program,
+      interactive: true,
+      onSend: () => {}
+    })
+  )
+}
+
+/**
  * 复现 MessageView 的组合方式：纯文本片段走 Markdown，界面片段走 GuncatUiBlock。
  * 界面块本身只负责界面，正文里的说明文字由外层渲染 —— 这条组合关系值得单独钉住。
  */

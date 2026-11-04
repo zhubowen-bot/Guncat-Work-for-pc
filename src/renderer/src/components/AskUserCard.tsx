@@ -16,6 +16,7 @@
 // 渲染位置在 Timeline 末尾（三种模式共用），因为它出现的那一刻这一轮还没结束，
 // 正文可能还在流。
 import { useState } from 'react'
+import { InlineMarkdown } from './Markdown'
 import { IconInfo } from '../icons'
 
 export interface AskUserQuestion {
@@ -78,7 +79,9 @@ export function AskUserCard({ ask, onAnswer, onCancel }: Props) {
         <span className="askcard__mode">{ask.multiSelect ? '可多选' : '单选'}</span>
       </div>
 
-      <div className="askcard__question">{ask.question}</div>
+      <div className="askcard__question">
+        <InlineMarkdown text={ask.question} />
+      </div>
 
       {ask.options.length > 0 ? (
         <div className="askcard__options">
@@ -95,7 +98,9 @@ export function AskUserCard({ ask, onAnswer, onCancel }: Props) {
                 onClick={() => toggleOption(option)}
               >
                 <span className="askchip__mark" />
-                <span className="askchip__text">{option}</span>
+                <span className="askchip__text">
+                  <InlineMarkdown text={option} />
+                </span>
               </button>
             )
           })}

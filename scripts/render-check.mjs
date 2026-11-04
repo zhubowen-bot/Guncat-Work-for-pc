@@ -530,6 +530,42 @@ check(
     textMd.includes('第二段')
 )
 
+// --- 卡片内各文本组件的 Markdown（用户报障：部分组件里 `**` 原样显示） ---
+const cardMd = mod.renderCardMarkdown()
+const CARD_MD_STRONG = [
+  '季度', 'sales.csv', '结论', '1,284 万', '小节', '重点',
+  '数值', '下标', '加粗', '副注', '营收', '万元', '图片', '说明',
+  '1,284', '同比', '1,100', '标签', '甲', '乙', 'Q1', '合计', '1,280',
+  '立项', '已完成', '标题', '副标题', '正文', '头部', '主体', '底部',
+  '方案', '单选', '描述', '多选', '开关', '提交', '字段', '提示',
+  '按钮', '选项卡', '折叠', '分节', '追问'
+]
+const missingStrong = CARD_MD_STRONG.filter((s) => !cardMd.includes(`<strong>${s}</strong>`))
+check(
+  '卡片各文本组件里的 **粗体** 都渲染成 strong',
+  missingStrong.length === 0,
+  missingStrong.length === 0 ? `${CARD_MD_STRONG.length} 处` : `缺：${missingStrong.join('、')}`
+)
+check(
+  '卡片里不再残留 ** 记号',
+  !cardMd.includes('**'),
+  `${(cardMd.match(/\*\*/g) ?? []).length} 处`
+)
+check(
+  '卡片里的行内代码渲染成 code',
+  cardMd.includes('<code>+18.6%</code>') && !cardMd.includes('`+18.6%`')
+)
+check(
+  '卡片里的行内代码与链接也生效',
+  cardMd.includes('<code>42</code>') &&
+    cardMd.includes('href="https://example.com/unit"') &&
+    !cardMd.includes('[**万元**]')
+)
+check(
+  '原生下拉框把行内记号压成纯文本（<option> 放不了 strong）',
+  cardMd.includes('<option value="a">选项</option>') && cardMd.includes('>请选择</option>')
+)
+
 // --- 交互模式：整个回合收进一条活动折叠栏 ---
 const groupedShell = mod.renderGroupedTurn(false)
 const groupedRunning = mod.renderGroupedTurn(true)

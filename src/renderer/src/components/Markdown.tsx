@@ -108,6 +108,85 @@ const COMPONENTS: Components = {
   }
 }
 
+/**
+ * 行内 Markdown：卡片里的标题、标签、表格单元格这类「一行文字」的位置用。
+ *
+ * 为什么不直接用 Markdown：
+ *   · react-markdown 会把一段文字包成 <p>，塞进 <th> / <button> / <span> 里既不合 HTML 规范，
+ *     也会把行内布局撑成块级；表格里每个单元格再挂一棵 ReactMarkdown 也不划算。
+ *   · 这些字段的契约只承诺行内语法（**粗体** / *斜体* / `代码` / [链接](…) / ~~删除线~~），
+ *     不需要列表、标题、表格等块级结构。
+ * 这里把块级节点全部 unwrap：模型真写了列表/标题也不会整块消失，只是退化成行内文字。
+ * 没有 Markdown 记号时直接原样输出（绝大多数表格数字、标签走这条快路径）。
+ */
+const INLINE_MARKDOWN_HINT = /[\\`*_[\]~]/
+const INLINE_ELEMENTS = ['a', 'strong', 'em', 'del', 'code', 'br', 'img', 'sub', 'sup']
+
+const INLINE_COMPONENTS: Components = {
+  a({ node: _node, href, children, ...rest }) {
+    return (
+      <a href={href} target="_blank" rel="noreferrer noopener" {...rest}>
+        {children}
+      </a>
+    )
+  },
+  img({ src, alt }) {
+    const url = typeof src === 'string' ? src : ''
+    if (url === '') {
+      return null
+    }
+    return (
+      <img
+        className="msg__img"
+        src={url}
+        alt={alt ?? ''}
+        title="点击查看大图"
+        onClick={() => useStore.getState().openLightbox(url)}
+      />
+    )
+  }
+}
+
+export const InlineMarkdown = memo(function InlineMarkdown({ text }: Props) {
+  if (text === '') {
+    return null
+  }
+  if (!INLINE_MARKDOWN_HINT.test(text)) {
+    return <>{text}</>
+  }
+  return (
+    <ReactMarkdown
+      allowedElements={INLINE_ELEMENTS}
+      unwrapDisallowed
+      skipHtml
+      remarkPlugins={[remarkGfm]}
+      urlTransform={safeUrlTransform}
+      components={INLINE_COMPONENTS}
+    >
+      {text}
+    </ReactMarkdown>
+  )
+})
+
+/**
+ * 把行内 Markdown 压成纯文本。
+ *
+ * 原生 `<option>` 只能承载文本节点，放不了 `<strong>` / `<a>`，所以下拉框这类位置
+ * 至少要把记号去掉，别让用户看到 `**按客户**` 这种原文。
+ */
+export function plainInlineText(text: string): string {
+  return text
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/\\([\\`*_[\]~])/g, '$1')
+}
+
 export const Markdown = memo(function Markdown({ text }: Props) {
   // 渲染前做表格结构规范化。
   //
