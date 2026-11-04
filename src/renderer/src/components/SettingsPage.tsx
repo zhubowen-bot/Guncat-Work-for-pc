@@ -484,7 +484,7 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
     setMmBaseUrl(settings?.multimodalConfig.baseUrl ?? '')
     setMmApiKey(settings?.multimodalConfig.apiKey ?? '')
     setMmModel(settings?.multimodalConfig.model ?? '')
-    setMmPreparse(settings?.multimodalConfig.preparseEnabled ?? true)
+    setMmPreparse(settings?.multimodalConfig.preparseEnabled ?? false)
     setAsrBaseUrl(settings?.prefs?.asr_baseUrl ?? '')
     setAsrApiKey(settings?.prefs?.asr_apiKey ?? '')
     setAsrModel(settings?.prefs?.asr_model ?? '')

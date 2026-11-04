@@ -5,14 +5,14 @@ export class MultimodalConfig {
   baseUrl: string = '';
   apiKey: string = '';
   model: string = '';
-  preparseEnabled: boolean = true;
+  preparseEnabled: boolean = false;
 
   static default(): MultimodalConfig {
     let cfg: MultimodalConfig = new MultimodalConfig();
     cfg.baseUrl = Constants.DEFAULT_MM_BASE_URL;
     cfg.apiKey = '';
     cfg.model = Constants.DEFAULT_MM_MODEL;
-    cfg.preparseEnabled = true;
+    cfg.preparseEnabled = false;
     return cfg;
   }
 
