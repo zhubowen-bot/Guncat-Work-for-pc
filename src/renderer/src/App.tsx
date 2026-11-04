@@ -6,7 +6,7 @@ import { Sidebar } from './components/Sidebar'
 import { Composer } from './components/Composer'
 import { Timeline } from './components/Timeline'
 import { WorkspacePanel } from './components/WorkspacePanel'
-import { SettingsDialog } from './components/SettingsDialog'
+import { SettingsPage } from './components/SettingsPage'
 import { SpeechBar } from './components/SpeechBar'
 import { MODE_HINT, agentById, isVirtualAgentId } from './conversations'
 import { AgentGlyph } from './components/AgentGlyph'
@@ -511,7 +511,7 @@ export default function App() {
           （弹层不能挤进 300 多像素宽的面板里，正文根本读不了） */}
       <WorkspacePreviewOverlay />
 
-      <SettingsDialog />
+      <SettingsPage />
       <TableOcrDialog />
       <ImageLightbox />
       <SpeechBar />

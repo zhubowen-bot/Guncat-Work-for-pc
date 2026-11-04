@@ -59,13 +59,13 @@ import {
 } from '@renderer/components/MentionPopup'
 import { AttachmentBar } from '@renderer/components/AttachmentBar'
 import {
-  SettingsDialog,
+  SettingsPage,
   credentialHint,
   normalizeApiConfig,
   normalizeMultimodal,
   providerCopy,
   searchEngineHint
-} from '@renderer/components/SettingsDialog'
+} from '@renderer/components/SettingsPage'
 import {
   COMMAND_PERMISSIONS,
   TaskGoalCard,
@@ -568,19 +568,19 @@ export function renderSidebar(): string {
 }
 
 /**
- * 设置面板（对齐原版 views/SettingsPanel.ets）。
+ * 设置页（对齐原版 views/SettingsPanel.ets）。
  *
- * 为什么能在这里渲染：面板平时由 store 的 settingsOpen 控制，而 SSR 下 zustand
- * 只会读到初始状态（false），整块不渲染 —— 所以 SettingsDialog 把「开合」提成了
- * 可选 props，显式传 open 就能把首帧形态钉住（三个小节默认收起等）。
+ * 为什么能在这里渲染：设置页平时由 store 的 settingsOpen 控制，而 SSR 下 zustand
+ * 只会读到初始状态（false），整块不渲染 —— 所以 SettingsPage 把「开合」提成了
+ * 可选 props，显式传 open 就能把首帧形态钉住（默认落在模型配置分类）。
  * useEffect 在 SSR 里不执行，因此不会真的去调 window.guncat。
  */
 export function renderSettings(): string {
-  return renderToStaticMarkup(createElement(SettingsDialog, { open: true }))
+  return renderToStaticMarkup(createElement(SettingsPage, { open: true }))
 }
 
 /**
- * 设置面板里随接入方式 / 引擎变化的文案。
+ * 设置页里随接入方式 / 引擎变化的文案。
  * 逐字对齐原版 getBaseUrlPlaceholder / getModelPlaceholder / getHint /
  * getSearchEngineHint —— 这些字串是用户判断「该填什么」的唯一线索。
  */

@@ -1288,46 +1288,50 @@ check(
   mdWithImage.slice(mdWithImage.indexOf('<img'), mdWithImage.indexOf('<img') + 80)
 )
 
-// --- 设置面板（对齐原版 views/SettingsPanel.ets） ---
-console.log('\n30. 设置面板')
+// --- 设置页（对齐原版 views/SettingsPanel.ets，改为左侧分类 + 右侧独立内容） ---
+console.log('\n30. 设置页')
 const settingsHtml = mod.renderSettings()
 const settingsText = decode(settingsHtml)
 check(
-  '面板整体可渲染（标题 + 表单主体）',
-  settingsHtml.includes('dialog__body') && settingsText.includes('设置')
+  '设置页整体可渲染（分类导航 + 内容区 + 底部保存）',
+  settingsHtml.includes('settings-page') &&
+    settingsHtml.includes('settings-nav') &&
+    settingsHtml.includes('settings-page__foot') &&
+    settingsText.includes('设置')
 )
 check(
-  '五个可折叠小节都在：高级模型参数 / 本地联网搜索 / 多模态解析 API / 自动朗读 / 语音输入',
-  settingsText.includes('高级模型参数') &&
+  '六个分类都在左侧导航：模型 / 高级参数 / 搜索 / 多模态 / 朗读 / 语音输入',
+  settingsText.includes('模型配置') &&
+    settingsText.includes('高级模型参数') &&
     settingsText.includes('本地联网搜索') &&
-    settingsText.includes('多模态解析 API (可选)') &&
+    settingsText.includes('多模态解析') &&
     settingsText.includes('自动朗读') &&
-    settingsText.includes('语音输入（录音转文字）')
+    settingsText.includes('语音输入')
 )
 check(
-  '小节缺省全部收起（高级参数与多模态字段首帧不出现）',
-  !settingsText.includes('数值越低回答越确定') && !settingsText.includes('先行解析附件'),
-  '开合状态由 data-open 与条件渲染共同决定'
-)
-check(
-  '自动朗读开关与语音输入三字段也收在折叠栏里（首帧不露出勾选项与转写字段）',
-  !settingsText.includes('开启后每轮回答生成完会自动念一遍') &&
-    !settingsText.includes('桌面端没有端侧识别可用') &&
+  '首帧只渲染模型配置内容（其他分类的字段不在 DOM 里）',
+  settingsText.includes('配置方案') &&
+    settingsText.includes('配置名称') &&
+    settingsText.includes('接入方式') &&
+    settingsText.includes('可用模型') &&
+    !settingsText.includes('数值越低回答越确定') &&
+    !settingsText.includes('先行解析附件') &&
     !settingsText.includes('转写模型'),
-  '两节标题在、正文收起'
+  '分类切换而不是折叠栏平铺'
 )
 check(
-  '开合指示是 SVG 图标而不是几何符号（check-emoji 会拦 ▲ / ▼）',
-  settingsHtml.includes('settings-section__caret') &&
-    !settingsHtml.includes('▲') &&
-    !settingsHtml.includes('▼')
+  '导航是分类按钮而不是折叠栏（没有 settings-section / aria-expanded）',
+  settingsHtml.includes('settings-nav__item') &&
+    settingsHtml.includes('data-active="true"') &&
+    !settingsHtml.includes('settings-section') &&
+    !settingsHtml.includes('aria-expanded')
 )
 check(
   'Base URL 占位符按当前接入方式给出',
   settingsHtml.includes('https://api.openai.com/v1 或 https://api.deepseek.com')
 )
 check(
-  '底部接入方式提示就是原版 completions 那一段',
+  '模型配置页底部就是原版 completions 那一段接入提示',
   settingsText.includes('通用API接入方式') &&
     settingsText.includes('建议切换 Responses API 或 Anthropic API 选项')
 )
@@ -1611,7 +1615,7 @@ check(
   credOn.includes('不会上传') && credOff.includes('明文存在配置文件里（只有这台机器能读到）')
 )
 check(
-  '设置面板首帧就把中性文案渲染出来（SSR 下 settings 还没到）',
+  '设置页首帧就把中性文案渲染出来（SSR 下 settings 还没到）',
   decode(mod.renderSettings()).includes('仅保存在本机应用数据目录，不会上传')
 )
 

@@ -3420,62 +3420,400 @@ select {
   background: transparent;
 }
 
-/* ===== 设置面板：可折叠小节 ===== */
+/* ===== 设置页 ===== */
 
-/* 对齐原版 SettingsPanel.ets 的三个折叠区（高级模型参数 / 本地联网搜索 / 多模态解析 API）。
-   标题整行可点：14px Medium 次要色，上下各 14px、与上一项留 12px，右侧 12px 开合指示。
-   不直接复用侧栏的 .sidebar__label--toggle —— 那是侧栏的行高与配色，
-   搬进对话框里字重和间距都不对，改一处还会影响另一处。 */
-.settings-section {
-  width: 100%;
+/* 设置页是独立页面：铺满窗口、左侧分类导航、右侧单块内容。
+   不再用弹窗 + 折叠栏把所有配置挤在一列里。 */
+.settings-page {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-sunken);
+  color: var(--text);
 }
 
-.settings-section__head {
+.settings-page__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 22px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--divider);
+}
+
+.settings-page__brand {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-page__mark {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.settings-page__brandcopy {
+  min-width: 0;
+}
+
+.settings-page__brandcopy h1 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.settings-page__brandcopy p {
+  margin: 1px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.settings-page__body {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 22px 24px 0;
+  display: flex;
+  gap: 28px;
+}
+
+.settings-nav {
+  width: 216px;
+  flex: none;
+  overflow-y: auto;
+  padding: 2px 0 24px;
+}
+
+.settings-nav__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav__group + .settings-nav__group {
+  margin-top: 20px;
+}
+
+.settings-nav__label {
+  padding: 0 10px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.settings-nav__item {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 0;
-  margin-top: 12px;
-  border: 0;
-  background: transparent;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
   text-align: left;
-  cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  transition: background 0.12s, color 0.12s;
+}
+
+.settings-nav__item:hover {
+  background: var(--item-hover);
+  color: var(--text);
+}
+
+.settings-nav__item[data-active='true'],
+.settings-nav__item[data-active='true']:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.settings-nav__icon {
+  width: 18px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-page__content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 2px 4px 36px 0;
+}
+
+.settings-content {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.settings-content__head {
+  margin: 0 0 18px;
+  padding: 0 2px;
+}
+
+.settings-content__head h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.settings-content__head p {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* 卡片之间、卡片与说明之间统一留 14px，右侧内容不靠折叠栏分段 */
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--divider);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  overflow: hidden;
+}
+
+.settings-card__head {
+  padding: 16px 20px 0;
+}
+
+.settings-card__title {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.settings-card__desc {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+
+.settings-card__body {
+  padding: 14px 20px 18px;
+}
+
+.settings-card__body--plain {
+  padding: 18px 20px;
+}
+
+/* 设置页内的表单控件比通用弹窗略高一点，点击目标更明确 */
+.settings-form .field {
+  margin-bottom: 16px;
+}
+
+.settings-form .field:last-child {
+  margin-bottom: 0;
+}
+
+.settings-form .field label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-muted);
 }
 
-.settings-section__head:hover {
+.settings-form .field input,
+.settings-form .field select,
+.settings-form .field textarea {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  outline: none;
+  font-size: 13px;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.settings-form .field select {
+  padding-right: 30px;
+}
+
+.settings-form .field textarea {
+  min-height: 92px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.settings-form .field input:focus,
+.settings-form .field select:focus,
+.settings-form .field textarea:focus {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.settings-form .field__hint {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 开关行：标题与解释在左，轨道在右；整行可点 */
+.settings-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  cursor: pointer;
+}
+
+.settings-toggle[data-divider='true'] {
+  margin: 2px 0 16px;
+  padding: 13px 0;
+  border-top: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
+}
+
+.settings-toggle__copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-toggle__title {
+  font-size: 13px;
+  line-height: 1.45;
   color: var(--text);
 }
 
-.settings-section__title {
-  flex: 1;
+.settings-toggle__desc {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-faint);
 }
 
-/* 开合指示：data-open 翻转 180 度（与 Sidebar 的 chevron 同一套写法） */
-.settings-section__caret {
-  display: inline-flex;
-  align-items: center;
-  transition: transform 0.15s;
+.settings-toggle__switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex: none;
+  margin-top: 1px;
 }
 
-.settings-section__caret[data-open='true'] {
-  transform: rotate(180deg);
+.settings-toggle__switch input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
-.settings-section__body {
-  padding-bottom: 8px;
+.settings-toggle__track {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: 11px;
+  background: var(--item-active);
+  transition: background 0.16s;
 }
 
-/* 表单底部的接入方式说明（原版 getHint() 的三段文案）：
-   12px 次要色 —— 比字段级提示（11px faint）更值得看一眼，但不抢字段本身的注意力 */
-.settings-hint {
-  margin-top: 8px;
+.settings-toggle__thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  transition: transform 0.16s;
+}
+
+.settings-toggle input:checked + .settings-toggle__track {
+  background: var(--accent);
+}
+
+.settings-toggle input:checked + .settings-toggle__track .settings-toggle__thumb {
+  transform: translateX(16px);
+}
+
+.settings-toggle input:focus-visible + .settings-toggle__track {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 段落说明：轻底色 + 左侧一段品牌色细线 */
+.settings-note {
+  position: relative;
+  padding: 11px 14px 11px 16px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--divider);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.65;
   color: var(--text-muted);
+}
+
+.settings-note::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.55;
+}
+
+.settings-page__foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--divider);
+}
+
+.settings-page__foot-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
 }
 
 /* ===== 提问卡片（ask_user_question） =====
