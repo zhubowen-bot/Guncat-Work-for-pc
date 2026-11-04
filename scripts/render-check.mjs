@@ -1293,10 +1293,11 @@ console.log('\n30. 设置页')
 const settingsHtml = mod.renderSettings()
 const settingsText = decode(settingsHtml)
 check(
-  '设置页整体可渲染（分类导航 + 内容区 + 顶部关闭）',
+  '设置页整体可渲染（分类导航 + 内容区 + 顶部返回）',
   settingsHtml.includes('settings-page') &&
+    settingsHtml.includes('settings-page__headinner') &&
+    settingsHtml.includes('settings-page__back') &&
     settingsHtml.includes('settings-nav') &&
-    settingsHtml.includes('icon-btn') &&
     settingsText.includes('设置')
 )
 check(
@@ -1337,8 +1338,11 @@ check(
   !settingsHtml.includes('btn--primary') && !settingsHtml.includes('>取消<')
 )
 check(
-  '标题图标只是一个图标，没有纯色底块',
-  settingsHtml.includes('settings-page__icon') && !settingsHtml.includes('settings-page__mark')
+  '标题左侧是纯线性返回键，没有关闭叉，也没有纯色底块',
+  settingsHtml.includes('aria-label="返回"') &&
+    !settingsHtml.includes('title="关闭设置"') &&
+    !settingsHtml.includes('settings-page__icon') &&
+    !settingsHtml.includes('settings-page__mark')
 )
 check(
   'Base URL 占位符按当前接入方式给出',

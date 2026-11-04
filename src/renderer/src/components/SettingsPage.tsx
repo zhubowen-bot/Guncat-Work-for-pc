@@ -14,13 +14,12 @@ import { Constants } from '@core/common/Constants'
 import { useStore } from '../store'
 import { useSpeech } from '../speech/speechStore'
 import {
+  IconArrowLeft,
   IconBrain,
-  IconClose,
   IconFilter,
   IconGlobe,
   IconImage,
   IconMic,
-  IconSettings,
   IconSpeaker
 } from '../icons'
 
@@ -818,18 +817,21 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
   return (
     <div className="settings-page" role="dialog" aria-modal="true" aria-label="设置">
       <header className="settings-page__head">
-        <div className="settings-page__brand">
-          <span className="settings-page__icon" aria-hidden="true">
-            <IconSettings size={20} />
-          </span>
+        <div className="settings-page__headinner">
+          <button
+            type="button"
+            className="settings-page__back"
+            title="返回"
+            aria-label="返回"
+            onClick={() => void closePage()}
+          >
+            <IconArrowLeft size={22} />
+          </button>
           <div className="settings-page__brandcopy">
             <h1>设置</h1>
             <p>模型接入、联网搜索与语音偏好</p>
           </div>
         </div>
-        <button className="icon-btn" title="关闭设置" onClick={() => void closePage()}>
-          <IconClose size={16} />
-        </button>
       </header>
 
       <div className="settings-page__body">
