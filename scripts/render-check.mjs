@@ -1293,13 +1293,17 @@ console.log('\n30. 设置页')
 const settingsHtml = mod.renderSettings()
 const settingsText = decode(settingsHtml)
 check(
-  '设置页整体可渲染（分类导航 + 内容区 + 底部自动保存状态）',
+  '设置页整体可渲染（分类导航 + 内容区 + 顶部关闭）',
   settingsHtml.includes('settings-page') &&
     settingsHtml.includes('settings-nav') &&
-    settingsHtml.includes('settings-page__foot') &&
-    settingsHtml.includes('settings-page__status') &&
-    settingsText.includes('所有更改已自动保存') &&
+    settingsHtml.includes('icon-btn') &&
     settingsText.includes('设置')
+)
+check(
+  '底部横条已移除（不显示保存状态，也没有关闭按钮）',
+  !settingsHtml.includes('settings-page__foot') &&
+    !settingsHtml.includes('settings-page__status') &&
+    !settingsText.includes('所有更改已自动保存')
 )
 check(
   '六个分类都在左侧导航：模型 / 高级参数 / 搜索 / 多模态 / 朗读 / 语音输入',

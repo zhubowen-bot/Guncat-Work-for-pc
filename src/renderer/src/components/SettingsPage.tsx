@@ -526,13 +526,12 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
   const [search, setSearch] = useState<SearchDraft>(initialForm.search)
   const [engines, setEngines] = useState<SearchEngineDto[]>([])
   const [profileName, setProfileName] = useState(initialForm.profileName)
-  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
-  const [saveError, setSaveError] = useState('')
 
   const autoSaveTimerRef = useRef<number | null>(null)
   const lastSyncedSignatureRef = useRef(settingsDraftSignature(initialForm))
   const saveChainRef = useRef<Promise<void>>(Promise.resolve())
   const saveGenerationRef = useRef(0)
+  const saveFailedRef = useRef(false)
   const closingRef = useRef(false)
   const closePageRef = useRef<() => void>(() => {})
 
@@ -575,18 +574,9 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
   // 若每次按键都刷新全局设置，会让输入框反复重渲染，正是「顿挫」的来源。
   // 关闭设置页时再统一刷新一次，顶栏的模型胶囊就能拿到最新配置。
   useEffect(() => {
-    if (!open) {
+    if (!open || signature === lastSyncedSignatureRef.current) {
       return
     }
-    if (signature === lastSyncedSignatureRef.current) {
-      // 改了又改回原值：已排队的定时器会被 cleanup 清掉，状态也要回到「已保存」
-      if (saveState === 'saving') {
-        setSaveState('saved')
-      }
-      return
-    }
-    setSaveState('saving')
-    setSaveError('')
     const timer = window.setTimeout(() => {
       autoSaveTimerRef.current = null
       lastSyncedSignatureRef.current = signature
@@ -640,8 +630,7 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
     setAsrApiKey(nextForm.asrApiKey)
     setAsrModel(nextForm.asrModel)
     setSearch(nextForm.search)
-    setSaveState('saved')
-    setSaveError('')
+    saveFailedRef.current = false
     lastSyncedSignatureRef.current = settingsDraftSignature(nextForm)
   }
 
@@ -649,7 +638,6 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
   function enqueuePersist(values: SettingsDraftValues): Promise<void> {
     const generation = ++saveGenerationRef.current
     const task = async (): Promise<void> => {
-      setSaveState('saving')
       try {
         const models = parseModelNames(values.modelText)
         const activeModel = models.includes(values.draft.model.trim())
@@ -676,13 +664,12 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
           JSON.stringify(normalizeSearch(values.search))
         )
         if (generation === saveGenerationRef.current) {
-          setSaveState('saved')
-          setSaveError('')
+          saveFailedRef.current = false
         }
       } catch (e) {
         if (generation === saveGenerationRef.current) {
-          setSaveState('error')
-          setSaveError(String(e))
+          saveFailedRef.current = true
+          pushNotice('error', `设置保存失败：${String(e)}`)
         }
       }
     }
@@ -701,7 +688,7 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
   /** 立即落盘当前草稿（关闭页面、切换方案前调用）。 */
   function flushPending(): Promise<void> {
     cancelScheduledSave()
-    if (signature === lastSyncedSignatureRef.current && saveState !== 'error') {
+    if (signature === lastSyncedSignatureRef.current && !saveFailedRef.current) {
       return saveChainRef.current
     }
     lastSyncedSignatureRef.current = signature
@@ -717,7 +704,7 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
     try {
       await flushPending()
     } catch {
-      // 具体错误已由状态栏展示；关闭动作不能被一次写盘失败卡住
+      // 写盘失败已经通过提示条告知；关闭动作不能被它卡住
     }
     try {
       await reloadSettings()
@@ -1249,30 +1236,6 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
           </div>
         </div>
       </div>
-
-      <footer className="settings-page__foot">
-        <span
-          className="settings-page__status"
-          data-state={saveState}
-          role="status"
-          aria-live="polite"
-          title={saveError !== '' ? saveError : undefined}
-        >
-          {saveState === 'saving'
-            ? '正在保存…'
-            : saveState === 'error'
-              ? '保存失败'
-              : '所有更改已自动保存'}
-        </span>
-        {saveState === 'error' ? (
-          <button className="btn btn--ghost btn--sm" onClick={() => void flushPending()}>
-            重试
-          </button>
-        ) : null}
-        <button className="btn" onClick={() => void closePage()}>
-          关闭
-        </button>
-      </footer>
     </div>
   )
 }

@@ -3796,32 +3796,6 @@ select {
   opacity: 0.55;
 }
 
-.settings-page__foot {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 22px;
-  background: var(--bg-elevated);
-  border-top: 1px solid var(--divider);
-}
-
-.settings-page__status {
-  flex: 1;
-  min-width: 0;
-  font-size: 11.5px;
-  color: var(--text-faint);
-  transition: color 0.15s;
-}
-
-.settings-page__status[data-state='saving'] {
-  color: var(--text-muted);
-}
-
-.settings-page__status[data-state='error'] {
-  color: var(--danger);
-}
-
 /* ===== 提问卡片（ask_user_question） =====
    对齐原版 views/AskUserCard.ets：1.5px 品牌色描边 + 14 圆角 + 14 内边距 + 阴影。
    它是**唯一一个会让模型停下来等**的卡片，所以描边要显眼到一眼能看见，
