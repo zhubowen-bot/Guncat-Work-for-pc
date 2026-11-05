@@ -657,19 +657,22 @@ export function UsagePage({ open: openOverride }: UsagePageProps = {}) {
               </button>
             ))}
           </div>
-          <div className="usage-segment" role="tablist" aria-label="指标切换">
-            {METRICS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="tab"
-                aria-selected={metric === item.id}
-                data-active={metric === item.id}
-                onClick={() => setMetric(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
+          <div className="usage-toolbar__right">
+            <span className="usage-toolbar__hint">主显示</span>
+            <div className="usage-segment" role="tablist" aria-label="主显示指标切换">
+              {METRICS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={metric === item.id}
+                  data-active={metric === item.id}
+                  onClick={() => setMetric(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -686,6 +689,7 @@ export function UsagePage({ open: openOverride }: UsagePageProps = {}) {
         <section className="usage-summary" aria-label="用量汇总">
           <SummaryCard
             label="今日"
+            metric={metric}
             costUsd={todayAggregate.costUsd}
             rate={snapshot?.price.usdToCny ?? 7.2}
             tokens={todayAggregate.tokens}
@@ -693,6 +697,7 @@ export function UsagePage({ open: openOverride }: UsagePageProps = {}) {
           />
           <SummaryCard
             label="近 7 天"
+            metric={metric}
             costUsd={last7Aggregate.costUsd}
             rate={snapshot?.price.usdToCny ?? 7.2}
             tokens={last7Aggregate.tokens}
@@ -700,6 +705,7 @@ export function UsagePage({ open: openOverride }: UsagePageProps = {}) {
           />
           <SummaryCard
             label="本月"
+            metric={metric}
             costUsd={monthAggregate.costUsd}
             rate={snapshot?.price.usdToCny ?? 7.2}
             tokens={monthAggregate.tokens}
@@ -707,6 +713,7 @@ export function UsagePage({ open: openOverride }: UsagePageProps = {}) {
           />
           <SummaryCard
             label="本月预计"
+            metric={metric}
             costUsd={monthProjectionUsd}
             rate={snapshot?.price.usdToCny ?? 7.2}
             tokens={monthProjectionTokens}
@@ -715,7 +722,7 @@ export function UsagePage({ open: openOverride }: UsagePageProps = {}) {
           />
         </section>
 
-        <section className="usage-card usage-heatmap-card">
+        <section className="usage-card usage-heatmap-card" data-metric={metric}>
           <div className="usage-card__head">
             <div>
               <h2>每日{metric === 'cost' ? '费用' : metric === 'tokens' ? ' token 用量' : '请求数'}</h2>
@@ -823,8 +830,21 @@ export function UsagePage({ open: openOverride }: UsagePageProps = {}) {
             ) : (
               <>
                 <div className="usage-day__stats">
-                  <DayStat label="费用" value={formatCny(detailAggregate.costUsd * (snapshot?.price.usdToCny ?? 7.2))} />
-                  <DayStat label="请求数" value={formatRequests(detailAggregate.requests)} />
+                  <DayStat
+                    label="费用"
+                    value={formatCny(detailAggregate.costUsd * (snapshot?.price.usdToCny ?? 7.2))}
+                    active={metric === 'cost'}
+                  />
+                  <DayStat
+                    label="总 tokens"
+                    value={formatTokens(detailAggregate.tokens)}
+                    active={metric === 'tokens'}
+                  />
+                  <DayStat
+                    label="请求数"
+                    value={formatRequests(detailAggregate.requests)}
+                    active={metric === 'requests'}
+                  />
                   <DayStat label="输入命中" value={formatTokens(detailAggregate.inputHit)} />
                   <DayStat label="输入未命中" value={formatTokens(detailAggregate.inputMiss)} />
                   <DayStat label="缓存写入" value={formatTokens(detailAggregate.cacheWrite)} />
@@ -1124,8 +1144,19 @@ function buildMonthLabels(weeks: HeatmapWeek[]): string[] {
   return labels
 }
 
+function metricShortLabel(metric: Metric): string {
+  if (metric === 'tokens') {
+    return 'Tokens'
+  }
+  if (metric === 'requests') {
+    return '请求数'
+  }
+  return '费用'
+}
+
 function SummaryCard({
   label,
+  metric,
   costUsd,
   rate,
   tokens,
@@ -1133,30 +1164,60 @@ function SummaryCard({
   hint
 }: {
   label: string
+  metric: Metric
   costUsd: number
   rate: number
   tokens: number
   requests: number
   hint?: string
 }) {
+  const costText = formatCny(costUsd * rate)
+  const tokenText = formatTokens(tokens)
+  const requestText = Math.round(requests).toLocaleString('zh-CN')
+  let primary = costText
+  let unit = ''
+  if (metric === 'tokens') {
+    primary = tokenText
+    unit = 'tokens'
+  } else if (metric === 'requests') {
+    primary = requestText
+    unit = '次请求'
+  }
+  const secondary: string[] = []
+  if (metric !== 'cost') {
+    secondary.push(costText)
+  }
+  if (metric !== 'tokens') {
+    secondary.push(`${tokenText} tokens`)
+  }
+  if (metric !== 'requests') {
+    secondary.push(formatRequests(requests))
+  }
   return (
-    <div className="usage-summary__card">
+    <div className="usage-summary__card" data-metric={metric}>
       <div className="usage-summary__label">
-        {label}
+        <span>
+          {label}
+          <em>{metricShortLabel(metric)}</em>
+        </span>
         {hint !== undefined ? <small>{hint}</small> : null}
       </div>
-      <strong className="usage-summary__cost">{formatCny(costUsd * rate)}</strong>
+      <strong className="usage-summary__value">
+        {primary}
+        {unit !== '' ? <small>{unit}</small> : null}
+      </strong>
       <div className="usage-summary__meta">
-        <span>{formatTokens(tokens)} tokens</span>
-        <span>{formatRequests(requests)}</span>
+        {secondary.map((text) => (
+          <span key={text}>{text}</span>
+        ))}
       </div>
     </div>
   )
 }
 
-function DayStat({ label, value }: { label: string; value: string }) {
+function DayStat({ label, value, active }: { label: string; value: string; active?: boolean }) {
   return (
-    <div className="usage-day__stat">
+    <div className="usage-day__stat" data-active={active === true}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>

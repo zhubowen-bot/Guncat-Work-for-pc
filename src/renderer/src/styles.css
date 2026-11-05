@@ -3986,6 +3986,23 @@ select {
   color: var(--text);
 }
 
+/* 指标切换时热力图换色系：费用蓝 / Tokens 绿 / 请求数琥珀 */
+.usage-heatmap-card[data-metric='tokens'] {
+  --heat-0: #e8f3ee;
+  --heat-1: #d8f2e7;
+  --heat-2: #a8e2c9;
+  --heat-3: #62c79b;
+  --heat-4: #1f9d6a;
+}
+
+.usage-heatmap-card[data-metric='requests'] {
+  --heat-0: #f5f0e7;
+  --heat-1: #f8ead2;
+  --heat-2: #f3d49a;
+  --heat-3: #e8b15a;
+  --heat-4: #c98522;
+}
+
 @media (prefers-color-scheme: dark) {
   .usage-page {
     --heat-0: #2a2a2d;
@@ -3993,6 +4010,30 @@ select {
     --heat-2: #344b74;
     --heat-3: #41679f;
     --heat-4: #6b9cff;
+  }
+
+  .usage-heatmap-card[data-metric='tokens'] {
+    --heat-0: #28302d;
+    --heat-1: #223b33;
+    --heat-2: #245443;
+    --heat-3: #2c7d61;
+    --heat-4: #42b98a;
+  }
+
+  .usage-heatmap-card[data-metric='requests'] {
+    --heat-0: #302c27;
+    --heat-1: #3c3222;
+    --heat-2: #554323;
+    --heat-3: #7d622c;
+    --heat-4: #c6973e;
+  }
+
+  .usage-summary__card[data-metric='tokens'] {
+    --metric-color: #42b98a;
+  }
+
+  .usage-summary__card[data-metric='requests'] {
+    --metric-color: #d9a441;
   }
 }
 
@@ -4075,6 +4116,19 @@ select {
   flex-wrap: wrap;
 }
 
+.usage-toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.usage-toolbar__hint {
+  font-size: 12px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
 .usage-segment {
   display: inline-flex;
   align-items: center;
@@ -4131,6 +4185,7 @@ select {
 }
 
 .usage-summary__card {
+  --metric-color: var(--accent);
   position: relative;
   min-width: 0;
   padding: 17px 18px 15px;
@@ -4141,29 +4196,57 @@ select {
   overflow: hidden;
 }
 
+.usage-summary__card[data-metric='tokens'] {
+  --metric-color: #1f9d6a;
+}
+
+.usage-summary__card[data-metric='requests'] {
+  --metric-color: #c98522;
+}
+
 .usage-summary__card::after {
   content: '';
   position: absolute;
   inset: 0 0 auto 0;
   height: 2px;
-  background: linear-gradient(90deg, var(--accent), transparent 72%);
-  opacity: 0.5;
+  background: linear-gradient(90deg, var(--metric-color), transparent 72%);
+  opacity: 0.6;
 }
 
 .usage-summary__label {
   display: flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: 6px;
   font-size: 12.5px;
   color: var(--text-faint);
 }
 
-.usage-summary__label small {
-  font-size: 11px;
-  color: var(--text-quaternary);
+.usage-summary__label > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
 }
 
-.usage-summary__cost {
+.usage-summary__label em {
+  font-style: normal;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--metric-color) 12%, transparent);
+  color: var(--metric-color);
+  font-size: 10.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.usage-summary__label small {
+  font-size: 10.5px;
+  color: var(--text-quaternary);
+  text-align: right;
+}
+
+.usage-summary__value {
   display: block;
   margin: 7px 0 6px;
   font-size: 25px;
@@ -4171,6 +4254,14 @@ select {
   font-weight: 600;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+}
+
+.usage-summary__value small {
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text-faint);
 }
 
 .usage-summary__meta {
@@ -4372,7 +4463,7 @@ select {
 
 .usage-day__stats {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }
@@ -4389,6 +4480,16 @@ select {
   padding: 10px 12px;
   border-radius: 10px;
   background: var(--bg-sunken);
+  transition: background 0.12s, box-shadow 0.12s;
+}
+
+.usage-day__stat[data-active='true'] {
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-sunken));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+.usage-day__stat[data-active='true'] strong {
+  color: var(--accent);
 }
 
 .usage-day__split .usage-day__stat {
