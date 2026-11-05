@@ -5,6 +5,7 @@ import { MultimodalConfig } from '../model/MultimodalConfig';
 import { Constants } from '../common/Constants';
 import { ParsedFileResult } from '../common/Types';
 import { arrayBufferToBase64 } from '../common/Utils';
+import { UsageService } from '../usage/UsageService';
 
 const PARSE_SYSTEM_PROMPT: string = '请仅解析用户上传的文件内容，完整地返回文件中包含的信息。不要回答具体问题，不要执行额外任务，不要对原始信息进行压缩，只返回文件内容的解析结果。';
 
@@ -105,6 +106,7 @@ export class MultimodalService {
       messages: [systemMsg, userMsg]
     };
     let bodyStr: string = JSON.stringify(body);
+    let startedAt: number = Date.now();
 
     let httpRequest: http.HttpRequest = http.createHttp();
     try {
@@ -157,6 +159,18 @@ export class MultimodalService {
       let result: ParsedFileResult = new ParsedFileResult();
       result.content = content as string;
       result.dataUrl = dataUrl;
+      // 多模态解析也是一次真实 LLM 调用；会话 id 为空，只进日聚合，不影响聊天本轮统计。
+      let usage: Object = (json as Record<string, Object>)['usage'];
+      UsageService.record({
+        baseUrl: config.baseUrl,
+        model: model,
+        protocol: 'completions',
+        startedAt: startedAt,
+        usage: typeof usage === 'object' && usage !== null
+          ? usage as Record<string, Object>
+          : null,
+        sessionId: ''
+      });
       return result;
     } finally {
       try {

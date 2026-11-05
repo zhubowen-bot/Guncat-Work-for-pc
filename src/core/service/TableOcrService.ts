@@ -4,6 +4,7 @@ import { http } from '@kit.NetworkKit';
 import { image } from '@kit.ImageKit';
 import { MultimodalConfig } from '../model/MultimodalConfig';
 import { arrayBufferToBase64 } from '../common/Utils';
+import { UsageService } from '../usage/UsageService';
 
 export const TABLE_OCR_PROMPT: string = `你是专业的表格识别引擎。任务：把图片中的表格转换成等价的 HTML <table>，忠实保留合并关系、内容和行高信息。
 
@@ -102,6 +103,7 @@ export class TableOcrService {
       body['thinking'] = { type: 'disabled' };
     }
     let bodyStr: string = JSON.stringify(body);
+    let startedAt: number = Date.now();
 
     let httpRequest: http.HttpRequest = http.createHttp();
     try {
@@ -155,6 +157,17 @@ export class TableOcrService {
         let snippet: string = responseStr.length > 500 ? responseStr.substring(0, 500) : responseStr;
         throw new Error('模型返回内容为空，原始响应：' + snippet);
       }
+      let usage: Object = (json as Record<string, Object>)['usage'];
+      UsageService.record({
+        baseUrl: baseUrl,
+        model: model,
+        protocol: 'completions',
+        startedAt: startedAt,
+        usage: typeof usage === 'object' && usage !== null
+          ? usage as Record<string, Object>
+          : null,
+        sessionId: ''
+      });
       return content;
     } finally {
       try {

@@ -14,6 +14,8 @@ import type {
   GuncatEvent,
   MultimodalConfigDto,
   RendererStage,
+  UsageDayDetailDto,
+  UsageSnapshotDto,
   WorkspaceBinaryDto,
   WorkspaceEntryDto,
   WorkspaceInfoDto,
@@ -52,6 +54,20 @@ const api = {
     /** 本地联网搜索的引擎目录（渲染层据此渲染选项） */
     searchEngines: (): Promise<import('../ipc/contract').SearchEngineDto[]> =>
       ipcRenderer.invoke(INVOKE.settingsSearchEngines)
+  },
+
+  /** 用量与成本（本地统计；页面打开时才读快照，不做后台轮询） */
+  usage: {
+    snapshot: (allowAutoBalance = true): Promise<UsageSnapshotDto> =>
+      ipcRenderer.invoke(INVOKE.usageSnapshot, allowAutoBalance),
+    day: (date: string): Promise<UsageDayDetailDto> =>
+      ipcRenderer.invoke(INVOKE.usageDay, date),
+    refreshBalance: (): Promise<UsageSnapshotDto> =>
+      ipcRenderer.invoke(INVOKE.usageRefreshBalance),
+    saveBudget: (monthlyCny: number): Promise<UsageSnapshotDto> =>
+      ipcRenderer.invoke(INVOKE.usageSaveBudget, monthlyCny),
+    exportCsv: (): Promise<{ saved: boolean; path?: string }> =>
+      ipcRenderer.invoke(INVOKE.usageExportCsv)
   },
 
   agents: {

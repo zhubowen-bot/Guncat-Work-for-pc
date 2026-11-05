@@ -110,6 +110,20 @@ export const INVOKE = {
    */
   workspaceReadBinary: 'workspace:readBinary',
 
+  /**
+   * 用量与成本：按日聚合快照（页面打开时拉一次；不做后台轮询）。
+   * options.refreshBalance=true 时允许按 6 小时节流刷新 DeepSeek 余额。
+   */
+  usageSnapshot: 'usage:snapshot',
+  /** 某一天的模型明细（点击热力图某天时才拉） */
+  usageDay: 'usage:day',
+  /** 手动刷新 DeepSeek 余额（不受节流限制） */
+  usageRefreshBalance: 'usage:refreshBalance',
+  /** 保存每月预算（人民币） */
+  usageSaveBudget: 'usage:saveBudget',
+  /** 导出按日明细 CSV */
+  usageExportCsv: 'usage:exportCsv',
+
   /** 应用信息 */
   appInfo: 'app:info',
   /**
@@ -218,8 +232,98 @@ export interface ConversationStatsDto {
   cacheHit: number
   /** 最近一次任务的工具调用轮数 */
   rounds: number
+  /** 本轮费用（人民币；仅内存，不写消息存档） */
+  usageCostCny: number
+  /** 本轮 tokens（输入命中+未命中+缓存写入+输出） */
+  usageTokens: number
+  /** 本轮实际 API 请求数 */
+  usageRequests: number
   /** 当前目标；没有目标时为 null */
   goal: GoalDto | null
+}
+
+/** 用量聚合桶（费用内部按 USD 存，页面按汇率折人民币） */
+export interface UsageBucketDto {
+  requests: number
+  inputHit: number
+  inputMiss: number
+  cacheWrite: number
+  output: number
+  searchCount: number
+  costUsd: number
+  listCostUsd: number
+  allowanceUsd: number
+  missingUsage: number
+  estimatedRequests: number
+  unpricedRequests: number
+}
+
+export interface UsageDayDto {
+  date: string
+  providers: Record<string, { peak: UsageBucketDto; off: UsageBucketDto }>
+}
+
+export interface UsageDayModelDto {
+  provider: string
+  model: string
+  billingSources: string[]
+  peak: UsageBucketDto
+  off: UsageBucketDto
+}
+
+export interface UsageDayDetailDto {
+  date: string
+  models: UsageDayModelDto[]
+}
+
+export interface UsageBalanceDto {
+  /** 北京时间毫秒时间戳 */
+  at: number
+  currency: string
+  total: number
+  granted: number
+  toppedUp: number
+  available: boolean
+  error: string
+}
+
+export interface UsageSnapshotDto {
+  generatedAt: number
+  /** 北京时间今天 YYYY-MM-DD */
+  today: string
+  rangeStart: string
+  rangeEnd: string
+  /** 仅含有数据的日期；热力图未命中的日期按 0 处理 */
+  days: UsageDayDto[]
+  /** 本月按服务商汇总（全模型） */
+  monthByProvider: Record<string, UsageBucketDto>
+  /** OpenCode 网关返回过的 billing_source */
+  billingSources: string[]
+  /** DeepSeek 余额快照（仅对账，不参与热力图） */
+  balance: UsageBalanceDto | null
+  /** 上次余额刷新失败的原因（保留旧快照） */
+  balanceError: string
+  budget: {
+    monthlyCny: number
+    monthCostCny: number
+    over: boolean
+  }
+  totals: UsageBucketDto
+  price: {
+    version: string
+    updatedAt: string
+    usdToCny: number
+    exchangeUpdatedAt: string
+    peakRule: string
+    holidayYears: number[]
+    missingHolidayYears: number[]
+    searchCnyPerCall: number
+  }
+  /** 始终返回两个预置服务商；未配置 Key 时 enabled=false */
+  providers: {
+    deepseek: { enabled: boolean }
+    opencodeGo: { enabled: boolean }
+  }
 }
 
 export interface GoalDto {
@@ -552,6 +656,7 @@ export type GuncatEvent =
   | { type: 'tool:finished'; conversationId: string; messageId: string; call: ToolCallRecordDto }
   | { type: 'turn:started'; conversationId: string; messageId: string }
   | { type: 'turn:finished'; conversationId: string; messageId: string; status: 'ok' | 'error' | 'aborted'; error?: string }
+  | { type: 'usage:balance'; balance: UsageBalanceDto | null; balanceError: string }
   | { type: 'workspace:changed'; conversationId: string }
   | { type: 'files:intaken'; conversationId: string; names: string[]; imported: number; failed: string[] }
   /** 外部文件到达（命令行 / 系统「打开方式」/ 第二实例），等渲染进程决定导入哪个会话 */

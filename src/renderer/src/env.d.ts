@@ -17,6 +17,8 @@ import type {
   RendererStage,
   TableOcrImageDto,
   TableOcrResultDto,
+  UsageDayDetailDto,
+  UsageSnapshotDto,
   WorkArtifactsDto,
   SearchEngineDto,
   WorkspaceBinaryDto,
@@ -48,6 +50,14 @@ export interface GuncatApi {
     saveString(key: string, value: string): Promise<void>
     /** 本地联网搜索的引擎目录（渲染层据此渲染选项，不必自己维护一份引擎表） */
     searchEngines(): Promise<SearchEngineDto[]>
+  }
+  /** 用量与成本（本地统计；打开页面时才读取快照，无后台轮询） */
+  usage: {
+    snapshot(allowAutoBalance?: boolean): Promise<UsageSnapshotDto>
+    day(date: string): Promise<UsageDayDetailDto>
+    refreshBalance(): Promise<UsageSnapshotDto>
+    saveBudget(monthlyCny: number): Promise<UsageSnapshotDto>
+    exportCsv(): Promise<{ saved: boolean; path?: string }>
   }
   agents: {
     list(): Promise<AgentDto[]>

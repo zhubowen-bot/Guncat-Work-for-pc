@@ -90,6 +90,36 @@ export function registerIpcHandlers(session: SessionManager): void {
     }))
   })
 
+  // ===== 用量与成本 =====
+  // 全部走本地日聚合文件；只有 DeepSeek 余额是可选的网络对账（受节流/手动触发）。
+  ipcMain.handle(INVOKE.usageSnapshot, async (_e, allowAutoBalance?: boolean) =>
+    session.usageSnapshot(allowAutoBalance !== false)
+  )
+  ipcMain.handle(INVOKE.usageDay, async (_e, date: string) => session.usageDay(date))
+  ipcMain.handle(INVOKE.usageRefreshBalance, async () => session.refreshUsageBalance())
+  ipcMain.handle(INVOKE.usageSaveBudget, async (_e, monthlyCny: number) =>
+    session.saveUsageBudget(monthlyCny)
+  )
+  ipcMain.handle(INVOKE.usageExportCsv, async (): Promise<{ saved: boolean; path?: string }> => {
+    const today: string = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const window = getMainWindow()
+    const options: Electron.SaveDialogOptions = {
+      title: '导出用量明细',
+      defaultPath: `guncat-usage-${today}.csv`,
+      filters: [{ name: 'CSV', extensions: ['csv'] }]
+    }
+    const result =
+      window !== null && !window.isDestroyed()
+        ? await dialog.showSaveDialog(window, options)
+        : await dialog.showSaveDialog(options)
+    if (result.canceled || result.filePath === undefined || result.filePath === '') {
+      return { saved: false }
+    }
+    // UTF-8 BOM：Windows Excel 直接双击打开中文列名不会乱码
+    fs.writeFileSync(result.filePath, '\ufeff' + session.usageCsv(), 'utf8')
+    return { saved: true, path: result.filePath }
+  })
+
   // ===== 智能体 =====
   ipcMain.handle(INVOKE.agentsList, async () => session.listAgents())
 

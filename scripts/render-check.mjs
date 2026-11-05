@@ -1020,17 +1020,21 @@ check(
 console.log('\n25. 任务统计卡 / 目标卡')
 const statsHtml = mod.renderTaskStats()
 check(
-  '统计卡四项齐全（任务用时 / 输出速度 / 缓存命中 / 工具调用轮数）',
+  '统计卡六项齐全（用时 / 速度 / 命中 / 轮数 / 本轮费用 / 本轮 tokens）',
   statsHtml.includes('本轮统计') &&
     statsHtml.includes('任务用时') &&
     statsHtml.includes('输出速度') &&
     statsHtml.includes('缓存命中') &&
-    statsHtml.includes('工具调用轮数')
+    statsHtml.includes('工具调用轮数') &&
+    statsHtml.includes('本轮费用') &&
+    statsHtml.includes('本轮 tokens')
 )
 check('任务用时是整数秒（原版 elapsedSec + 秒）', statsHtml.includes('83 秒'))
 check('输出速度取整 + 单位「字符/秒」', statsHtml.includes('42 字符/秒'))
 check('缓存命中按百分比取整', statsHtml.includes('81%'))
 check('工具调用轮数显示', statsHtml.includes('>7<'))
+check('本轮费用折算人民币', statsHtml.includes('¥0.1234'))
+check('本轮 tokens 使用紧凑单位', statsHtml.includes('1.2 万'))
 check(
   '目标卡显示目标文本、状态与轮次进度',
   statsHtml.includes('把季度报表补齐并导出') &&
@@ -1343,11 +1347,12 @@ check(
     !settingsText.includes('所有更改已自动保存')
 )
 check(
-  '六个分类都在左侧导航：模型 / 高级参数 / 搜索 / 多模态 / 朗读 / 语音输入',
+  '七个分类都在左侧导航：模型 / 高级参数 / 搜索 / 多模态 / 用量 / 朗读 / 语音输入',
   settingsText.includes('模型配置') &&
     settingsText.includes('高级模型参数') &&
     settingsText.includes('本地联网搜索') &&
     settingsText.includes('多模态解析') &&
+    settingsText.includes('用量与成本') &&
     settingsText.includes('自动朗读') &&
     settingsText.includes('语音输入')
 )
@@ -1388,6 +1393,44 @@ check(
   '模型配置页底部就是原版 completions 那一段接入提示',
   settingsText.includes('通用API接入方式') &&
     settingsText.includes('建议切换 Responses API 或 Anthropic API 选项')
+)
+
+// --- 用量与成本页（独立页面：汇总 / 筛选 / 指标 / 两个服务商卡片 / 预算 / 说明） ---
+console.log('\n30b. 用量与成本页')
+const usageHtml = mod.renderUsagePage()
+const usageText = decode(usageHtml)
+check(
+  '用量页整体可渲染（汇总卡 + 热力图容器 + 预算 + 页脚）',
+  usageHtml.includes('usage-page') &&
+    usageHtml.includes('usage-summary') &&
+    usageHtml.includes('usage-heatmap-card') &&
+    usageHtml.includes('usage-budget') &&
+    usageHtml.includes('usage-foot')
+)
+check(
+  '汇总卡四项：今日 / 近 7 天 / 本月 / 本月预计',
+  usageText.includes('今日') &&
+    usageText.includes('近 7 天') &&
+    usageText.includes('本月') &&
+    usageText.includes('本月预计')
+)
+check(
+  '服务商筛选与指标切换齐全',
+  usageText.includes('全部') &&
+    usageText.includes('DeepSeek') &&
+    usageText.includes('OpenCode Go') &&
+    usageText.includes('Tokens') &&
+    usageText.includes('请求数')
+)
+check(
+  '两个预置服务商始终显示，未配置时标注未启用',
+  (usageText.match(/未启用/g) ?? []).length >= 2
+)
+check(
+  '余额对账与价目/汇率说明都在页面上',
+  usageText.includes('余额仅作对账') &&
+    usageText.includes('价目表') &&
+    usageText.includes('汇率')
 )
 
 const copyC = mod.settingsCopy('openai-completions', 'bing')

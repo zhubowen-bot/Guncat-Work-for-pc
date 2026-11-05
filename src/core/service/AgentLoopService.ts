@@ -36,6 +36,8 @@ import { GuncatUiPrompt } from '../common/GuncatUiPrompt';
 import { GuncatUiLang, GuncatUiFences, UiNode } from '../common/GuncatUiLang';
 import { GuncatUiLibrary } from '../common/GuncatUiLibrary';
 import { GuncatUiParts } from '../common/GuncatUiParts';
+import { UsageService } from '../usage/UsageService';
+import { UsagePricing } from '../usage/UsagePricing';
 export { LoopError };
 
 // 带分类的循环层错误已迁移到 common/LoopError(纯逻辑, 可单测);
@@ -319,6 +321,8 @@ export class AgentLoopService {
     let failedMsg: string = '';
     let startTime: number = Date.now();
     let result: LoopTurnResult = new LoopTurnResult();
+    // 一次请求内合并所有 usage 事件（Anthropic 输入/输出分属两条事件）
+    let lastUsage: Record<string, Object> | null = null;
     let callAcc: ToolCallAccumulator = new ToolCallAccumulator();
     let sseAdapter: SSEProtocolAdapter = AgentLoopService.buildSseAdapter(protocol, callAcc);
     // 上一次 onToolCalls 通知的签名(调用数:累计参数量), 变化时才再次上抛
@@ -351,10 +355,11 @@ export class AgentLoopService {
         result.reasoningItems = appendReasoningItem(result.reasoningItems, itemJson);
       };
       ctx.onUsage = (usageObj: Record<string, Object> | null): void => {
-        let stats: number[] = deriveStreamStats(usageObj, Date.now() - startTime);
+        lastUsage = UsagePricing.mergeUsage(lastUsage, usageObj);
+        let stats: number[] = deriveStreamStats(lastUsage, Date.now() - startTime);
         result.tokenSpeed = stats[0];
         result.cacheHitRate = stats[1];
-        result.promptTokens = AgentLoopService.extractPromptTokens(usageObj);
+        result.promptTokens = AgentLoopService.extractPromptTokens(lastUsage, protocol);
         callbacks.onUsage(stats[0], stats[1]);
       };
       ctx.onFinishReason = (finish: string): void => {
@@ -546,6 +551,18 @@ export class AgentLoopService {
       }
     }
     result.toolCalls = AgentLoopService.normalizeCalls(callAcc.calls);
+    if (!abortSignal.aborted) {
+      // 逐请求记账：主循环、子代理、标题、压缩、界面补救、审批审阅都走这里。
+      // record 内部整体 try/catch，统计失败不影响本轮结果。
+      UsageService.record({
+        baseUrl: config.baseUrl,
+        model: config.model,
+        protocol: protocol,
+        startedAt: startTime,
+        usage: lastUsage,
+        sessionId: config.sessionId
+      });
+    }
     return result;
   }
 
@@ -648,17 +665,13 @@ export class AgentLoopService {
     });
   }
 
-  // 从 usage 中提取真实 prompt tokens(completions 用 prompt_tokens, responses/anthropic 用 input_tokens)
-  private static extractPromptTokens(usage: Record<string, Object>): number {
-    let pt: Object = usage['prompt_tokens'];
-    if (typeof pt === 'number') {
-      return pt as number;
-    }
-    let it: Object = usage['input_tokens'];
-    if (typeof it === 'number') {
-      return it as number;
-    }
-    return 0;
+  // 上下文预算用的「真实输入 token」：
+  //   completions = prompt_tokens；responses = input_tokens（已含缓存命中）；
+  //   anthropic  = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+  //   —— Anthropic 的 input_tokens 不含缓存命中，只取它会低估上下文长度。
+  private static extractPromptTokens(usage: Record<string, Object>, protocol: string): number {
+    let normalized = UsagePricing.normalize(protocol, usage);
+    return normalized.inputHit + normalized.inputMiss + normalized.cacheWrite;
   }
 
   // 提取结束原因(统一词表: 'max_tokens' 需要粘性收尾; 其余返回空串/非关键值):
@@ -995,6 +1008,9 @@ export class AgentLoopService {
       messages: msgs,
       stream: true
     };
+    if (UsagePricing.supportsIncludeUsage(config.baseUrl)) {
+      body['stream_options'] = { include_usage: true };
+    }
     let finalTools: Record<string, Object>[] = ToolDefAdapter.completionsTools(tools);
     if (webSearchEnabled) {
       // 服务端联网搜索工具与客户端函数工具并存(与 ChatService 行为一致)

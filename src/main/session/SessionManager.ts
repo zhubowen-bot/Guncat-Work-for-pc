@@ -76,6 +76,9 @@ import type { PluginManifestResult } from '@core/common/PluginManifestLoader'
 // 已移植能力，见 makeAttachments 的说明。
 import { MultimodalService } from '@core/service/MultimodalService'
 import { FileUploadService } from '@core/service/FileUploadService'
+import { UsageService } from '@core/usage/UsageService'
+import { UsagePricing } from '@core/usage/UsagePricing'
+import { UsageDayDetailView } from '@core/usage/UsageLedger'
 import { image } from '@core/platform/kit/ImageKit'
 
 import type {
@@ -93,6 +96,8 @@ import type {
   MessageDto,
   MultimodalConfigDto,
   ToolCallRecordDto,
+  UsageDayDetailDto,
+  UsageSnapshotDto,
   WorkArtifactsDto,
   WorkRunRequest,
   WorkspaceInfoDto
@@ -721,6 +726,7 @@ export class SessionManager {
     // 审批档位与「本次任务全部允许」的授权也一并清掉（id 不会复用，但别把注册表留成垃圾）。
     CommandService.releaseConversation(id)
     ApprovalReviewService.release(id)
+    UsageService.forgetRun(id)
     try {
       WorkFileService.deleteWorkspace(this.ctx(), id)
     } catch {
@@ -891,12 +897,16 @@ export class SessionManager {
     const average = (values: number[]): number =>
       values.length === 0 ? -1 : values.reduce((a, b) => a + b, 0) / values.length
     const goal = GoalService.read(this.workspaceRoot(conversationId))
+    const runUsage = UsageService.runView(conversationId)
     return {
       elapsedMs:
         stats === undefined || stats.finishedAt === 0 ? 0 : stats.finishedAt - stats.startedAt,
       speed: stats === undefined ? -1 : average(stats.speeds),
       cacheHit: stats === undefined ? -1 : average(stats.hits),
       rounds: stats === undefined ? 0 : stats.rounds,
+      usageCostCny: runUsage.costCny,
+      usageTokens: runUsage.tokens,
+      usageRequests: runUsage.requests,
       goal:
         goal === null
           ? null
@@ -907,6 +917,101 @@ export class SessionManager {
               maxRounds: goal.maxRounds
             }
     }
+  }
+
+  // ===== 用量与成本 =====
+
+  /**
+   * 生成用量页快照。
+   * allowAutoBalance=true 时仅在距上次尝试超过 6 小时的情况下刷新 DeepSeek 余额；
+   * 页面其余数据完全来自本地日聚合文件，不发起任何其它网络请求。
+   */
+  async usageSnapshot(allowAutoBalance: boolean = true): Promise<UsageSnapshotDto> {
+    const settings: AppSettingsDto | null = await this.loadSettings().catch(
+      (): AppSettingsDto | null => null
+    )
+    const deepseekKey: string = SessionManager.usageApiKey(settings, 'deepseek')
+    const opencodeKey: string = SessionManager.usageApiKey(settings, 'opencode-go')
+    const local: UsageSnapshotDto = SessionManager.withProviderStatus(UsageService.snapshot(), {
+      deepseek: { enabled: deepseekKey !== '' },
+      opencodeGo: { enabled: opencodeKey !== '' }
+    })
+    if (allowAutoBalance && deepseekKey !== '' && UsageService.balanceDue()) {
+      // 不阻塞页面首屏：先返回本地账本，余额刷新完成后用事件推给渲染进程。
+      // 失败静默，页面继续显示旧快照与错误说明。
+      void UsageService.refreshDeepSeekBalance(deepseekKey, false)
+        .then((): void => {
+          const next = UsageService.snapshot()
+          this.emit({
+            type: 'usage:balance',
+            balance: next.balance,
+            balanceError: next.balanceError
+          })
+        })
+        .catch((): void => {})
+    }
+    return local
+  }
+
+  async refreshUsageBalance(): Promise<UsageSnapshotDto> {
+    const settings: AppSettingsDto | null = await this.loadSettings().catch(
+      (): AppSettingsDto | null => null
+    )
+    const deepseekKey: string = SessionManager.usageApiKey(settings, 'deepseek')
+    const opencodeKey: string = SessionManager.usageApiKey(settings, 'opencode-go')
+    if (deepseekKey !== '') {
+      await UsageService.refreshDeepSeekBalance(deepseekKey, true).catch((): void => {})
+    }
+    return SessionManager.withProviderStatus(UsageService.snapshot(), {
+      deepseek: { enabled: deepseekKey !== '' },
+      opencodeGo: { enabled: opencodeKey !== '' }
+    })
+  }
+
+  async saveUsageBudget(monthlyCny: number): Promise<UsageSnapshotDto> {
+    UsageService.setBudget(monthlyCny)
+    return this.usageSnapshot(false)
+  }
+
+  usageDay(date: string): UsageDayDetailDto {
+    return UsageService.dayDetail(date) as UsageDayDetailDto
+  }
+
+  usageCsv(): string {
+    return UsageService.csv()
+  }
+
+  private static withProviderStatus(
+    snapshot: ReturnType<typeof UsageService.snapshot>,
+    providers: UsageSnapshotDto['providers']
+  ): UsageSnapshotDto {
+    return {
+      ...snapshot,
+      providers
+    } as UsageSnapshotDto
+  }
+
+  /** 按 Base URL 找对应预置服务商的第一个可用 Key（预置/用户自建方案都认） */
+  private static usageApiKey(settings: AppSettingsDto | null, provider: string): string {
+    if (settings === null) {
+      return ''
+    }
+    for (let i: number = 0; i < settings.apiProfiles.length; i++) {
+      const profile: ApiProfileDto = settings.apiProfiles[i]
+      const key: string = (profile.config.apiKey ?? '').trim()
+      if (key === '') {
+        continue
+      }
+      if (UsagePricing.detectProvider(profile.config.baseUrl) === provider) {
+        return key
+      }
+    }
+    const current: ApiConfigDto | null = settings.apiConfig
+    if (current !== null && (current.apiKey ?? '').trim() !== '' &&
+      UsagePricing.detectProvider(current.baseUrl) === provider) {
+      return current.apiKey.trim()
+    }
+    return ''
   }
 
   // ===== 定时提醒推进 =====
@@ -1151,6 +1256,8 @@ export class SessionManager {
     const history: Message[] = conv.messages.slice(0, -1)
     handle.busy = true
     handle.abort = new AbortSignal()
+    // 本轮 token/费用只存内存，供工作区「本轮统计」读取；不写进任何消息存档
+    UsageService.beginRun(conv.id)
 
     const callbacks: StreamCallbacks = new StreamCallbacks()
     // 正文跨轮累积（原版 assistantMsg.content += delta 的同一口径）：
@@ -1348,6 +1455,7 @@ export class SessionManager {
       failure = (e as Error)?.message ?? String(e)
     } finally {
       handle.busy = false
+      UsageService.endRun(conv.id)
       // 收尾时把失败原因落到正文里（`onError` 已经即时刷过一次，但那一次可能被
       // 后续的流式增量覆盖掉，这里以最终态再钉一遍）。正文为空就直接写这句，
       // 否则空一行再接 —— 与原版 handleStreamError 的两分支一致。
@@ -1521,6 +1629,7 @@ export class SessionManager {
     handle.busy = true
     handle.abort = new AbortSignal()
     this.beginRunStats(conv.id)
+    UsageService.beginRun(conv.id)
     // 压缩环境要在 handle.abort 换成新实例之后再建，否则压缩请求会挂到上一次运行的中断信号上
     const compactionEnv: WorkCompactionEnv = { config, request, reasoningEffort, abort: handle.abort }
 
@@ -1838,6 +1947,7 @@ export class SessionManager {
     } finally {
       handle.busy = false
       this.finishRunStats(conv.id)
+      UsageService.endRun(conv.id)
       // ===== 收尾标注（原版 finalizeWorkTurn 3147-3160 / appendTurnNote 3162-3166）=====
       // 手动停止 / 输出顶到上限 / 步数耗尽，都在这一轮的最后一条 assistant 正文末尾
       // 追加一句说明。界面据此把折叠栏的「已完成」改成「已停止」，

@@ -174,6 +174,8 @@ interface State {
   interactiveEffort: string
   webSearchEnabled: boolean
   settings: AppSettingsDto | null
+  /** 独立的「用量与成本」页（从设置页或侧栏底部打开） */
+  usageOpen: boolean
   workspace: WorkspaceEntryDto[]
   /**
    * 当前会话的任务统计与目标（工作区面板的统计卡 / 目标卡）。
@@ -243,6 +245,7 @@ interface State {
   applyAgentThinkingDefault(): Promise<void>
   setWebSearch(value: boolean): void
   openSettings(open: boolean): void
+  openUsage(open: boolean): void
   toggleWorkspace(open?: boolean): void
   openTableOcr(open: boolean): void
   /** 打开/关闭大图查看（传空串即关闭） */
@@ -465,6 +468,7 @@ export const useStore = create<State>((set, get) => {
     // 原版默认**开启**服务端联网搜索（LS_KEY_WEB_SEARCH_ENABLED 的缺省值是 true）
     webSearchEnabled: true,
     settings: null,
+    usageOpen: false,
     workspace: [],
     stats: null,
     artifacts: null,
@@ -713,6 +717,10 @@ export const useStore = create<State>((set, get) => {
 
     openSettings(open) {
       set({ settingsOpen: open })
+    },
+
+    openUsage(open) {
+      set({ usageOpen: open })
     },
 
     toggleWorkspace(open) {

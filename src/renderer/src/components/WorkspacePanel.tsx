@@ -74,12 +74,18 @@ export function TaskStatsCard({
   elapsedSec,
   speed,
   cacheHit,
-  toolCalls
+  toolCalls,
+  usageCostCny,
+  usageTokens,
+  usageRequests
 }: {
   elapsedSec: number
   speed: number
   cacheHit: number
   toolCalls: number
+  usageCostCny: number
+  usageTokens: number
+  usageRequests: number
 }) {
   return (
     <div className="statcard">
@@ -88,13 +94,47 @@ export function TaskStatsCard({
       <StatRow label="输出速度" value={speed > 0 ? `${Math.round(speed)} 字符/秒` : '—'} />
       <StatRow label="缓存命中" value={cacheHit >= 0 ? `${Math.round(cacheHit * 100)}%` : '—'} />
       <StatRow label="工具调用轮数" value={String(toolCalls)} />
+      <StatRow
+        label="本轮费用"
+        value={usageRequests > 0 ? `¥${formatUsageMoney(usageCostCny)}` : '—'}
+        title="按实际 API 响应结算；OpenCode 套餐内按等价按量成本展示"
+      />
+      <StatRow
+        label="本轮 tokens"
+        value={usageRequests > 0 ? formatUsageTokens(usageTokens) : '—'}
+        title={`${usageRequests} 次 API 请求`}
+      />
     </div>
   )
 }
 
-function StatRow({ label, value }: { label: string; value: string }) {
+/** 本轮费用：小于 0.01 时保留 4 位，避免小额被显示成 ¥0.00 */
+export function formatUsageMoney(value: number): string {
+  const n = Number.isFinite(value) ? Math.max(0, value) : 0
+  if (n === 0) {
+    return '0.00'
+  }
+  if (n < 1) {
+    return n.toFixed(4)
+  }
+  return n.toFixed(2)
+}
+
+/** 本轮 tokens：中文紧凑单位，保留一位小数 */
+export function formatUsageTokens(value: number): string {
+  const n = Number.isFinite(value) ? Math.max(0, value) : 0
+  if (n >= 100000000) {
+    return `${(n / 100000000).toFixed(2)} 亿`
+  }
+  if (n >= 10000) {
+    return `${(n / 10000).toFixed(1)} 万`
+  }
+  return Math.round(n).toLocaleString('zh-CN')
+}
+
+function StatRow({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="statrow">
+    <div className="statrow" title={title}>
       <span className="statrow__label">{label}</span>
       <span className="statrow__value">{value}</span>
     </div>
@@ -716,6 +756,9 @@ export function WorkspacePanel() {
         speed={lastSpeed}
         cacheHit={lastCacheHit}
         toolCalls={toolCalls}
+        usageCostCny={stats?.usageCostCny ?? 0}
+        usageTokens={stats?.usageTokens ?? 0}
+        usageRequests={stats?.usageRequests ?? 0}
       />
 
       {/* 当前目标卡（对齐原版 DetailsPanelView 的目标卡）。

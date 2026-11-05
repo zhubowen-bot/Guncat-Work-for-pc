@@ -176,6 +176,11 @@ const required = [
   'work:steer',
   'conversation:stats',
   'conversation:artifacts',
+  'usage:snapshot',
+  'usage:day',
+  'usage:refreshBalance',
+  'usage:saveBudget',
+  'usage:exportCsv',
   'tableOcr:pickImage',
   'tableOcr:run',
   'message:exportDocx',
@@ -187,6 +192,8 @@ check('preload 用到的通道全部已注册', missing.length === 0, missing.le
 // --- 应用信息 ---
 const info = await inv('app:info')
 check('app:info 返回版本与路径', info.version !== undefined && info.dataRoot === dataRoot, `version=${info.version}`)
+
+
 
 // --- 启动诊断：渲染进程上报「走进了哪一步」 ---
 // 这条链路补的是主进程的盲区：它自己最多只能看到「页面加载完成」，
@@ -276,6 +283,25 @@ check(
     presetOpencode.config.models[0] === 'deepseek-v4.1-flash',
   `${presetOpencode?.config.provider} / ${(presetOpencode?.config.models ?? []).join(',')}`
 )
+
+// --- 用量与成本（本地账本 + 预算 + 服务商状态） ---
+// 放在预置方案断言之后：usage:snapshot 会读设置，若提前触发预置播种，
+// 后面的「旧方案合并」用例就没有机会验证迁移路径了。
+const usageSnapshot = await inv('usage:snapshot', false)
+check(
+  'usage:snapshot 返回日聚合、价目与两个预置服务商',
+  Array.isArray(usageSnapshot.days) &&
+    usageSnapshot.price !== undefined &&
+    typeof usageSnapshot.price.version === 'string' &&
+    usageSnapshot.providers !== undefined &&
+    usageSnapshot.providers.deepseek !== undefined &&
+    usageSnapshot.providers.opencodeGo !== undefined
+)
+const usageWithBudget = await inv('usage:saveBudget', 88)
+check('usage:saveBudget 保存预算并回传快照', usageWithBudget.budget.monthlyCny === 88)
+await inv('usage:saveBudget', 0)
+const usageDay = await inv('usage:day', '2026-01-01')
+check('usage:day 返回指定日期的模型明细', usageDay.date === '2026-01-01' && Array.isArray(usageDay.models))
 
 // Opencode Go 要求每个请求带稳定的 x-opencode-session，缺了会被网关拒绝。
 const opencodeConfig = new mod.ApiConfig()
@@ -3216,6 +3242,21 @@ workUiServer.close()
 
 searchServer.closeAllConnections?.()
 searchServer.close()
+
+// 真实链路已经跑了多轮 ChatService/AgentLoopService 请求：用量账本必须收到逐请求记录。
+// 这些请求指向本地假服务，provider 会落到 other —— 正好验证「不是只挂主聊天消息」。
+const usageAfterChat = await inv('usage:snapshot', false)
+const usageChildren = (usageAfterChat.days ?? []).find((d) => d.date === usageAfterChat.today)
+check(
+  '实际 API 响应已逐请求进入用量账本（含工具续轮/补助请求）',
+  usageAfterChat.totals.requests > 0 && usageChildren !== undefined,
+  `requests=${usageAfterChat.totals.requests}`
+)
+const usageAfterChatDay = await inv('usage:day', usageAfterChat.today)
+check(
+  '当日明细能按模型列出真实请求',
+  Array.isArray(usageAfterChatDay.models) && usageAfterChatDay.models.length > 0
+)
 
 console.log(`\n聊天多轮与界面补助验证：通过 ${passed - passedBeforeChatUi} 项`)
 

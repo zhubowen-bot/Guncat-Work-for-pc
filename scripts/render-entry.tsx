@@ -66,6 +66,7 @@ import {
   providerCopy,
   searchEngineHint
 } from '@renderer/components/SettingsPage'
+import { UsagePage } from '@renderer/components/UsagePage'
 import {
   COMMAND_PERMISSIONS,
   TaskGoalCard,
@@ -400,7 +401,10 @@ export function renderTaskStats(): string {
         elapsedSec: 83,
         speed: 42.35,
         cacheHit: 0.812,
-        toolCalls: 7
+        toolCalls: 7,
+        usageCostCny: 0.1234,
+        usageTokens: 12345,
+        usageRequests: 6
       }),
       createElement(TaskGoalCard, {
         goal: { objective: '把季度报表补齐并导出', status: 'active', rounds: 3, maxRounds: 40 }
@@ -415,7 +419,15 @@ export function renderTaskStatsEmpty(): string {
     createElement(
       'div',
       null,
-      createElement(TaskStatsCard, { elapsedSec: 0, speed: -1, cacheHit: -1, toolCalls: 0 }),
+      createElement(TaskStatsCard, {
+        elapsedSec: 0,
+        speed: -1,
+        cacheHit: -1,
+        toolCalls: 0,
+        usageCostCny: 0,
+        usageTokens: 0,
+        usageRequests: 0
+      }),
       createElement(TaskGoalCard, { goal: null })
     )
   )
@@ -577,6 +589,11 @@ export function renderSidebar(): string {
  */
 export function renderSettings(): string {
   return renderToStaticMarkup(createElement(SettingsPage, { open: true }))
+}
+
+/** 用量与成本页首帧（SSR 下 snapshot 尚未加载，热力图显示空态/零值） */
+export function renderUsagePage(): string {
+  return renderToStaticMarkup(createElement(UsagePage, { open: true }))
 }
 
 /**

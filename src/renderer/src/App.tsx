@@ -7,6 +7,7 @@ import { Composer } from './components/Composer'
 import { Timeline } from './components/Timeline'
 import { WorkspacePanel } from './components/WorkspacePanel'
 import { SettingsPage } from './components/SettingsPage'
+import { UsagePage } from './components/UsagePage'
 import { SpeechBar } from './components/SpeechBar'
 import { MODE_HINT, agentById, isVirtualAgentId } from './conversations'
 import { AgentGlyph } from './components/AgentGlyph'
@@ -513,6 +514,7 @@ export default function App() {
       <WorkspacePreviewOverlay />
 
       {settingsOpen ? <SettingsPage /> : null}
+      <UsagePage />
       <TableOcrDialog />
       <ImageLightbox />
       <SpeechBar />

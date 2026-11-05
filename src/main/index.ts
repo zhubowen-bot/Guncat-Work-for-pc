@@ -17,6 +17,7 @@ import { collectFileArgs } from './intake'
 import { installAppIdentity, installApplicationMenu } from './appmenu'
 import { SessionManager } from './session/SessionManager'
 import { CommandService } from '@core/service/CommandService'
+import { UsageService } from '@core/usage/UsageService'
 import { createMainWindow, getMainWindow, rendererDir, setPendingFlush, setRendererStalledHandler, setCompatMode, showLoadError } from './window'
 import { serveRenderer, registerAppScheme } from './protocol'
 import { buildCompatArgs, FRESH_PROFILE_FLAG, isCompatMode } from './compat'
@@ -243,7 +244,9 @@ if (!gotLock) {
       bootLog(`资源目录=${paths.resourcesRoot}`)
       initAppPaths(paths)
       clearTempDir()
-      bootLog('应用路径已初始化')
+      // 用量日聚合：启动时读一次盘（通常几十到几百 KB），失败按空账本处理
+      UsageService.init()
+      bootLog('应用路径已初始化（含用量账本）')
 
       // 配置的落盘加密要在这里定下来：API Key 之类凭据在第一次读配置之前就得知道本机
       // 有没有凭据保险库（Windows DPAPI / macOS Keychain / Linux 钥匙串）。
@@ -357,7 +360,16 @@ if (!gotLock) {
     }
   })
 
+  // 切后台/失焦时把防抖中的统计落盘；退出再同步兜一次，允许最后几秒丢失。
+  app.on('browser-window-blur', () => {
+    void UsageService.flush()
+  })
+  app.on('before-quit', () => {
+    UsageService.flushSync()
+  })
+
   app.on('will-quit', () => {
+    UsageService.flushSync()
     // 后台命令（run_command 的 run_in_background）不会跟着窗口一起没 ——
     // 应用退出时把它们连同进程树收掉，否则用户关掉应用后机器上还留着一堆本应用拉起的进程。
     try {

@@ -16,6 +16,7 @@ import { useSpeech } from '../speech/speechStore'
 import {
   IconArrowLeft,
   IconBrain,
+  IconChart,
   IconFilter,
   IconGlobe,
   IconImage,
@@ -342,7 +343,14 @@ function readSettingsDraft(settings: AppSettingsDto | null): SettingsDraftValues
 }
 
 /** 设置页的导航分类。每个分类对应右侧一块独立内容，不再用折叠栏把内容堆在一页。 */
-type SettingsTabId = 'model' | 'advanced' | 'search' | 'multimodal' | 'auto-read' | 'voice-input'
+type SettingsTabId =
+  | 'model'
+  | 'advanced'
+  | 'search'
+  | 'multimodal'
+  | 'auto-read'
+  | 'voice-input'
+  | 'usage'
 
 interface SettingsTab {
   id: SettingsTabId
@@ -385,6 +393,18 @@ const SETTINGS_NAV: Array<{ label: string; items: SettingsTab[] }> = [
         title: '多模态解析 API',
         description: '在发送前用独立的视觉模型解析图片与文档。',
         icon: <IconImage size={16} />
+      }
+    ]
+  },
+  {
+    label: '账户与用量',
+    items: [
+      {
+        id: 'usage',
+        label: '用量与成本',
+        title: '用量与成本',
+        description: '按请求统计每日 token 与费用，提供热力图、服务商账单与预算提醒。',
+        icon: <IconChart size={16} />
       }
     ]
   },
@@ -502,6 +522,7 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
   const storeOpen = useStore((s) => s.settingsOpen)
   const open = openOverride ?? storeOpen
   const openSettings = useStore((s) => s.openSettings)
+  const openUsage = useStore((s) => s.openUsage)
   const settings = useStore((s) => s.settings)
   const reloadSettings = useStore((s) => s.reloadSettings)
   const pushNotice = useStore((s) => s.pushNotice)
@@ -988,6 +1009,33 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
 
                   {/* 接入方式说明（原版 getHint() 的三段文案，随接入方式变化）。 */}
                   <SettingsNote>{provider.hint}</SettingsNote>
+                </>
+              ) : null}
+
+              {activeTab === 'usage' ? (
+                <>
+                  <SettingsCard
+                    title="用量与成本"
+                    description="逐请求记账、按日聚合。打开页面时才读取热力图，不做后台轮询。"
+                  >
+                    <div className="usage-entry">
+                      <div className="usage-entry__copy">
+                        <strong>本地统计，不影响聊天</strong>
+                        <p>
+                          覆盖主对话、Agent Loop、子代理、标题生成、上下文压缩与界面补救请求。
+                          日聚合文件只保留约 400 天，费用与 token 不会写进消息存档。
+                        </p>
+                      </div>
+                      <button className="btn btn--primary" onClick={() => openUsage(true)}>
+                        <IconChart size={16} />
+                        打开用量与成本
+                      </button>
+                    </div>
+                  </SettingsCard>
+                  <SettingsNote>
+                    页面会始终显示 DeepSeek 与 OpenCode Go 两个预置服务商；没有填写 API Key
+                    的标注「未启用」，不会隐藏。DeepSeek 余额只做可选对账，不参与热力图。
+                  </SettingsNote>
                 </>
               ) : null}
 

@@ -20,6 +20,8 @@ import { ToolCallAccumulator, collectCompletionsToolDelta, collectResponsesToolI
 import { LOCAL_SEARCH_TOOL_NAME, LOCAL_SEARCH_TOOL_DESC_CHAT, LOCAL_SEARCH_TOOL_DESC_CHAT_FALLBACK,
   LOCAL_SEARCH_QUERY_PROP_DESC } from './LocalWebSearch';
 import { HarnessTools } from './HarnessTools';
+import { UsageService } from '../usage/UsageService';
+import { UsagePricing } from '../usage/UsagePricing';
 
 export class StreamAccumulator {
   buffer: ArrayBuffer = new ArrayBuffer(0);
@@ -241,6 +243,11 @@ function buildChatCompletionsBody(config: ApiConfig, agent: Agent | null,
     messages: messages,
     stream: true
   };
+  // 已知支持该字段的服务商才补：流式最后一帧才会带 usage。
+  // 严格网关不接受未知字段，未知服务商宁可不带（页面会显示缺失 usage）。
+  if (UsagePricing.supportsIncludeUsage(config.baseUrl)) {
+    body['stream_options'] = { include_usage: true };
+  }
 
   // 本地内置联网搜索 search_web 强制注入(由模型决定是否调用); 服务端联网搜索按开关并存
   let chatTools: Record<string, Object>[] = [];
@@ -1065,7 +1072,9 @@ export function extractResponsesUsage(sseData: string): Record<string, Object> |
       return null;
     }
     let type: Object = (json as Record<string, Object>)['type'];
-    if (typeof type !== 'string' || type !== 'response.completed') {
+    // response.incomplete（max_output_tokens）同样带 usage，不能漏记
+    if (typeof type !== 'string' ||
+      ((type as string) !== 'response.completed' && (type as string) !== 'response.incomplete')) {
       return null;
     }
     let resp: Object = (json as Record<string, Object>)['response'];
@@ -1087,13 +1096,29 @@ export function extractAnthropicUsage(sseData: string): Record<string, Object> |
     if (typeof json !== 'object' || json === null) {
       return null;
     }
-    let type: Object = (json as Record<string, Object>)['type'];
-    if (typeof type !== 'string' || type !== 'message_delta') {
+    let rec: Record<string, Object> = json as Record<string, Object>;
+    let type: Object = rec['type'];
+    if (typeof type !== 'string') {
       return null;
     }
-    let usage: Object = (json as Record<string, Object>)['usage'];
-    if (typeof usage === 'object' && usage !== null) {
-      return usage as Record<string, Object>;
+    let typeStr: string = type as string;
+    // Anthropic 流式 usage 分两处：message_start.message.usage 带输入（含缓存读写），
+    // message_delta.usage 带输出。只读 message_delta 会把输入 token 整段漏掉。
+    if (typeStr === 'message_start') {
+      let message: Object = rec['message'];
+      if (typeof message === 'object' && message !== null) {
+        let usage: Object = (message as Record<string, Object>)['usage'];
+        if (typeof usage === 'object' && usage !== null) {
+          return usage as Record<string, Object>;
+        }
+      }
+      return null;
+    }
+    if (typeStr === 'message_delta') {
+      let usage: Object = rec['usage'];
+      if (typeof usage === 'object' && usage !== null) {
+        return usage as Record<string, Object>;
+      }
     }
     return null;
   } catch (e) {
@@ -1203,6 +1228,9 @@ export class ChatService {
     // 深度思考累积 + 请求起始时间(用于由 usage 派生 token 速度)
     let fullReasoning: string = '';
     let startTime: number = Date.now();
+    // 一次请求内合并所有 usage 事件（Anthropic 输入/输出分属两条事件）
+    let lastUsage: Record<string, Object> | null = null;
+    let streamSucceeded: boolean = false;
     // 工具调用累积(本地联网搜索 search_web 等强制注入的 function tool)
     let callAcc: ToolCallAccumulator = new ToolCallAccumulator();
     let sseAdapter: SSEProtocolAdapter = SSEAdapterFactory.build(protocol, callAcc);
@@ -1240,7 +1268,8 @@ export class ChatService {
         reasoningItems = appendReasoningItem(reasoningItems, itemJson);
       };
       ctx.onUsage = (usageObj: Record<string, Object> | null): void => {
-        let stats: number[] = deriveStreamStats(usageObj, Date.now() - startTime);
+        lastUsage = UsagePricing.mergeUsage(lastUsage, usageObj);
+        let stats: number[] = deriveStreamStats(lastUsage, Date.now() - startTime);
         callbacks.onUsage(stats[0], stats[1]);
       };
       sseAdapter.handleLine(sseData, ctx);
@@ -1395,6 +1424,7 @@ export class ChatService {
           }
         });
       });
+      streamSucceeded = true;
       // 结构化产出: 累积的工具调用/思考块签名随流结束返回给调用方
       streamResult.toolCalls = ChatService.normalizeChatToolCalls(callAcc.calls);
       streamResult.thinkingSignature = thinkingSignature;
@@ -1428,6 +1458,18 @@ export class ChatService {
       if (!aborted) {
         callbacks.onDone(acc.fullContent);
       }
+    }
+    // 只有真正跑完的成功响应才记账：失败请求没有可计费 usage，也不该污染统计。
+    // record 内部整体 try/catch，写盘失败不会影响聊天主流程。
+    if (streamSucceeded && !aborted && failedMsg === '') {
+      UsageService.record({
+        baseUrl: config.baseUrl,
+        model: config.model,
+        protocol: protocol,
+        startedAt: startTime,
+        usage: lastUsage,
+        sessionId: config.sessionId
+      });
     }
     return streamResult;
   }
