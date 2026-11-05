@@ -1691,6 +1691,44 @@ check(
     mod.dropzoneCopy('workspace').includes('导入当前会话工作区')
 )
 
+// --- 交互模式文本截断（未转义引号 / 全角标点 / 缺逗号） ---
+//
+// 事故形状：卡片副标题只渲染出前半截，后面的字整段消失。根因不是 CSS 裁切，
+// 而是模型把字符串内部的引号原样写出来（或把逗号/括号写成全角）时，词法器在
+// 中间提前收口，后面的中文因为「不在字符串里」被跳过。这一组按真实渲染路径钉住。
+console.log('\n33. 交互模式文本截断（解析容错）')
+const repair = mod.renderRepairProbes()
+const repairText = (name) => decode(repair[name])
+check(
+  '未转义引号：副标题后半截仍然渲染（不再停在第一个内部引号）',
+  repairText('unescapedQuote').includes('实际') &&
+    repairText('unescapedQuote').includes('数据 · 来自 sales.csv')
+)
+check(
+  '全角等号/括号/引号/逗号：程序能被识别，标题与副标题都完整',
+  repairText('fullwidth').includes('季度销售复盘') &&
+    repairText('fullwidth').includes('2024 全年 · 数据来自 workspace/sales.csv')
+)
+check(
+  '少写逗号：下一个参数不会被前进一格吃掉',
+  repairText('missingComma').includes('2024 全年 · 数据来自 workspace/sales.csv')
+)
+check(
+  '成对内部引号：两段引文都保留（X1 / X2 与后半句都在）',
+  repairText('pairedQuotes').includes('X1') &&
+    repairText('pairedQuotes').includes('X2') &&
+    repairText('pairedQuotes').includes('对比 · 来自 sales.csv')
+)
+check(
+  '合法中文引号不被过度转义（“你好”原样保留）',
+  repairText('chineseQuotes').includes('他说“你好”，然后走了') &&
+    !repairText('chineseQuotes').includes('\\“')
+)
+check(
+  '全角写法的程序能被 GuncatUiParts 认成界面（不是当普通文字）',
+  mod.inspectUiParts('root ＝ Card（[h]）\nh ＝ CardHeader（“标题”，"副标题后半截")').hasUi === true
+)
+
 console.log(`\n渲染验证：通过 ${passed} 项，失败 ${failed} 项`)
 if (failed > 0) {
   console.log('失败项：')

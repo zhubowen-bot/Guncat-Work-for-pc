@@ -23,6 +23,7 @@ import {
   UiFragment
 } from './GuncatUiLang';
 import { GuncatUiLibrary } from './GuncatUiLibrary';
+import { GuncatUiSourceRepair } from './GuncatUiSourceRepair';
 import { GuncatUiTrailer, GuncatUiSplit } from './GuncatUiRuntime';
 
 export class GuncatUiSegType {
@@ -173,7 +174,7 @@ export class GuncatUiParts {
       }
       if (GuncatUiParts.statementLine(line)) {
         hits++;
-        if (line.indexOf('root') === 0) {
+        if (GuncatUiSourceRepair.normalizeStructure(line).indexOf('root') === 0) {
           rootHit = true;
         }
         if (hits >= 2) {
@@ -201,6 +202,8 @@ export class GuncatUiParts {
 
   // `name = Component(` 形态; 组件名必须是库内已知组件, 避免把散文里的 `x = Y(` 误当程序
   private static statementLine(line: string): boolean {
+    // 全角括号/等号先归一, 否则 `root = Card（[...]）` 这类写法会被判成纯文本
+    line = GuncatUiSourceRepair.normalizeStructure(line);
     let eq: number = line.indexOf('=');
     if (eq <= 0) {
       return false;

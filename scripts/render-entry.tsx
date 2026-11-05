@@ -1047,6 +1047,54 @@ export function renderAssistantBody(content: string): string {
   )
 }
 
+/**
+ * 交互模式文本截断回归用例（用户报障：副标题只显示前半截）。
+ *
+ * 根因在解析层：模型偶发把字符串内部的引号原样写出、或把逗号/括号写成全角，
+ * 词法器会在中间提前收口，后面的字被当代码丢掉。这里按真实渲染路径（GuncatUiBlock）
+ * 把几类典型坏写法各渲染一次，断言后半截文字确实出现在产物里。
+ */
+export function renderRepairProbes(): Record<string, string> {
+  const probes: Record<string, string> = {
+    // 字符串内部有未转义的双引号：旧实现停在「实际」之前
+    unescapedQuote: [
+      'root = Card([h])',
+      'h = CardHeader("季度销售复盘", "2024 Q3 "实际" 数据 · 来自 sales.csv")'
+    ].join('\n'),
+    // 全角引号 / 逗号 / 括号 / 等号：旧实现参数错位甚至整块不认
+    fullwidth: [
+      'root ＝ Card（[h]）',
+      'h ＝ CardHeader（“季度销售复盘”，"2024 全年 · 数据来自 workspace/sales.csv"）'
+    ].join('\n'),
+    // 少写逗号：旧实现会把下一个参数前进一格吃掉
+    missingComma: [
+      'root = Card([h])',
+      'h = CardHeader("季度销售复盘" "2024 全年 · 数据来自 workspace/sales.csv")'
+    ].join('\n'),
+    // 成对内部引号：既要补齐后半截, 也不能把合法的中文引号误伤
+    pairedQuotes: [
+      'root = Card([h])',
+      'h = CardHeader("季度销售复盘", "型号 "X1" 与 "X2" 对比 · 来自 sales.csv")'
+    ].join('\n'),
+    // 这是合法文本, 用来防止修复层过度转义
+    chineseQuotes: [
+      'root = Card([h])',
+      'h = CardHeader("季度销售复盘", "他说“你好”，然后走了 · 来自 sales.csv")'
+    ].join('\n')
+  }
+  const out: Record<string, string> = {}
+  for (const name of Object.keys(probes)) {
+    out[name] = renderToStaticMarkup(
+      createElement(GuncatUiBlock, {
+        content: probes[name],
+        interactive: true,
+        onSend: () => {}
+      })
+    )
+  }
+  return out
+}
+
 /** 排查用：空态（说明文案对不对齐原版，全靠这里看） */
 export function renderEmptyState(mode: string, engine: unknown): string {
   return renderToStaticMarkup(

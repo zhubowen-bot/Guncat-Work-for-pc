@@ -24,6 +24,11 @@
 //   - 未定义的引用不会让整块失败, 只是该值暂时为 null(等定义流进来再出现);
 //   - 组件必需参数缺失或类型不符时**不丢弃组件**, 用安全默认值渲染并在 errors 里记录
 //     (聊天场景里"少一个字段"远好于"整块消失")。
+//
+// 源码修复(UiSourceRepair)在这三条之前: 模型偶发的未转义引号/全角标点会先把字符串
+// 从中间截断, 后面的字被词法器当未知字符丢掉 —— 表现为"卡片副标题只显示前半截"。
+// 修复在词法分析之前把引号与结构标点修回合法形态, 正文内容不改。
+import { GuncatUiSourceRepair } from './GuncatUiSourceRepair';
 
 // ===== 限额(防畸形程序撑爆渲染) =====
 export class UiLimits {
@@ -299,36 +304,23 @@ export class UiLexer {
         continue;
       }
       if (c === '\'') {
+        let start: number = i;
         i++;
-        let out: string = '';
+        let closed: boolean = false;
         while (i < n) {
           let ch: string = src.charAt(i);
           if (ch === '\\') {
-            i++;
-            if (i < n) {
-              let esc: string = src.charAt(i);
-              if (esc === '\'') {
-                out = out + '\'';
-              } else if (esc === '\\') {
-                out = out + '\\';
-              } else if (esc === 'n') {
-                out = out + '\n';
-              } else if (esc === 't') {
-                out = out + '\t';
-              } else {
-                out = out + esc;
-              }
-              i++;
-            }
+            i += 2;
           } else if (ch === '\'') {
             i++;
+            closed = true;
             break;
           } else {
-            out = out + ch;
             i++;
           }
         }
-        toks.push(UiToken.text(UiTk.STR, out, i));
+        let raw: string = src.substring(start, i);
+        toks.push(UiToken.text(UiTk.STR, UiLexer.decodeSingleQuoted(raw, closed), i));
         continue;
       }
       if (c === '-') {
@@ -417,25 +409,65 @@ export class UiLexer {
     return toks;
   }
 
-  // 双引号字符串: 优先按 JSON 解码(支持 \n \t \" \\ \uXXXX), 失败则退化为剥引号
+  // 双引号字符串解转义。原先优先 JSON.parse、失败就原样剥引号, 有两个问题:
+  //   · 模型写 `"C:\Users\a"` 这类 Windows 路径时 JSON.parse 失败, 反斜杠会原样留在正文里;
+  //   · 修复层给内部引号补的 `\"` 在 JSON.parse 失败时不会被还原, 用户会看到多余的斜杠。
+  // 现在统一走手写解码: 已知转义还原, 未知转义(路径/正则里的 \d \U)保留反斜杠,
+  // 既不吞字也不把正文改坏。
   private static decodeDoubleQuoted(raw: string, closed: boolean): string {
-    let candidate: string = closed ? raw : raw + '"';
-    try {
-      let parsed: Object = JSON.parse(candidate) as Object;
-      if (typeof parsed === 'string') {
-        return parsed as string;
+    return UiLexer.decodeQuoted(raw, '"', closed);
+  }
+
+  private static decodeSingleQuoted(raw: string, closed: boolean): string {
+    return UiLexer.decodeQuoted(raw, '\'', closed);
+  }
+
+  private static decodeQuoted(raw: string, quote: string, closed: boolean): string {
+    let start: number = raw.length > 0 && raw.charAt(0) === quote ? 1 : 0;
+    let end: number = raw.length;
+    if (closed && end > start && raw.charAt(end - 1) === quote) {
+      end--;
+    }
+    let out: string = '';
+    for (let i: number = start; i < end; i++) {
+      let c: string = raw.charAt(i);
+      if (c !== '\\' || i + 1 >= end) {
+        out = out + c;
+        continue;
       }
-    } catch (e) {
-      // 落到下面的宽松解码
+      let esc: string = raw.charAt(++i);
+      if (esc === '"') {
+        out = out + '"';
+      } else if (esc === '\'') {
+        out = out + '\'';
+      } else if (esc === '\\') {
+        out = out + '\\';
+      } else if (esc === 'n') {
+        out = out + '\n';
+      } else if (esc === 't') {
+        out = out + '\t';
+      } else if (esc === 'r') {
+        out = out + '\r';
+      } else if (esc === 'b') {
+        out = out + '\b';
+      } else if (esc === 'f') {
+        out = out + '\f';
+      } else if (esc === '/') {
+        out = out + '/';
+      } else if (esc === 'u' && i + 4 < end) {
+        let hex: string = raw.substring(i + 1, i + 5);
+        if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+          out = out + String.fromCharCode(parseInt(hex, 16));
+          i += 4;
+        } else {
+          out = out + '\\u';
+        }
+      } else {
+        // 未知转义原样保留: Windows 路径、正则、模型自造的 \x 不该被吃掉
+        out = out + '\\' + esc;
+      }
     }
-    let body: string = raw;
-    if (body.length > 0 && body.charAt(0) === '"') {
-      body = body.substring(1);
-    }
-    if (body.length > 0 && body.charAt(body.length - 1) === '"') {
-      body = body.substring(0, body.length - 1);
-    }
-    return body;
+    return out;
   }
 }
 
@@ -663,6 +695,7 @@ export class UiParser {
       return node;
     }
     while (this.cur().t !== UiTk.RP && this.cur().t !== UiTk.EOF) {
+      let before: number = this.pos;
       let arg: UiAst = this.parseExpr(0);
       if (node.items.length < UiLimits.MAX_ARRAY) {
         node.items.push(arg);
@@ -670,8 +703,13 @@ export class UiParser {
       if (this.cur().t === UiTk.COMMA) {
         this.adv();
       } else if (this.cur().t !== UiTk.RP && this.cur().t !== UiTk.EOF) {
-        // 缺逗号: 参考实现会在碰到 ) 时停止; 这里前进一格防止死循环
-        this.adv();
+        // 缺逗号: 下一个表达式本身就是下一个参数, 不能像以前那样前进一格把它丢掉。
+        // 以前的写法会把 `CardHeader("标题" "副标题")` 的副标题、以及全角逗号
+        // 未被识别时的下一个参数整段吞掉 —— 用户看到的正是「后半截文字消失」。
+        // 只有在 parseExpr 完全没有前进时才手动前进, 防止死循环。
+        if (this.pos === before) {
+          this.adv();
+        }
       }
     }
     this.eat(UiTk.RP);
@@ -684,6 +722,7 @@ export class UiParser {
     this.eat(UiTk.LB);
     this.depth++;
     while (this.cur().t !== UiTk.RB && this.cur().t !== UiTk.EOF) {
+      let before: number = this.pos;
       let item: UiAst = this.parseExpr(0);
       if (node.items.length < UiLimits.MAX_ARRAY) {
         node.items.push(item);
@@ -691,7 +730,9 @@ export class UiParser {
       if (this.cur().t === UiTk.COMMA) {
         this.adv();
       } else if (this.cur().t !== UiTk.RB && this.cur().t !== UiTk.EOF) {
-        this.adv();
+        if (this.pos === before) {
+          this.adv();
+        }
       }
     }
     this.eat(UiTk.RB);
@@ -1185,7 +1226,11 @@ export class GuncatUiLang {
       text = text.substring(0, UiLimits.MAX_SOURCE);
       program.errors.push('界面程序过长, 已截断到 ' + UiLimits.MAX_SOURCE.toString() + ' 字符');
     }
-    let cleaned: string = UiPreprocess.stripComments(text).trim();
+    // 先修源码再剥注释: 未转义引号会让后面的 `#` / `//` 被误当成注释, 从而整行截断。
+    // 修复层只调换引号/标点, 不碰字符串正文; 分号等结构字符的长度可能变化,
+    // 但 parse 不依赖源码偏移, 所以可以在这一步做完整修复。
+    let repaired: string = GuncatUiSourceRepair.repair(text);
+    let cleaned: string = UiPreprocess.stripComments(repaired).trim();
     if (cleaned === '') {
       return program;
     }
@@ -1454,7 +1499,7 @@ export class GuncatUiLang {
   static hasRootLine(text: string): boolean {
     let lines: string[] = text.split('\n');
     for (let i: number = 0; i < lines.length && i < 80; i++) {
-      let line: string = lines[i].trim();
+      let line: string = GuncatUiSourceRepair.normalizeStructure(lines[i].trim());
       if (line.indexOf('root') === 0 && line.length > 4 && line.charAt(4) === ' ') {
         let eq: number = line.indexOf('=');
         if (eq > 0) {
@@ -1470,6 +1515,8 @@ export class GuncatUiLang {
 
   // 单行形如 `name = ComponentName(` 或 `$name = ...`
   private static statementLine(line: string): boolean {
+    // 全角括号/等号先在判断层归一: 程序检测不能因为模型把 `(` 写成 `（` 就整块不认
+    line = GuncatUiSourceRepair.normalizeStructure(line);
     let eq: number = line.indexOf('=');
     if (eq <= 0) {
       return false;
@@ -1530,7 +1577,9 @@ export class GuncatUiLang {
 
   // 流式中间态: 返回末尾未写完的部分(供"生成中"占位判断)
   static lastPartial(source: string): string {
-    let cleaned: string = UiPreprocess.stripComments(source).trim();
+    let cleaned: string = UiPreprocess.stripComments(
+      GuncatUiSourceRepair.repair(source)
+    ).trim();
     if (cleaned === '') {
       return '';
     }
@@ -2556,7 +2605,16 @@ export class GuncatUiCoerce {
       }
       if (typeof raw === 'string') {
         let s: string = raw as string;
-        return s.length > UiLimits.MAX_TEXT ? s.substring(0, UiLimits.MAX_TEXT) : s;
+        if (s.length <= UiLimits.MAX_TEXT) {
+          return s;
+        }
+        // 截断点落在代理对中间时退一格, 避免把一个完整字符劈成两个替换符
+        let cut: number = UiLimits.MAX_TEXT;
+        let code: number = s.charCodeAt(cut - 1);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+          cut--;
+        }
+        return s.substring(0, cut);
       }
       return GuncatUiMaterializer.toStr(raw);
     }
