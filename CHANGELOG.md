@@ -8,7 +8,7 @@
 
 ---
 
-## 未发布
+## 7.3.0（2026-11-09）
 
 ### 个性化指令：按生效范围拼进系统提示词
 
@@ -64,6 +64,15 @@
   以及电脑版与鸿蒙版的实现差异（资源位置 `resources/`、设置入口、基础工具多一个 `docx_render`）；
   导出脚本 `scripts/dump-interactive-tiers.mjs` 用 esbuild 从真实模块组装，改代码或档位主体后重跑即可刷新，
   脚本自带轻简档逐字节、段拼接、缺主体抛错三道自检。交互模式回归仍走 `npm run smoke:core` 的界面语言链路。
+
+### 验证
+
+- `npm run typecheck:node` / `typecheck:web` 通过。
+- `npm run smoke` 全过：`guard-corpus` 43 项、`run-smoke` 218 项、`usage-check` 68 项、
+  `render-check` 359 项、`ipc-check` 549 项、`startup-check` 150 项；`check-emoji` 无违规字符。
+  其中 `run-smoke` / `ipc-check` 覆盖个性化指令与能力调度九档回归。
+- 版本号 **7.3.0**；`npm run dist:setup` 重新打包：`release/Guncat-Work-7.3.0-setup.exe`
+  （104.6 MB；应用载荷 103.3 MB，解压后 385.5 MB）。
 
 ---
 
