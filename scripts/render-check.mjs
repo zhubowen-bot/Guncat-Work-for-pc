@@ -1437,9 +1437,13 @@ check(
   selectedTierName === '' ? '未找到选中行' : `选中「${selectedTierName}」`
 )
 check(
-  '能力调度页不再出现臆断文案（不写死交互模式、不排名档位深浅）',
+  '列表卡标题保持「交互模式」（不改成调度档位）',
+  tierText.includes('交互模式') && !tierText.includes('能力调度档位')
+)
+check(
+  '能力调度页不再出现臆断文案（不提只影响交互模式、不排名档位深浅）',
   !tierHtml.includes('settings-tier-intro') &&
-    ['交互模式', '档位越靠后', '提示词越长', '思考越深', '首答', '效果更好',
+    ['档位越靠后', '提示词越长', '思考越深', '首答', '效果更好',
       '只影响交互模式', '工作模式与聊天模式不受影响'].every(
       (word) => !tierText.includes(word)
     ),

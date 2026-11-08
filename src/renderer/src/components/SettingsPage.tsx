@@ -388,7 +388,7 @@ const SETTINGS_NAV: Array<{ label: string; items: SettingsTab[] }> = [
         id: 'tier',
         label: '能力调度',
         title: '能力调度',
-        description: '选择使用的提示词与工具面档位。',
+        description: '',
         icon: <IconInteractive size={16} />
       },
       {
@@ -902,7 +902,7 @@ export function SettingsPage({ open: openOverride, initialTab }: SettingsPagePro
           <div className="settings-content">
             <div className="settings-content__head">
               <h2>{active.title}</h2>
-              <p>{active.description}</p>
+              {active.description !== '' ? <p>{active.description}</p> : null}
             </div>
 
             <div className="settings-form">
@@ -1122,7 +1122,7 @@ export function SettingsPage({ open: openOverride, initialTab }: SettingsPagePro
 
               {activeTab === 'tier' ? (
                 <>
-                  <SettingsCard title="能力调度档位" description="共九档，默认轻简；点击立即切换。">
+                  <SettingsCard title="交互模式" description="共九档，默认轻简；点击立即切换。">
                     <div className="settings-choice-list">
                       {InteractiveTiers.ALL.map((tier) => {
                         const selected = tier.id === interactiveTier
