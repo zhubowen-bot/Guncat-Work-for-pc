@@ -1347,9 +1347,10 @@ check(
     !settingsText.includes('所有更改已自动保存')
 )
 check(
-  '七个分类都在左侧导航：模型 / 高级参数 / 搜索 / 多模态 / 用量 / 朗读 / 语音输入',
+  '八个分类都在左侧导航：模型 / 高级参数 / 能力调度 / 搜索 / 多模态 / 用量 / 朗读 / 语音输入',
   settingsText.includes('模型配置') &&
     settingsText.includes('高级模型参数') &&
+    settingsText.includes('能力调度') &&
     settingsText.includes('本地联网搜索') &&
     settingsText.includes('多模态解析') &&
     settingsText.includes('用量与成本') &&
@@ -1393,6 +1394,60 @@ check(
   '模型配置页底部就是原版 completions 那一段接入提示',
   settingsText.includes('通用API接入方式') &&
     settingsText.includes('建议切换 Responses API 或 Anthropic API 选项')
+)
+
+// --- 能力调度（设置 →「模型与能力」→「能力调度」，交互模式九档） ---
+console.log('\n30c. 设置页 · 能力调度（交互模式九档）')
+const tierHtml = mod.renderSettingsTier()
+const tierText = decode(tierHtml)
+const TIER_NAMES = ['轻简', '效率', '专家', '经典', '论文转换', '法律检索', '深度研究', '信息筛滤', 'LLM评估']
+check(
+  '能力调度页整体可渲染（说明卡 + 九档列表 + 脚注）',
+  tierHtml.includes('settings-choice-list') &&
+    tierHtml.includes('settings-tier-intro') &&
+    tierHtml.includes('settings-card')
+)
+check(
+  '九档名称全部渲染',
+  TIER_NAMES.every((name) => tierText.includes(name)),
+  TIER_NAMES.filter((name) => !tierText.includes(name)).join(',') || '9/9'
+)
+check(
+  '每档都带定位与说明（不是只有名字）',
+  [
+    '通用调度策略·轻量快速',
+    '通用调度策略·高效全能',
+    '通用调度策略·超级全能',
+    '通用调度策略·轻量详尽',
+    '专家能力调度·论文转换',
+    '专家能力调度·法律检索',
+    '专家能力调度·深度研究',
+    '专家能力调度·信息筛滤',
+    '专家能力调度·LLM评估'
+  ].every((s) => tierText.includes(s)) &&
+    tierText.includes('默认零工具、思考较短') &&
+    tierText.includes('法律事务专家')
+)
+const selectedTierName =
+  /<button[^>]*data-active="true"[^>]*>[\s\S]*?settings-choice__name">([^<]+)</.exec(tierHtml)?.[1] ?? ''
+check(
+  '恰好一个档位处于选中态，且默认是轻简',
+  (tierHtml.match(/aria-pressed="true"/g) ?? []).length === 1 &&
+    (tierHtml.match(/class="settings-choice" data-active="true"/g) ?? []).length === 1 &&
+    tierHtml.includes('settings-choice__check') &&
+    selectedTierName === '轻简',
+  selectedTierName === '' ? '未找到选中行' : `选中「${selectedTierName}」`
+)
+check(
+  '切档说明与"只影响交互模式"的边界都写清楚',
+  tierText.includes('切换档位会把思考强度调到该档推荐值') &&
+    tierText.includes('档位只影响交互模式') &&
+    tierText.includes('工作模式与聊天模式不受影响')
+)
+check(
+  '默认仍落在模型配置（能力调度列表不在首帧 DOM 里）',
+  !settingsHtml.includes('settings-choice'),
+  '设置页打开顺序不变'
 )
 
 // --- 用量与成本页（独立页面：汇总 / 筛选 / 指标 / 两个服务商卡片 / 预算 / 说明） ---

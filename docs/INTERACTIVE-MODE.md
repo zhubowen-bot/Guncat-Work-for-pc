@@ -8,8 +8,13 @@
 ```text
 用户：一句话
   └─ 主进程 SessionManager.runWork(mode='interactive')
-       ├─ AgentLoopService.buildWorkSystemPromptFor('interactive')
-       │    （行为纪律：默认零工具、一轮直出；工具面物理裁剪 45 → 27）
+       │  （能力调度档位来自 SessionManager.interactiveTier，持久化键 guncat_interactive_tier；默认 lite）
+       ├─ AgentLoopService.buildWorkSystemPromptFor('interactive', tier)
+       │    └─ InteractiveTierPrompt.assemble(tier, body, skills, toolIndex)   ← 单一事实源
+       │         （档位声明 + 界面语言契约 + 档位主体 resources/interactive-tier-*.md
+       │           + 环境工具底座 + 交付形态职责；轻简档无主体段）
+       ├─ AgentLoopService.toolDefsForMode(mode, webSearchEnabled, tier)
+       │    （工具面物理裁剪 45 → 28 个基础白名单工具，档位再追加 record_search / todo_write）
        └─ 模型流式输出 guncat-ui lang 程序
             └─ 逐 token 推给渲染进程（message:patched 事件）
                  └─ 渲染进程 MessageView
@@ -19,8 +24,35 @@
                            ├─ GuncatUiLang.parse(source)    解析成语句 + AST
                            ├─ GuncatUiState.of(program, saved)  绑定值（含尾标记恢复）
                            ├─ GuncatUiLang.render(program, values)  按当前绑定值物化元素树
-                           └─ renderNode(root) → React 组件树（76 个组件）
+                           └─ renderNode(root) → React 组件树（77 个注册组件）
 ```
+
+### 系统提示词的分层组装（7.3 起 · 能力调度）
+
+交互模式的系统提示词不再是一份写死的四段拼接，而是由 `InteractiveTierPrompt` 按「能力调度」档位**分层组装**：
+
+| 层 | 内容 | 来源 | 是否按档变化 |
+| --- | --- | --- | --- |
+| ① 档位声明 | 身份 / 第一纪律 / 工具面与思考政策 / 丰富度口径（整段唯一的一级标题） | 轻简＝`PromptBuilder.interactivePrime()` 原文；八档＝`InteractiveTierPrompt.tierPrime()` 生成 | 是 |
+| ② 界面语言契约 | 身份与输出形态 / 语法 / 组件清单 / 丰富度 / 交互闭环 / 流式顺序 / 示例 / 反例 | `GuncatUiPrompt` + `GuncatUiLibrary` | 仅丰富度的**数量口径**按档替换（轻简 8~14 够用、八档 12~20+ 不设上限），其余逐字节共用 |
+| ③ 档位主体 | 原聊天引擎提示词的业务灵魂（角色 / 思维链 / 工具方法论 / 反幻觉 / 工作流 / 输出模板 / 知识库） | `resources/interactive-tier-*.md`（轻简没有） | 是 |
+| ④ 环境工具底座 | 工作区 / 本档工具面 / 真实数据纪律 / 技能极小索引 | `InteractiveTierPrompt.workspace()` / `tools()` / `truth()`、`SkillDirectoryFormatter` | 工作区与工具面按档参数化，其余共用 |
+| ⑤ 交付形态职责 | 程序之外不写文字 / 往丰富一侧 / 冲突裁决（最后解释权） | 轻简＝`GuncatUiPrompt.INTERACTIVE_DUTY` 原文；八档＝`InteractiveTierPrompt.duty()` | 是 |
+
+- **轻简档就是原来的交互模式提示词**：`assemble('lite', '', ...)` 的 15 段与旧的
+  `PromptBuilder.assembleInteractiveSystemPrompt(...)` **逐字节一致**，`scripts/dump-interactive-tiers.mjs`
+  里有断言；所以能力调度上线不改变默认档行为与速度。
+- **其余八档 = 共享层 + 档位主体**：主体 md 由 `AgentLoader.loadInteractiveTierPrompts()` 启动时读入
+  `InteractiveTierPrompts`，缺失 / 为空时运行时回退轻简档，不会交付"空壳档位"。
+- **工具面只增不删**：基础 28 个工具（`ToolRegistry.INTERACTIVE_TOOL_WHITELIST`，比鸿蒙版多一个
+  `docx_render`）不因档位变化；检索 / 多阶段档位在此基础上追加 `record_search`（效率 / 专家 / 经典 /
+  法律 / 研究 / 筛滤 / 评估）与 `todo_write`（专家 / 法律 / 研究 / 评估），`goal_*` / `schedule_*` /
+  `subagent` / `session_search` 等长程维护类工具仍然**任何档位都不下发**。
+- **切换位置**：设置 →「模型与能力」→「能力调度」九档单选（默认轻简）。选择落盘后由主进程
+  `SessionManager.saveString` 同步运行态，**下一轮请求**生效；切档会把交互模式思考强度同步到该档推荐值，
+  之后仍可手动改。
+- **可核对**：九档组合后的完整提示词由 `node scripts/dump-interactive-tiers.mjs` 从真实模块导出到
+  `docs/prompts/interactive-tiers/`，适配规则见 [docs/prompts/interactive-tier-adaptation.md](prompts/interactive-tier-adaptation.md)。
 
 **用户操作回流**（拖动滑块 / 点按钮）：
 
@@ -42,19 +74,20 @@
 | 模块 | 职责 |
 | --- | --- |
 | `GuncatUiLang.ts` | 词法 / 语法 / 自动补全括号 / 物化求值 / 围栏切分 |
-| `GuncatUiLibrary.ts` | 76 个组件的签名与位置参数表（**单一事实源**：同时驱动提示词、解析、渲染合法性） |
+| `GuncatUiLibrary.ts` | 77 个注册组件（提示词清单可见 75 个）的签名与位置参数表（**单一事实源**：同时驱动提示词、解析、渲染合法性） |
 | `GuncatUiRuntime.ts` | `$绑定`状态、动作执行、控件取值、状态尾标记、回传给模型的人话描述 |
 | `GuncatUiParts.ts` | 把消息正文切成「Markdown 文本片段 + 界面程序片段」 |
 | `GuncatUiPaint.ts` | 图表几何（比例尺 / 路径生成 / 雷达 / 楔形）、调色板、数值格式化 |
-| `GuncatUiPrompt.ts` | 交互模式系统提示词 |
+| `GuncatUiPrompt.ts` | 交互模式界面语言契约与丰富度口径 |
+| `InteractiveTierPrompt.ts` / `InteractiveTiers.ts` / `InteractiveTierPrompts.ts` | 能力调度九档：档位元数据、分层组装（16 段骨架）、档位主体注册表（提示词随 `resources/interactive-tier-*.md` 走） |
 
 **桌面端新写的部分**（把 ArkUI 的「画」换成 DOM + SVG）：
 
 | 文件 | 职责 |
 | --- | --- |
 | `renderer/src/guncat-ui/GuncatUiBlock.tsx` | 顶层块：解析、持有绑定值、重物化、状态回写、只读态 |
-| `renderer/src/guncat-ui/nodes.tsx` | 元素树 → React 组件树的分派器（覆盖全部 76 个组件） |
-| `renderer/src/guncat-ui/charts.tsx` | 8 种图表用 SVG 绘制，几何复用 `GuncatUiPaint` |
+| `renderer/src/guncat-ui/nodes.tsx` | 元素树 → React 组件树的分派器（覆盖全部 77 个注册组件） |
+| `renderer/src/guncat-ui/charts.tsx` | 9 种图表用 SVG 绘制，几何复用 `GuncatUiPaint` |
 | `renderer/src/guncat-ui/guncat-ui.css` | 与主应用共用 CSS 变量，深浅色自动适配 |
 
 > 上游 `views/GuncatUiView.ets`(2807 行) + `GuncatUiCharts.ets` + `GuncatUiIcons.ets`
@@ -62,21 +95,21 @@
 
 ## 3. 组件覆盖
 
-76 个组件按 9 组全部实现：
+77 个注册组件（提示词清单可见 75 个，`FollowUpBlock` / `FollowUpItem` 为接口兜底组件）按 9 组全部实现：
 
 | 分组 | 数量 | 代表 |
 | --- | --- | --- |
 | 根与内容 | 15 | `Card` / `CardHeader` / `TextContent` / `MarkDownRenderer` / `Callout` / `CodeBlock` / `ImageGallery` / `EntityList` |
 | 布局 | 9 | `Tabs` / `Accordion` / `Steps` / `Carousel` / `SectionBlock` |
 | 表格与数据 | 2 | `Table` / `Col` |
-| 图表 | 8 | `BarChart` / `LineChart` / `AreaChart` / `HorizontalBarChart` / `PieChart` / `RadialChart` / `SingleStackedBarChart` / `Series` |
+| 图表 | 9 | `BarChart` / `LineChart` / `AreaChart` / `HorizontalBarChart` / `PieChart` / `RadialChart` / `RadarChart` / `SingleStackedBarChart` / `Series` |
 | 指标与文本 | 6 | `Text` / `IconText` / `ImageText` / `MetricIndicatorInline` |
 | 卡片块 | 10 | `OverviewCardBlock` / `SnippetCardBlock` / `ContextCardBlock` / `CompositeCardBlock` / `VisualCardBlock` |
 | 列表与追问 | 4 | `ListBlock` / `FollowUpBlock` |
 | 表单 | 18 | `Form` / `FormControl` / `Slider` / `Select` / `RadioGroup` / `CheckBoxGroup` / `SwitchGroup` / `Chips` / `OptionCards` / `DatePicker` |
 | 按钮与图标 | 4 | `Button` / `Buttons` / `IconButton` / `Icon` |
 
-> 组件清单不是手抄的，而是用 `pnpm dump:components` 从 `GuncatUiLibrary` 直接导出，
+> 组件清单不是手抄的，而是用 `npm run dump:components` 从 `GuncatUiLibrary` 直接导出，
 > 保证「模型看到的」= 「我们解析的」= 「我们能画的」三者一致。
 
 ## 4. 容错设计（继承上游并保留）
@@ -92,11 +125,12 @@
 
 ## 5. 验证
 
-交互模式有两层无头验证，都不依赖 Electron 窗口：
+交互模式有无头验证，都不依赖 Electron 窗口：
 
 ```bash
-pnpm smoke:core     # 68 项，其中 13 组是交互模式逻辑链
-pnpm smoke:render   # 26 项，React SSR 渲染断言
+npm run smoke:core     # 188 项，其中 13 组是交互模式逻辑链（含能力调度九档）
+npm run smoke:render   # 344 项，React SSR 渲染断言（含设置页能力调度九档）
+node scripts/dump-interactive-tiers.mjs   # 九档系统提示词导出（含轻简档逐字节断言）
 ```
 
 `smoke:core` 第 13 组覆盖：程序解析、入口解析、`$变量`收集、表达式求值、
@@ -108,3 +142,9 @@ pnpm smoke:render   # 26 项，React SSR 渲染断言
 逐项断言卡片标题、`$绑定`求值结果、指标卡、趋势方向、滑块默认值、图表 SVG 与图例、
 表格、选项卡、折叠面板、步骤条、标签、Callout 变体、代码块、饼图、键值清单、
 表单与下拉框、只读态置灰标记，以及**正文与界面共存**的组合关系。
+
+`dump-interactive-tiers` 按「能力调度」九档从真实模块组装系统提示词并导出到
+`docs/prompts/interactive-tiers/`（另有轻简预览 `docs/interactive-prompt-preview.md`）。
+脚本自带三道自检：轻简档结果与旧四段组装**逐字节一致**、每档"段拼接 = `assemble()` 结果"、
+档位主体缺失 / 为空直接抛错。适配规则与逐档说明见
+[docs/prompts/interactive-tier-adaptation.md](prompts/interactive-tier-adaptation.md)。

@@ -11,15 +11,18 @@ import type {
 // 面板保存时若把这两个字段存成空串，会把默认的智谱地址与 glm-4.6v-flash 冲掉，
 // 「先行解析附件」随即失效 —— 所以规整时要能拿到这里的默认值（见 normalizeMultimodal）。
 import { Constants } from '@core/common/Constants'
+import { InteractiveTiers } from '@core/common/InteractiveTiers'
 import { useStore } from '../store'
 import { useSpeech } from '../speech/speechStore'
 import {
   IconArrowLeft,
   IconBrain,
   IconChart,
+  IconCheckCircle,
   IconFilter,
   IconGlobe,
   IconImage,
+  IconInteractive,
   IconMic,
   IconSpeaker
 } from '../icons'
@@ -346,6 +349,7 @@ function readSettingsDraft(settings: AppSettingsDto | null): SettingsDraftValues
 type SettingsTabId =
   | 'model'
   | 'advanced'
+  | 'tier'
   | 'search'
   | 'multimodal'
   | 'auto-read'
@@ -379,6 +383,13 @@ const SETTINGS_NAV: Array<{ label: string; items: SettingsTab[] }> = [
         title: '高级模型参数',
         description: '调整采样参数，或为自定义服务商追加请求参数。',
         icon: <IconFilter size={16} />
+      },
+      {
+        id: 'tier',
+        label: '能力调度',
+        title: '能力调度',
+        description: '交互模式使用哪套提示词与工具面；档位越靠后，提示词越长、思考越深。',
+        icon: <IconInteractive size={16} />
       },
       {
         id: 'search',
@@ -516,9 +527,16 @@ export interface SettingsPageProps {
    * 整块不渲染，无头环境就钉不住「首屏默认落在模型配置」这类首帧口径。
    */
   open?: boolean
+  /**
+   * 覆盖首帧所在分类（默认「模型配置」）。
+   * 同样是给 SSR 断言用的：能力调度页的九档列表只在切到该分类时才渲染，
+   * 显式传 'tier' 才能把它的首帧形态（九档 / 选中态 / 说明文案）钉住。
+   * 真实运行时不会传这个参数，打开设置页仍固定回到模型配置。
+   */
+  initialTab?: SettingsTabId
 }
 
-export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
+export function SettingsPage({ open: openOverride, initialTab }: SettingsPageProps = {}) {
   const storeOpen = useStore((s) => s.settingsOpen)
   const open = openOverride ?? storeOpen
   const openSettings = useStore((s) => s.openSettings)
@@ -526,13 +544,16 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
   const settings = useStore((s) => s.settings)
   const reloadSettings = useStore((s) => s.reloadSettings)
   const pushNotice = useStore((s) => s.pushNotice)
+  // 能力调度：当前档位与切档动作都在 store 里（落盘 + 同步该档推荐思考强度由 store 统一做）
+  const interactiveTier = useStore((s) => s.interactiveTier)
+  const setInteractiveTier = useStore((s) => s.setInteractiveTier)
   // 自动朗读的状态与开关都在 speechStore 里（持久化到 reader_enabled），
   // 这里只是把它接到设置页上，避免两处各存一份偏好。
   const autoRead = useSpeech((s) => s.autoRead)
   const setAutoRead = useSpeech((s) => s.setAutoRead)
 
   const [initialForm] = useState(() => readSettingsDraft(useStore.getState().settings))
-  const [activeTab, setActiveTab] = useState<SettingsTabId>('model')
+  const [activeTab, setActiveTab] = useState<SettingsTabId>(initialTab ?? 'model')
   const [draft, setDraft] = useState<ApiConfigDto>(initialForm.draft)
   /** 模型名称输入框：每行一个（也接受逗号分隔），保存时拆成 models 列表 */
   const [modelText, setModelText] = useState(initialForm.modelText)
@@ -1096,6 +1117,54 @@ export function SettingsPage({ open: openOverride }: SettingsPageProps = {}) {
                       />
                     </SettingsField>
                   </SettingsCard>
+                </>
+              ) : null}
+
+              {activeTab === 'tier' ? (
+                <>
+                  {/* 说明卡：解释档位作用与切档时对思考强度的影响
+                      （文案对齐鸿蒙版 SettingsPage 的 tier 详情页） */}
+                  <SettingsCard>
+                    <p className="settings-tier-intro">
+                      能力调度决定交互模式使用哪套提示词与工具面。轻简档直接复用原有交互模式提示词（最快）；
+                      其余档位移植聊天引擎里效果更好的成熟提示词，并按交互模式做了少量适配。
+                      切换档位会把思考强度调到该档推荐值，之后仍可在模型弹层手动调整。
+                    </p>
+                  </SettingsCard>
+
+                  <SettingsCard title="交互模式档位" description="共九档，默认轻简；点击立即切换。">
+                    <div className="settings-choice-list">
+                      {InteractiveTiers.ALL.map((tier) => {
+                        const selected = tier.id === interactiveTier
+                        return (
+                          <button
+                            key={tier.id}
+                            type="button"
+                            className="settings-choice"
+                            data-active={selected}
+                            aria-pressed={selected}
+                            onClick={() => void setInteractiveTier(tier.id)}
+                          >
+                            <span className="settings-choice__copy">
+                              <span className="settings-choice__name">{tier.name}</span>
+                              <span className="settings-choice__tagline">{tier.tagline}</span>
+                              <span className="settings-choice__desc">{tier.description}</span>
+                            </span>
+                            {selected ? (
+                              <span className="settings-choice__check">
+                                <IconCheckCircle size={22} />
+                              </span>
+                            ) : null}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </SettingsCard>
+
+                  <SettingsNote>
+                    档位只影响交互模式，工作模式与聊天模式不受影响。档位越靠后，提示词越长、思考越深，
+                    首答会慢一些，但内容更完整、专业流程更严格。
+                  </SettingsNote>
                 </>
               ) : null}
 

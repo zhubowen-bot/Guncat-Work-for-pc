@@ -26,6 +26,8 @@ import type {
   MessageDto,
   WorkspaceEntryDto
 } from '@ipc/contract'
+// 交互模式「能力调度」的九档元数据（纯逻辑，渲染层只读；提示词与工具面由主进程使用）
+import { InteractiveTiers } from '@core/common/InteractiveTiers'
 
 export interface Notice {
   level: 'info' | 'warn' | 'error'
@@ -51,6 +53,8 @@ export interface PendingAskState {
 // 偏好键（与主进程 Constants 里的键名一致）
 const PREF_EFFORT_WORK = 'guncat_reasoning_effort'
 const PREF_EFFORT_INTERACTIVE = 'guncat_interactive_effort'
+// 与主进程 Constants.LS_KEY_INTERACTIVE_TIER 同值（改名必须两边一起改）
+const PREF_TIER = 'guncat_interactive_tier'
 const PREF_THINKING = 'guncat_thinking_enabled'
 const PREF_WEB_SEARCH = 'guncat_web_search_enabled'
 
@@ -172,6 +176,11 @@ interface State {
   reasoningEffort: string
   /** 交互模式的推理强度：'high' | 'low' | 'off'（缺省 **'low'**，首答速度优先） */
   interactiveEffort: string
+  /**
+   * 交互模式「能力调度」档位 id（九档见 core/common/InteractiveTiers）。
+   * 缺省/脏值一律回退 'lite'：持久化里出现旧值或空串时不能把交互模式打崩。
+   */
+  interactiveTier: string
   webSearchEnabled: boolean
   settings: AppSettingsDto | null
   /** 独立的「用量与成本」页（从设置页或侧栏底部打开） */
@@ -241,6 +250,11 @@ interface State {
   setThinking(value: boolean): void
   setReasoningEffort(value: string): void
   setInteractiveEffort(value: string): void
+  /**
+   * 切换交互模式「能力调度」档位。
+   * 切档会把交互模式思考强度同步成该档推荐值（之后再手动调仍可覆盖），并各自落盘。
+   */
+  setInteractiveTier(id: string): Promise<void>
   /** 按当前智能体重置深度思考默认值（效率/轻简模式关、专家模式开） */
   applyAgentThinkingDefault(): Promise<void>
   setWebSearch(value: boolean): void
@@ -465,6 +479,8 @@ export const useStore = create<State>((set, get) => {
     thinkingEnabled: false,
     reasoningEffort: 'high',
     interactiveEffort: 'low',
+    // 默认落「轻简档」：与鸿蒙版一致，未设置过时沿用原交互模式提示词（最快）
+    interactiveTier: InteractiveTiers.DEFAULT_ID,
     // 原版默认**开启**服务端联网搜索（LS_KEY_WEB_SEARCH_ENABLED 的缺省值是 true）
     webSearchEnabled: true,
     settings: null,
@@ -532,6 +548,8 @@ export const useStore = create<State>((set, get) => {
         thinkingEnabled: settings.prefs?.[PREF_THINKING] === 'true',
         reasoningEffort: workEffortFromPrefs(settings.prefs),
         interactiveEffort: interactiveEffortFromPrefs(settings.prefs),
+        // 档位从偏好恢复；旧版本没有这个键（undefined → 空串）时 normalize 回退轻简
+        interactiveTier: InteractiveTiers.normalize(settings.prefs?.[PREF_TIER] ?? ''),
         webSearchEnabled: settings.prefs?.[PREF_WEB_SEARCH] !== 'false',
         ready: true
       })
@@ -708,6 +726,28 @@ export const useStore = create<State>((set, get) => {
     setInteractiveEffort(value) {
       set({ interactiveEffort: value })
       void window.guncat.settings.saveString(PREF_EFFORT_INTERACTIVE, value)
+    },
+
+    /**
+     * 切换交互模式「能力调度」档位（对齐原版 ChatViewModel.setInteractiveTier）：
+     * 校验 → 落盘 → 按推荐值同步思考强度 → 持久化档位。
+     *
+     * 「切档按推荐值设置思考强度，之后用户仍可手动调」：这里只在切档当下写一次，
+     * 不把强度锁死到档位上，模型弹层的选择仍然随时能覆盖。
+     * 提示词与工具面的重建在主进程按档位缓存，下一轮请求自然取到新档位。
+     */
+    async setInteractiveTier(id) {
+      const normalized = InteractiveTiers.normalize(id)
+      if (normalized === get().interactiveTier) {
+        return
+      }
+      set({ interactiveTier: normalized })
+      const tier = InteractiveTiers.byId(normalized)
+      if (InteractiveTiers.isValidEffort(tier.defaultEffort)) {
+        set({ interactiveEffort: tier.defaultEffort })
+        await window.guncat.settings.saveString(PREF_EFFORT_INTERACTIVE, tier.defaultEffort)
+      }
+      await window.guncat.settings.saveString(PREF_TIER, normalized)
     },
 
     setWebSearch(value) {

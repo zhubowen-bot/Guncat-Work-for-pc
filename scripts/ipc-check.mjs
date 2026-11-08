@@ -40,6 +40,9 @@ export { ApprovalReviewService } from '@core/service/ApprovalReviewService'
 export { WorkFileService } from '@core/service/WorkFileService'
 export { ToolRegistry } from '@core/common/ToolRegistry'
 export { PromptBuilder } from '@core/common/PromptBuilder'
+// 交互模式能力调度：档位元数据与提示词契约是纯逻辑，直接对生产实现下断言
+export { InteractiveTiers } from '@core/common/InteractiveTiers'
+export { GuncatUiPrompt } from '@core/common/GuncatUiPrompt'
 // 工作区项目指令（AGENTS.md 等）：发现/去重/裁剪/标签中和都是纯逻辑，直接对生产实现下断言
 export { WorkspaceInstructionsService } from '@core/service/WorkspaceInstructionsService'
 // 编辑前读取守卫：登记表与角色表都是纯逻辑，直接对生产实现下断言
@@ -2022,6 +2025,65 @@ check(
 check(
   '当前智能体 / 当前会话也落盘（原版每次切换都会写）',
   prefsDto['guncat_current_agent'] === 'interactive' && prefsDto['guncat_current_conv'] === 'conv-x'
+)
+
+// --- 交互模式「能力调度」档位（九档提示词 + 档位工具面；切档立即生效） ---
+// 这是从鸿蒙版移植的功能：设置页写 guncat_interactive_tier，主进程 saveString 同步运行态，
+// 下一轮请求的交互模式系统提示词与工具面按新档位取。这里把「落盘 → 运行态 → 提示词/工具面」整条链钉住。
+await inv('settings:saveString', 'guncat_interactive_tier', 'expert')
+const tierPrefs = (await inv('settings:load')).prefs ?? {}
+check(
+  '能力调度档位落盘（渲染层从 prefs 读回当前档位）',
+  tierPrefs['guncat_interactive_tier'] === 'expert',
+  tierPrefs['guncat_interactive_tier']
+)
+check(
+  '主进程运行态随 saveString 同步（定时唤醒等内部 runWork 路径也立即用新档位）',
+  session.interactiveTier === 'expert',
+  String(session.interactiveTier)
+)
+check(
+  '九档元数据齐全，未知/脏值回退轻简',
+  mod.InteractiveTiers.ALL.length === 9 &&
+    mod.InteractiveTiers.normalize('') === 'lite' &&
+    mod.InteractiveTiers.normalize('garbage-tier') === 'lite' &&
+    mod.InteractiveTiers.normalize('expert') === 'expert'
+)
+const litePromptIpc = mod.AgentLoopService.buildInteractiveSystemPrompt('lite')
+const expertPromptIpc = mod.AgentLoopService.buildInteractiveSystemPrompt('expert')
+check(
+  '档位主体已从 resources/ 加载并组进系统提示词（专家档远长于轻简档）',
+  expertPromptIpc.length > litePromptIpc.length + 50000 &&
+    expertPromptIpc.startsWith('# 专家 · 能力调度档位（交互模式 · 移植自 Guncat 3.0-Pro）'),
+  `轻简 ${litePromptIpc.length} 字符 → 专家 ${expertPromptIpc.length} 字符`
+)
+check(
+  '专家档换成「越多越好」丰富度口径，轻简档保持原口径（结构与轻简档共用）',
+  expertPromptIpc.includes(mod.GuncatUiPrompt.RICHNESS_TIER_QUANTITY) &&
+    !expertPromptIpc.includes(mod.GuncatUiPrompt.RICHNESS_LITE_QUANTITY) &&
+    litePromptIpc.includes(mod.GuncatUiPrompt.RICHNESS_LITE_QUANTITY)
+)
+const toolNamesOf = (tierId) =>
+  mod.AgentLoopService.interactiveToolDefs(false, tierId).map((d) => String(d.name ?? ''))
+const liteToolNames = toolNamesOf('lite')
+const expertToolNames = toolNamesOf('expert')
+check(
+  '档位工具面：轻简 28 个，专家追加 record_search + todo_write（长程工具仍不下发）',
+  liteToolNames.length === 28 &&
+    expertToolNames.length === 30 &&
+    expertToolNames.includes('record_search') &&
+    expertToolNames.includes('todo_write') &&
+    !liteToolNames.includes('record_search') &&
+    !expertToolNames.includes('ask_user_question') &&
+    !expertToolNames.includes('edit'),
+  `轻简 ${liteToolNames.length} / 专家 ${expertToolNames.length}`
+)
+await inv('settings:saveString', 'guncat_interactive_tier', 'lite')
+const tierPrefsLite = (await inv('settings:load')).prefs ?? {}
+check(
+  '切回轻简档同样即时生效（档位不是一次性的）',
+  session.interactiveTier === 'lite' && tierPrefsLite['guncat_interactive_tier'] === 'lite',
+  String(session.interactiveTier)
 )
 
 // --- 会话标题由 LLM 生成（原版 maybeGenerateTitle；端口此前 generateSessionTitle 零调用点） ---

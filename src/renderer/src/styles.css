@@ -3811,6 +3811,89 @@ select {
   opacity: 0.55;
 }
 
+/* ===== 能力调度（交互模式九档提示词选择） =====
+   对齐鸿蒙版 SettingsPage.buildTierView：说明卡 + 九档单选列表 + 脚注。
+   行内是「名称 / 定位 / 说明」三层文字，右侧选中态圆勾由 JSX 决定是否渲染。 */
+.settings-tier-intro {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* 行与行之间留 2px，选中态整行浅品牌色底 + 品牌色描边，一眼能看出当前档位 */
+.settings-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.settings-choice:hover {
+  background: var(--item-hover);
+}
+
+.settings-choice[data-active='true'],
+.settings-choice[data-active='true']:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.settings-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-choice__copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-choice__name {
+  font-size: 14.5px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.settings-choice[data-active='true'] .settings-choice__name {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.settings-choice__tagline {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.settings-choice__desc {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+.settings-choice__check {
+  flex: none;
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
 /* ===== 提问卡片（ask_user_question） =====
    对齐原版 views/AskUserCard.ets：1.5px 品牌色描边 + 14 圆角 + 14 内边距 + 阴影。
    它是**唯一一个会让模型停下来等**的卡片，所以描边要显眼到一眼能看见，

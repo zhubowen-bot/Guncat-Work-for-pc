@@ -39,6 +39,7 @@ import { Agent } from '@core/model/Agent'
 import { ToolCallRecord } from '@core/model/ToolCallRecord'
 import { StreamCallbacks, AbortSignal } from '@core/common/Types'
 import { Constants } from '@core/common/Constants'
+import { InteractiveTiers } from '@core/common/InteractiveTiers'
 import { LoopDecisions } from '@core/common/LoopDecisions'
 import { ContextBudget } from '@core/common/ContextBudget'
 import type { BudgetAnchor } from '@core/common/ContextBudget'
@@ -157,6 +158,11 @@ export class SessionManager {
   private agents: Agent[] = []
   private runs: Map<string, RunHandle> = new Map()
   private loaded: boolean = false
+  // 交互模式「能力调度」档位(持久化键 guncat_interactive_tier, 见 InteractiveTiers):
+  // 决定交互模式的系统提示词主体与工具面。轻简档 = 原交互模式提示词(默认), 其余档位把聊天引擎的
+  // 成熟提示词移植进来。桌面端没有 ViewModel, 主进程 SessionManager 是权威 —— 设置页落盘后由
+  // saveString 同步到这里, 定时唤醒等内部 runWork 路径也因此能立即用上新档位。
+  private interactiveTier: string = InteractiveTiers.DEFAULT_ID
 
   constructor(emit: Emit) {
     this.emit = emit
@@ -202,6 +208,22 @@ export class SessionManager {
     // 技能库与工具表都是按需惰性同步的（见 WorkSkillService.ensureToolSkills），
     // 这里只做智能体加载与对话读取。
     this.agents = await AgentLoader.loadAllAgents(ctx)
+    // 交互模式「能力调度」档位：先把持久化值读进运行态（脏值/旧版本数据回退轻简，不能把交互模式打崩），
+    // 再把各档位主体提示词（resources/interactive-tier-*.md）读进内存注册表 —— 两者都必须在任何
+    // 交互模式请求之前完成，否则第一轮会拿到轻简档或「档位没主体、回退轻简」的提示词。
+    // 读不到/读坏了都不阻断启动：AgentLoopService 会按「非轻简档主体为空 → 回退轻简」处理。
+    try {
+      this.interactiveTier = InteractiveTiers.normalize(
+        await StorageManager.loadString(
+          ctx,
+          Constants.LS_KEY_INTERACTIVE_TIER,
+          InteractiveTiers.DEFAULT_ID
+        )
+      )
+    } catch {
+      this.interactiveTier = InteractiveTiers.DEFAULT_ID
+    }
+    await AgentLoader.loadInteractiveTierPrompts(ctx)
     try {
       this.conversations = await StorageManager.loadConversations(ctx)
     } catch {
@@ -590,6 +612,11 @@ export class SessionManager {
 
   async saveString(key: string, value: string): Promise<void> {
     await StorageManager.saveString(this.ctx(), key, value)
+    // 交互模式档位切换：落盘后立即同步运行态，下一轮请求（含定时唤醒等内部 runWork 路径）
+    // 就会按新档位取系统提示词与工具面，不必重启。旧档缓存保留（见 AgentLoopService），切回去还能复用。
+    if (key === Constants.LS_KEY_INTERACTIVE_TIER) {
+      this.interactiveTier = InteractiveTiers.normalize(value)
+    }
   }
 
   /** 字符串型偏好：朗读音色/语速、语音转写配置等（鸿蒙侧存在 Preferences，桌面端同构） */
@@ -607,6 +634,9 @@ export class SessionManager {
     // 推理强度（按形态分两个键，与原版一致）。渲染层的档位选择器读写它们。
     Constants.LS_KEY_REASONING_EFFORT,
     Constants.LS_KEY_INTERACTIVE_EFFORT,
+    // 交互模式「能力调度」档位（lite / efficiency / expert / ... 见 InteractiveTiers）。
+    // 设置页保存后落盘，渲染层通过 prefs 读回当前档位；重启后由 bootstrap 读进运行态。
+    Constants.LS_KEY_INTERACTIVE_TIER,
     // 表格提取记住的模型选择（原版 TableOcrPage 的 LS_KEY_TABLE_OCR_PROVIDER）
     Constants.LS_KEY_TABLE_OCR_PROVIDER,
     // 深度思考 / 联网搜索开关：渲染层的开关直接落盘，重启后要能读回来。
@@ -1602,7 +1632,8 @@ export class SessionManager {
     const prior: Message[] = conv.messages.slice(0, conv.messages.length - 1)
 
     const messages: LoopMessage[] = [
-      LoopMessage.system(AgentLoopService.buildWorkSystemPromptFor(request.mode)),
+      // 交互模式的系统提示词按当前「能力调度」档位组装（工作模式忽略该参数，固定同一份提示词）
+      LoopMessage.system(AgentLoopService.buildWorkSystemPromptFor(request.mode, this.interactiveTier)),
       ...AgentLoopService.historyMessages(prior),
       LoopMessage.user(this.expandMentions(conv.id, taskText))
     ]
@@ -2031,7 +2062,7 @@ export class SessionManager {
         // 摘要请求复用真实请求的完整前缀（同一份历史 + **同一份工具面**），只在末尾追加压缩指令：
         // 对模型侧 KV 缓存而言这是上一个请求的延续而不是冷启动，前缀部分按缓存命中计价。
         // 工具面必须与主循环逐字节一致（见 runWorkTurnWithOverflowRetry 的 toolDefsForMode），
-        // 否则工具定义一变，这段前缀的缓存全部作废。
+        // 否则工具定义一变，这段前缀的缓存全部作废；档位也要一致（档位决定交互模式的追加工具）。
         summary = await AgentLoopService.summarizeHistory(
           env.config,
           messages,
@@ -2039,7 +2070,11 @@ export class SessionManager {
           env.reasoningEffort,
           env.request.webSearchEnabled,
           env.abort,
-          AgentLoopService.toolDefsForMode(mode, env.request.webSearchEnabled)
+          AgentLoopService.toolDefsForMode(
+            mode,
+            env.request.webSearchEnabled,
+            this.interactiveTier
+          )
         )
       } catch (e) {
         // 压缩失败（网络/中断/服务端拒绝）回退为整条裁剪，不把整个任务拖死
@@ -2050,7 +2085,7 @@ export class SessionManager {
           messages,
           oldEnd,
           ContextBudget.truncateSummary(summary.trim()),
-          AgentLoopService.buildWorkSystemPromptFor(mode),
+          AgentLoopService.buildWorkSystemPromptFor(mode, this.interactiveTier),
           LOOP_HEAD_FACTORY
         )
         // 就地替换（而不是把 messages 重新赋值）：messages 被 callbacks 与外层闭包共享，
@@ -2195,13 +2230,14 @@ export class SessionManager {
         true,
         Constants.WORK_LLM_RETRY_MAX,
         // 工具面按模式裁剪（对齐原版 `toolDefsForMode(loopMode, webSearchEnabled)`）：
-        // 交互模式只下发 27 个白名单工具，工作模式返回 null（= 全量 44 个）。
+        // 交互模式只下发 28 个基础白名单工具（当前档位再追加 record_search / todo_write 等），
+        // 工作模式返回 null（= 全量 44 个）。
         //
         // 这一条很关键：交互模式的系统提示词写着「默认一次回答直接给界面, 不调用任何工具；
         // 一律不用 todo_write / goal_* / schedule_* / subagent / session_search / record_search」，
         // 而此前主循环把**全量**工具面下发给了它 —— 提示词里明令禁止的工具就在工具表里摆着，
         // 模型于是动不动就去读文件、写文件、建目标，交付物从「一份界面」退化成「一段对话」。
-        AgentLoopService.toolDefsForMode(mode, request.webSearchEnabled)
+        AgentLoopService.toolDefsForMode(mode, request.webSearchEnabled, this.interactiveTier)
       )
     } catch (e) {
       const err: Error = e as Error

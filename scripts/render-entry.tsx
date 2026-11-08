@@ -591,6 +591,16 @@ export function renderSettings(): string {
   return renderToStaticMarkup(createElement(SettingsPage, { open: true }))
 }
 
+/**
+ * 设置页「能力调度」分类首帧。
+ *
+ * 九档列表只在切到该分类时才渲染，所以显式传 initialTab='tier' 才能把它钉住：
+ * 九档名称 / 定位 / 说明都在、默认选中轻简且只有一个选中态、脚注边界说明齐全。
+ */
+export function renderSettingsTier(): string {
+  return renderToStaticMarkup(createElement(SettingsPage, { open: true, initialTab: 'tier' }))
+}
+
 /** 用量与成本页首帧（SSR 下 snapshot 尚未加载，热力图显示空态/零值） */
 export function renderUsagePage(): string {
   return renderToStaticMarkup(createElement(UsagePage, { open: true }))

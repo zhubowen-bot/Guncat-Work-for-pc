@@ -27,6 +27,12 @@ import { Conversation } from '../src/core/model/Conversation'
 import { Message } from '../src/core/model/Message'
 import { ToolRegistry } from '../src/core/common/ToolRegistry'
 import { GuncatUiLang } from '../src/core/common/GuncatUiLang'
+import { GuncatUiLibrary } from '../src/core/common/GuncatUiLibrary'
+import { GuncatUiPrompt } from '../src/core/common/GuncatUiPrompt'
+import { PromptBuilder } from '../src/core/common/PromptBuilder'
+import { InteractiveTiers } from '../src/core/common/InteractiveTiers'
+import { InteractiveTierPrompt } from '../src/core/common/InteractiveTierPrompt'
+import { InteractiveTierPrompts } from '../src/core/common/InteractiveTierPrompts'
 import { DataPipeline } from '../src/core/common/DataPipeline'
 import { runJs } from '../src/core/platform/native/libguncatjs'
 import { http as guncatHttp } from '../src/core/platform/kit/NetworkKit'
@@ -191,6 +197,176 @@ async function main(): Promise<void> {
     '交互模式工具面被裁剪（少于工作模式）',
     interactive.length > 0 && interactive.length < toolDefs.length,
     `工作 ${toolDefs.length} → 交互 ${interactive.length}`
+  )
+
+  // ===== 3b. 交互模式「能力调度」 =====
+  // 这一节钉住的是移植自鸿蒙版的九档能力调度: 档位元数据、分层组装（轻简档必须与旧四段组装
+  // 逐字节一致）、档位工具面只增不删、以及组件清单修正（RadarChart / 列表与追问分组）。
+  section('3b. 交互模式 · 能力调度（九档 / 分层组装 / 工具面 / 组件清单）')
+  const tierIds = InteractiveTiers.ALL.map((t) => t.id).join(',')
+  check(
+    '九档齐全且顺序稳定（轻简→效率→专家→经典→论文→法律→研究→筛滤→评估）',
+    tierIds === 'lite,efficiency,expert,classic,paper,legal,research,sift,eval',
+    tierIds
+  )
+  check(
+    '默认档与回退档都是轻简，未知/脏值回退轻简',
+    InteractiveTiers.DEFAULT_ID === 'lite' &&
+      InteractiveTiers.LITE_ID === 'lite' &&
+      InteractiveTiers.normalize('') === 'lite' &&
+      InteractiveTiers.normalize('shanzhai') === 'lite' &&
+      InteractiveTiers.normalize('expert') === 'expert'
+  )
+  check(
+    '轻简档没有主体文件，其余八档都有',
+    InteractiveTiers.ALL.filter((t) => t.promptFile !== '').length === 8 &&
+      InteractiveTiers.byId('lite').promptFile === ''
+  )
+  check(
+    '每档推荐思考强度合法（off / low / high）',
+    InteractiveTiers.ALL.every((t) => InteractiveTiers.isValidEffort(t.defaultEffort)),
+    InteractiveTiers.ALL.map((t) => `${t.id}:${t.defaultEffort}`).join(' ')
+  )
+  check(
+    '档位标签/说明/来源非空（设置页与导出文档直接渲染它们）',
+    InteractiveTiers.ALL.every(
+      (t) => t.name !== '' && t.tagline !== '' && t.description !== '' && t.sourceAgent !== ''
+    )
+  )
+
+  const toolIndexOf = (tierId: string): string =>
+    PromptBuilder.buildToolNameIndex(
+      ToolRegistry.interactiveWhitelist(tierId).map((name) => ({ name }))
+    )
+  const liteToolIndex = toolIndexOf(InteractiveTiers.LITE_ID)
+  const liteLegacy = PromptBuilder.assembleInteractiveSystemPrompt(
+    GuncatUiPrompt.promptSection(),
+    '',
+    liteToolIndex,
+    GuncatUiPrompt.INTERACTIVE_DUTY
+  )
+  const liteNew = InteractiveTierPrompt.assemble(
+    InteractiveTiers.LITE_ID,
+    '',
+    '',
+    liteToolIndex
+  )
+  check(
+    '轻简档 = 旧四段组装逐字节一致（行为与速度不变）',
+    liteLegacy === liteNew,
+    `${liteLegacy.length} 字符`
+  )
+
+  // 档位主体在 SessionManager.bootstrap() 里随 agents 一起加载; 这里按同一入口加载一次。
+  await AgentLoader.loadInteractiveTierPrompts(ctx)
+  const loadedTierIds = InteractiveTierPrompts.loadedIds()
+  check(
+    '八档主体提示词均已从 resources/ 加载（轻简档不登记）',
+    loadedTierIds.length === 8 && loadedTierIds.join(',') ===
+      'classic,efficiency,eval,expert,legal,paper,research,sift',
+    loadedTierIds.join(',')
+  )
+  const expertBody = InteractiveTierPrompts.body('expert')
+  check(
+    '专家档主体为非空的长提示词（原聊天引擎提示词主体）',
+    expertBody.length > 50000,
+    `${expertBody.length} 字符`
+  )
+
+  const litePrompt = AgentLoopService.buildInteractiveSystemPrompt(InteractiveTiers.LITE_ID)
+  const expertPrompt = AgentLoopService.buildInteractiveSystemPrompt('expert')
+  // 服务层组装会带上真实技能索引，所以对照组的组装也要用同一份 skillsSection（否则差异只是技能段）。
+  const liteWithSkills = InteractiveTierPrompt.assemble(
+    InteractiveTiers.LITE_ID,
+    '',
+    WorkSkillService.interactiveIndex(),
+    liteToolIndex
+  )
+  check(
+    '轻简档系统提示词 = 原交互模式提示词（含原丰富度计量）',
+    litePrompt === liteWithSkills && litePrompt.includes(GuncatUiPrompt.RICHNESS_LITE_QUANTITY)
+  )
+  check(
+    '非轻简档系统提示词以档位声明开头（唯一一级标题）',
+    expertPrompt.startsWith('# 专家 · 能力调度档位（交互模式 · 移植自 Guncat 3.0-Pro）')
+  )
+  check(
+    '非轻简档把档位主体整段拼进系统提示词',
+    expertPrompt.includes(expertBody)
+  )
+  check(
+    '非轻简档把丰富度数量口径换成「越多越好」（结构与轻简档共用）',
+    expertPrompt.includes(GuncatUiPrompt.RICHNESS_TIER_QUANTITY) &&
+      !expertPrompt.includes(GuncatUiPrompt.RICHNESS_LITE_QUANTITY)
+  )
+  check(
+    '档位提示词按档缓存且互不串味',
+    expertPrompt !== litePrompt &&
+      AgentLoopService.buildInteractiveSystemPrompt('expert') === expertPrompt &&
+      AgentLoopService.buildInteractiveSystemPrompt('legal') !== expertPrompt
+  )
+
+  const liteWhitelist = ToolRegistry.interactiveWhitelist(InteractiveTiers.LITE_ID)
+  const expertWhitelist = ToolRegistry.interactiveWhitelist('expert')
+  const efficiencyWhitelist = ToolRegistry.interactiveWhitelist('efficiency')
+  check(
+    '轻简档工具面 = 基础白名单（28 个），不含 record_search / todo_write',
+    liteWhitelist.length === 28 &&
+      !liteWhitelist.includes('record_search') &&
+      !liteWhitelist.includes('todo_write'),
+    `${liteWhitelist.length} 个`
+  )
+  check(
+    '专家/法律/研究/评估档追加 record_search + todo_write（基础之后）',
+    expertWhitelist.length === 30 &&
+      expertWhitelist.slice(-2).join(',') === 'record_search,todo_write' &&
+      ['legal', 'research', 'eval'].every(
+        (id) => ToolRegistry.interactiveWhitelist(id).length === 30
+      )
+  )
+  check(
+    '效率/经典/信息筛滤档只追加 record_search',
+    ['efficiency', 'classic', 'sift'].every(
+      (id) => ToolRegistry.interactiveWhitelist(id).length === 29 &&
+        ToolRegistry.interactiveWhitelist(id).slice(-1)[0] === 'record_search'
+    ),
+    `效率 ${efficiencyWhitelist.length} 个`
+  )
+  check(
+    '长程与维护类工具在任何档位都不下发',
+    !ToolRegistry.interactiveWhitelist('lite').includes('todo_write') &&
+      ['edit', 'delete_file', 'move_file', 'ask_user_question', 'subagent',
+        'schedule_create', 'goal_create'].every(
+        (name) => !ToolRegistry.interactiveWhitelist('expert').includes(name)
+      )
+  )
+  const expertDefs = AgentLoopService.interactiveToolDefs(false, 'expert')
+  const expertDefNames = expertDefs.map((d) => String((d as Record<string, unknown>)['name'] ?? ''))
+  check(
+    '按档位裁剪真实工具定义：专家档下发 record_search / todo_write',
+    expertDefNames.includes('record_search') &&
+      expertDefNames.includes('todo_write') &&
+      expertDefNames.length === 30,
+    `${expertDefNames.length} 个`
+  )
+
+  // 组件清单修正: GROUP_ORDER 与 g1~g9 逐字一致（否则整组从提示词里消失）, 列表与雷达图可见。
+  const componentSection = GuncatUiLibrary.promptSection()
+  const missingGroups = GuncatUiLibrary.GROUP_ORDER.filter(
+    (group) => !componentSection.includes('### ' + group)
+  )
+  check(
+    '组件清单每个分组都出现在提示词里（GROUP_ORDER 与分组表一致）',
+    missingGroups.length === 0,
+    missingGroups.join(',')
+  )
+  check(
+    'ListBlock / ListItem 首次进入组件清单（「列表」→「列表与追问」修正）',
+    componentSection.includes('ListBlock(') && componentSection.includes('ListItem(')
+  )
+  check(
+    'RadarChart 已登记（多维对比可实际落地）',
+    GuncatUiLibrary.def('RadarChart') !== null && componentSection.includes('RadarChart(')
   )
 
   // ===== 4. 技能库 =====

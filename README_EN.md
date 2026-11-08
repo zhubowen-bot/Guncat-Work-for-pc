@@ -25,17 +25,19 @@
 
 | Mode | Inspiration | What it does |
 | --- | --- | --- |
-| ✦ **Interactive mode** | GPT's **Intelligent UI** | One prompt produces a working interface; zero tool calls and a single render pass by default, controls recompute instantly as you drag them |
+| ✦ **Interactive mode** | GPT's **Intelligent UI** | One prompt produces a working interface; zero tool calls and a single render pass by default, controls recompute instantly as you drag them; nine capability-scheduling tiers (Lite through LLM Evaluation) |
 | 🛠 **Work mode** | **DeepSeek Harness** (dsh, Codex-style agent loop) | Multi-turn tool loops + a per-session sandbox workspace + 46 built-in tools, so long-running tasks run autonomously |
 | Chat mode | — | Plain conversation, no sandbox workspace |
 
 Work mode and interactive mode **share the same agent loop and sandbox workspace**; what differs is
 behavioural discipline and **the tool surface exposed** — work mode gets all 46 tools, multi-turn tool
-loops and long-horizon delivery, while interactive mode only receives **27** (read material / compute
-real numbers / verify external facts / emit files). Long-horizon tools (`todo_write` / `goal_*` /
-`schedule_*` / `subagent`) never appear in its requests, which is what makes it a "fast lane, one-shot
-interface". `run_command` is likewise absent from interactive mode: a mode that can run commands must
-have somewhere for a human to see and approve them.
+loops and long-horizon delivery, while interactive mode only receives **28** (read material / compute
+real numbers / verify external facts / emit files). Work-mode long-horizon and maintenance tools
+(`goal_*` / `schedule_*` / `subagent` / `session_search` / `edit`) never appear in its requests, which
+is what makes it a "fast lane, one-shot interface". Its capability-scheduling tiers may add
+`record_search` / `todo_write` on top of those 28 (add-only: Lite and Paper Conversion keep 28, only
+retrieval / multi-stage tiers add them). `run_command` is likewise absent from interactive mode: a
+mode that can run commands must have somewhere for a human to see and approve them.
 
 ## Capabilities
 
