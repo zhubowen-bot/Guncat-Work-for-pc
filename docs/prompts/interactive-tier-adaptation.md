@@ -13,7 +13,7 @@
 
 ## 一、这是什么
 
-**能力调度是交互模式的一个设置项**：设置 →「模型与能力」→「能力调度」（设置页 `tier` 详情页），
+**能力调度是一个设置项**（当前接入交互模式）：设置 →「模型与能力」→「能力调度」（设置页 `tier` 详情页），
 九档单选，默认「轻简」；选择持久化在 `guncat_interactive_tier`（`Constants.LS_KEY_INTERACTIVE_TIER`），
 由 `InteractiveTiers.ALL`（[src/core/common/InteractiveTiers.ts](../../src/core/common/InteractiveTiers.ts)）
 单一事实源驱动设置页、系统提示词、工具面与导出文档。
@@ -27,7 +27,7 @@
    手动改，不锁死。
 
 **交付形态不随档位变化**：无论哪一档，回答主体都是一份 `guncat-ui lang` 界面程序、程序之外不写文字。
-档位改变的是「专业内容与流程的厚度」，不是交付通道。
+档位改变的是系统提示词主体与档位追加的工具面，不改变交付形态。
 
 | # | 档位 | 定位（设置页副标题） | 移植来源 | 默认思考 | 工具面 |
 | ---: | --- | --- | --- | --- | ---: |
@@ -41,11 +41,12 @@
 | 8 | 信息筛滤 | 专家能力调度·信息筛滤 | `Guncat Srch-Sift-prompt.md` | `high` | 29 |
 | 9 | LLM评估 | 专家能力调度·LLM评估 | `Guncat Eval-LLM_prompt.md` | `high` | 30 |
 
-三条使用边界（都来自代码与设置页文案）：
+当前接入状态（以代码为准）：
 
-- **只影响交互模式**：`AgentLoopService.buildWorkSystemPromptFor(mode, tierId)` 与
-  `toolDefsForMode(mode, webSearchEnabled, tierId)` 只在 `mode === 'interactive'` 时读档位；
-  工作模式与聊天模式（含普通聊天智能体）的提示词、工具面不受影响。
+- **当前由交互模式接入**：`AgentLoopService.buildWorkSystemPromptFor(mode, tierId)` 与
+  `toolDefsForMode(mode, webSearchEnabled, tierId)` 目前只在 `mode === 'interactive'` 时读档位；
+  其他模式尚未接入。档位定义与组装入口（`InteractiveTiers` / `InteractiveTierPrompt`）是纯逻辑，
+  后续其他模式接入时直接复用，不需要改档位元数据与提示词主体。
 - **下一轮生效**：提示词与工具面按档位在进程内缓存（`AgentLoopService` 的 `cachedInteractivePrompts` /
   `cachedInteractiveToolDefs`），切档不改写历史；新档位从下一次请求开始使用，切回旧档可复用旧缓存前缀。
 - **缺主体不崩**：某档的档位主体 md 缺失或为空时，`buildInteractiveSystemPrompt(tier)` 回退轻简档，
@@ -68,9 +69,7 @@
 3. **共享层不重复原文**：界面语法、组件清单、工作区规则、工具白名单、组件数量口径都只写在代码共享层；
    档位主体只承担"业务灵魂"。
 4. **轻简不迁移**：轻简＝原交互模式提示词本身，组装结果与旧四段**逐字节一致**（有断言），
-   保证默认档行为不变、依然最快。
-
-收益与代价都明确：重档位把成熟的专业流程带回了交互模式，但提示词显著变长、首答变慢（见第九节）。
+   保证默认档行为不变。
 
 ## 三、分层设计
 
@@ -549,9 +548,8 @@ node scripts/dump-interactive-tiers.mjs
 
 ## 十、已知取舍与未验证项
 
-1. **token 成本与首答延迟**：专家档系统提示词约 **54,060 tokens**（84,724 字符），轻简约 **10,725 tokens**
-   （21,786 字符）。长提示词直接增加每轮输入 token 成本与 prefill 时间，首答会变慢；重档位适合"值得慢"的任务，
-   日常问答建议留在轻简。**桌面端 TTFT / 端到端时延尚未做对照测量**。
+1. **token 成本**：专家档系统提示词约 **54,060 tokens**（84,724 字符），轻简约 **10,725 tokens**
+   （21,786 字符）。档位不同，每轮输入 token 成本不同；**桌面端 TTFT / 端到端时延尚未做对照测量**。
 2. **token 数是估算**：`PromptBudget.estimateTokens()` 用启发式（中日韩 1 字符≈1 token、连续 ASCII≈4 字符/token、
    其他非 ASCII≈1 token），与具体模型 tokenizer 存在偏差；导出里的"估算 tokens"只用于量级比较，
    不应作为计费依据。
@@ -569,7 +567,7 @@ node scripts/dump-interactive-tiers.mjs
 7. **缺主体静默回退**：档位主体缺失 / 为空时会静默回退轻简档（代码有意不报错），用户可能只看到
    "这个档位好像没什么区别"。是否加诊断日志 / 设置页提示，待定。
 8. **切档的缓存代价**：系统提示词与工具面都按档位缓存；切档后第一轮请求前缀变化，KV 缓存不命中
-   （首轮更慢）；切回旧档可复用旧缓存。这是"档位可随时切换"的固有成本。
+   切回旧档可复用旧缓存。这是"档位可随时切换"的固有成本。
 9. **组件清单口径**：组件清单由 `GuncatUiLibrary` 单一事实源生成（导出段 8,714 字符）；"注册组件数"
    与"提示词清单可见组件数"不是同一个数（77 vs 75，两个 `promptHidden` 接口兜底组件），
    两者区别见 3.2 节；组件数量与签名一律以导出文件的组件清单段为准。

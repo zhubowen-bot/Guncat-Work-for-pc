@@ -1396,16 +1396,14 @@ check(
     settingsText.includes('建议切换 Responses API 或 Anthropic API 选项')
 )
 
-// --- 能力调度（设置 →「模型与能力」→「能力调度」，交互模式九档） ---
-console.log('\n30c. 设置页 · 能力调度（交互模式九档）')
+// --- 能力调度（设置 →「模型与能力」→「能力调度」，九档选择） ---
+console.log('\n30c. 设置页 · 能力调度（九档）')
 const tierHtml = mod.renderSettingsTier()
 const tierText = decode(tierHtml)
 const TIER_NAMES = ['轻简', '效率', '专家', '经典', '论文转换', '法律检索', '深度研究', '信息筛滤', 'LLM评估']
 check(
-  '能力调度页整体可渲染（说明卡 + 九档列表 + 脚注）',
-  tierHtml.includes('settings-choice-list') &&
-    tierHtml.includes('settings-tier-intro') &&
-    tierHtml.includes('settings-card')
+  '能力调度页整体可渲染（九档列表）',
+  tierHtml.includes('settings-choice-list') && tierHtml.includes('settings-card')
 )
 check(
   '九档名称全部渲染',
@@ -1439,10 +1437,13 @@ check(
   selectedTierName === '' ? '未找到选中行' : `选中「${selectedTierName}」`
 )
 check(
-  '切档说明与"只影响交互模式"的边界都写清楚',
-  tierText.includes('切换档位会把思考强度调到该档推荐值') &&
-    tierText.includes('档位只影响交互模式') &&
-    tierText.includes('工作模式与聊天模式不受影响')
+  '能力调度页不再出现臆断文案（不写死交互模式、不排名档位深浅）',
+  !tierHtml.includes('settings-tier-intro') &&
+    ['交互模式', '档位越靠后', '提示词越长', '思考越深', '首答', '效果更好',
+      '只影响交互模式', '工作模式与聊天模式不受影响'].every(
+      (word) => !tierText.includes(word)
+    ),
+  '仅保留档位名称 / 定位 / 说明与选中态'
 )
 check(
   '默认仍落在模型配置（能力调度列表不在首帧 DOM 里）',

@@ -388,7 +388,7 @@ const SETTINGS_NAV: Array<{ label: string; items: SettingsTab[] }> = [
         id: 'tier',
         label: '能力调度',
         title: '能力调度',
-        description: '交互模式使用哪套提示词与工具面；档位越靠后，提示词越长、思考越深。',
+        description: '选择使用的提示词与工具面档位。',
         icon: <IconInteractive size={16} />
       },
       {
@@ -1122,17 +1122,7 @@ export function SettingsPage({ open: openOverride, initialTab }: SettingsPagePro
 
               {activeTab === 'tier' ? (
                 <>
-                  {/* 说明卡：解释档位作用与切档时对思考强度的影响
-                      （文案对齐鸿蒙版 SettingsPage 的 tier 详情页） */}
-                  <SettingsCard>
-                    <p className="settings-tier-intro">
-                      能力调度决定交互模式使用哪套提示词与工具面。轻简档直接复用原有交互模式提示词（最快）；
-                      其余档位移植聊天引擎里效果更好的成熟提示词，并按交互模式做了少量适配。
-                      切换档位会把思考强度调到该档推荐值，之后仍可在模型弹层手动调整。
-                    </p>
-                  </SettingsCard>
-
-                  <SettingsCard title="交互模式档位" description="共九档，默认轻简；点击立即切换。">
+                  <SettingsCard title="能力调度档位" description="共九档，默认轻简；点击立即切换。">
                     <div className="settings-choice-list">
                       {InteractiveTiers.ALL.map((tier) => {
                         const selected = tier.id === interactiveTier
@@ -1160,11 +1150,6 @@ export function SettingsPage({ open: openOverride, initialTab }: SettingsPagePro
                       })}
                     </div>
                   </SettingsCard>
-
-                  <SettingsNote>
-                    档位只影响交互模式，工作模式与聊天模式不受影响。档位越靠后，提示词越长、思考越深，
-                    首答会慢一些，但内容更完整、专业流程更严格。
-                  </SettingsNote>
                 </>
               ) : null}
 
