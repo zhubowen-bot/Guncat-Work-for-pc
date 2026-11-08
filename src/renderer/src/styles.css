@@ -3811,6 +3811,389 @@ select {
   opacity: 0.55;
 }
 
+/* ===== 个性化指令（设置 → 模型与能力 → 个性化指令） =====
+   列表与编辑视图都落在右侧内容区里，不额外开整页浮层；
+   本段只服务 .settings-personal*，卡片 / 字段 / 按钮复用上面的 settings-card / field / btn。 */
+.settings-personal {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 列表顶部：左侧一句说明、右侧「新建」入口 */
+.settings-personal__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 2px;
+}
+
+.settings-personal__intro {
+  margin: 0;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* 空态：一张居中的白底卡片，图标压暗，主行动是品牌色按钮 */
+.settings-personal__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 38px 28px 34px;
+}
+
+.settings-personal__empty-icon {
+  display: inline-flex;
+  color: var(--accent);
+  opacity: 0.35;
+}
+
+.settings-personal__empty h3 {
+  margin: 14px 0 0;
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.settings-personal__empty p {
+  margin: 8px 0 0;
+  max-width: 460px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-faint);
+}
+
+.settings-personal__empty .btn {
+  margin-top: 18px;
+}
+
+/* 非空列表：单张卡片里逐行陈列，整行可点进编辑视图 */
+.settings-personal__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-personal__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 18px;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.settings-personal__row:hover {
+  background: var(--item-hover);
+}
+
+.settings-personal__row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.settings-personal__row-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-personal__row-name {
+  overflow: hidden;
+  font-size: 14.5px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-personal__row-scopes {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-personal__row-summary {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-personal__row-chevron {
+  flex: none;
+  display: inline-flex;
+  color: var(--text-quaternary);
+}
+
+.settings-personal__divider {
+  height: 1px;
+  margin-left: 18px;
+  background: var(--divider);
+}
+
+/* 编辑视图头部：返回列表 + 标题 + 编辑态删除 */
+.settings-personal__editorhead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 2px;
+}
+
+.settings-personal__back,
+.settings-personal__delete {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text-muted);
+  transition: color 0.12s, background 0.12s;
+}
+
+.settings-personal__back:hover {
+  color: var(--text);
+  background: var(--item-hover);
+}
+
+.settings-personal__delete {
+  margin-left: auto;
+}
+
+.settings-personal__delete:hover {
+  color: var(--danger);
+  background: var(--item-hover);
+}
+
+.settings-personal__back:focus-visible,
+.settings-personal__delete:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-personal__title {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+/* 页内联两步确认条（删除 / 放弃未保存修改）：不弹系统对话框 */
+.settings-personal__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+
+.settings-personal__confirm p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.settings-personal__confirm-actions {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+
+/* 指令内容：标题 + 预览开关；预览只换展示，不动草稿 */
+.settings-personal__contenthead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px 0;
+}
+
+.settings-personal__preview-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 15px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+  font-size: 12px;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+
+.settings-personal__preview-toggle:hover {
+  color: var(--text);
+}
+
+.settings-personal__preview-toggle[data-active='true'],
+.settings-personal__preview-toggle[data-active='true']:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.settings-personal__preview-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-personal__content-input {
+  width: 100%;
+  min-height: 240px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-sunken);
+  outline: none;
+  font-size: 14px;
+  line-height: 1.65;
+  resize: vertical;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.settings-personal__content-input:focus {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.settings-personal__counter {
+  margin-top: 7px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.settings-personal__preview {
+  min-height: 120px;
+  padding: 4px 2px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.settings-personal__preview-empty {
+  margin: 0;
+  padding: 16px 2px;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+/* 生效范围：两个模式下各一行，聊天引擎逐行列出，整行可点切换 */
+.settings-personal__scope-group-label {
+  padding: 10px 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.settings-personal__scope-group-label:first-child {
+  padding-top: 0;
+}
+
+.settings-personal__scope {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 6px;
+  border-radius: 9px;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.settings-personal__scope:hover {
+  background: var(--item-hover);
+}
+
+.settings-personal__scope:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.settings-personal__scope-check {
+  flex: none;
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--text-quaternary);
+}
+
+.settings-personal__scope[data-active='true'] .settings-personal__scope-check {
+  color: var(--accent);
+}
+
+.settings-personal__scope-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-personal__scope-name {
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-personal__scope-desc {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-personal__scope-divider {
+  height: 1px;
+  margin-left: 30px;
+  background: var(--divider);
+}
+
+.settings-personal__scope-empty {
+  margin: 0;
+  padding: 2px 6px 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.settings-personal__scope-summary {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+.settings-personal__actions {
+  padding: 0 2px;
+}
+
 /* ===== 能力调度（交互模式九档选择） =====
    行内是「名称 / 定位 / 说明」三层文字，右侧选中态圆勾由 JSX 决定是否渲染。 */
 /* 行与行之间留 2px，选中态整行浅品牌色底 + 品牌色描边，一眼能看出当前档位 */

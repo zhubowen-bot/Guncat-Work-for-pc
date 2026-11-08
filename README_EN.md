@@ -52,6 +52,23 @@ mode that can run commands must have somewhere for a human to see and approve th
   horizontal bar / donut / radial / radar / stacked bar, plus tables, metric cards, image walls, tabs /
   accordions / step bars / card blocks and a full set of form controls); work mode brings the core
   DeepSeek Harness agent loop to the desktop.
+- **Personal instructions**: Settings → "Model & Capabilities" → "Personal Instructions" keeps your
+  long-term preferences (tone, formatting, terminology, working habits and so on) in one place, so you
+  do not have to restate them in every conversation. Each instruction takes an optional name (40
+  characters max) and a body (8000 characters max, Markdown supported); "Render Markdown" only switches
+  the editor between raw text and a rendered preview, off by default, and what is saved is always your
+  original text. Scope is multi-select — interactive mode, work mode and all nine chat engines in
+  `agents.json`; a new instruction defaults to interactive mode + work mode and at least one scope is
+  required, an existing instruction can be deleted after a confirmation, and leaving with unsaved
+  changes asks first. Once saved, from the next request on, the system prompts of the selected scopes
+  get a personal-instruction section appended at the end, with each body wrapped in a
+  `<personal-instruction>` tag; the original prefix stays byte-for-byte unchanged and only the tail
+  grows, so adjacent turns still hit the KV cache while the instructions stay unchanged. Instructions
+  apply to the main conversation only (including the prompt rebuilt after work-mode context
+  compaction), never to internal requests such as subagents, title generation or context
+  summarisation, and they never change the tool surface or permissions; they are stored locally only,
+  never uploaded or cloud-synced, with each instruction capped at 8000 characters and the appended
+  section at 16000 characters, truncated in order and marked when exceeded.
 - **Three protocols**: OpenAI Completions (`/chat/completions`), OpenAI Responses (`/responses`) and
   Anthropic Messages (`/messages`), all supporting direct image input; deep thinking and web search are
   explicitly controlled per protocol.

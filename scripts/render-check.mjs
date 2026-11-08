@@ -1347,9 +1347,10 @@ check(
     !settingsText.includes('所有更改已自动保存')
 )
 check(
-  '八个分类都在左侧导航：模型 / 高级参数 / 能力调度 / 搜索 / 多模态 / 用量 / 朗读 / 语音输入',
+  '九个分类都在左侧导航：模型 / 高级参数 / 个性化指令 / 能力调度 / 搜索 / 多模态 / 用量 / 朗读 / 语音输入',
   settingsText.includes('模型配置') &&
     settingsText.includes('高级模型参数') &&
+    settingsText.includes('个性化指令') &&
     settingsText.includes('能力调度') &&
     settingsText.includes('本地联网搜索') &&
     settingsText.includes('多模态解析') &&
@@ -1453,6 +1454,133 @@ check(
   '默认仍落在模型配置（能力调度列表不在首帧 DOM 里）',
   !settingsHtml.includes('settings-choice'),
   '设置页打开顺序不变'
+)
+
+// --- 个性化指令（设置 →「模型与能力」→「个性化指令」） ---
+console.log('\n30d. 设置页 · 个性化指令')
+const personalEmptyHtml = mod.renderSettingsPersonal()
+const personalEmptyText = decode(personalEmptyHtml)
+check(
+  '导航位置：个性化指令在「高级模型参数」之后、「能力调度」之前',
+  personalEmptyText.includes('个性化指令') &&
+    personalEmptyText.indexOf('高级模型参数') < personalEmptyText.indexOf('个性化指令') &&
+    personalEmptyText.indexOf('个性化指令') < personalEmptyText.indexOf('能力调度'),
+  '位置对齐鸿蒙版「能力」分组'
+)
+check(
+  '空态：说明文案与「新建个性化指令」入口都在',
+  personalEmptyHtml.includes('settings-personal') &&
+    personalEmptyText.includes('还没有个性化指令') &&
+    personalEmptyText.includes('新建个性化指令') &&
+    personalEmptyText.includes(
+      '添加后，会在你勾选的交互模式、工作模式或聊天引擎里自动附加这些偏好。'
+    )
+)
+check(
+  '空态没有列表行，也没有串到模型配置的字段',
+  !personalEmptyHtml.includes('settings-personal__row') &&
+    !personalEmptyText.includes('配置方案') &&
+    !personalEmptyText.includes('接入方式')
+)
+
+const personalListHtml = mod.renderSettingsPersonalList()
+const personalListText = decode(personalListHtml)
+check(
+  '非空列表：显示名 / 生效范围摘要 / 正文摘要三条都在',
+  personalListHtml.includes('settings-personal__row') &&
+    personalListText.includes('英文回答') &&
+    personalListText.includes('代码风格') &&
+    personalListText.includes('生效范围：交互模式、工作模式、效率模式') &&
+    personalListText.includes('生效范围：专家模式') &&
+    personalListText.includes('代码注释保持中文') &&
+    personalListText.includes('缩进用两个空格'),
+  '未填名称的条目取正文首行（跳过 Markdown 标题记号）'
+)
+check(
+  '非空列表也保留右上「新建」入口',
+  personalListHtml.includes('settings-personal__toolbar') && personalListText.includes('新建')
+)
+check(
+  '默认分类仍是模型配置（个性化指令面板不在设置页首帧里）',
+  !settingsHtml.includes('settings-personal'),
+  '设置页打开顺序不变'
+)
+
+const personalEditorHtml = mod.renderPersonalEditor()
+const personalEditorText = decode(personalEditorHtml)
+check(
+  '编辑首帧（新建）：标题 / 名称 / 指令内容 / 生效范围四块齐全',
+  personalEditorText.includes('新建个性化指令') &&
+    personalEditorText.includes('名称（可选）') &&
+    personalEditorText.includes('指令内容') &&
+    personalEditorText.includes('生效范围') &&
+    personalEditorText.includes('Markdown 渲染') &&
+    personalEditorHtml.includes('settings-personal__content-input')
+)
+check(
+  '字数上限按内核常量渲染（名称 40 / 正文 8000，正文带计数器）',
+  /maxlength="40"/i.test(personalEditorHtml) &&
+    /maxlength="8000"/i.test(personalEditorHtml) &&
+    personalEditorText.includes('0 / 8000')
+)
+check(
+  '新建默认只勾选「交互模式 + 工作模式」',
+  (personalEditorHtml.match(/data-active="true"/g) ?? []).length === 2 &&
+    (personalEditorHtml.match(/aria-pressed="true"/g) ?? []).length === 2 &&
+    personalEditorText.includes('交互模式') &&
+    personalEditorText.includes('工作模式') &&
+    personalEditorText.includes('每轮回答直接交付可操作界面') &&
+    personalEditorText.includes('多轮工具循环，完成长程任务'),
+  '2/2 选中'
+)
+const PERSONAL_ENGINE_NAMES = [
+  '轻简模式',
+  '效率模式',
+  '专家模式',
+  '经典模式',
+  '转换专家-论文',
+  '检索专家-法律',
+  '检索专家-研究',
+  '检索专家-筛滤',
+  '评估专家-LLM'
+]
+check(
+  'agents.json 的九个聊天引擎都挂在「聊天引擎」分组下（2 个模式 + 9 个引擎 = 11 行）',
+  personalEditorText.includes('聊天引擎') &&
+    PERSONAL_ENGINE_NAMES.every((name) => personalEditorText.includes(name)) &&
+    (personalEditorHtml.match(/class="settings-personal__scope"/g) ?? []).length === 11,
+  PERSONAL_ENGINE_NAMES.filter((name) => !personalEditorText.includes(name)).join(',') || '9/9'
+)
+check(
+  '新建态主按钮文案是「添加」，且没有删除入口',
+  /<button[^>]*class="btn btn--primary"[^>]*>[\s\S]*?添加/.test(personalEditorHtml) &&
+    !personalEditorHtml.includes('settings-personal__delete')
+)
+
+const personalEditHtml = mod.renderPersonalEditorExisting()
+const personalEditText = decode(personalEditHtml)
+check(
+  '编辑首帧（已有条目）：标题 / 名称回填 / 删除入口 / 范围摘要按稳定顺序',
+  personalEditText.includes('编辑个性化指令') &&
+    personalEditHtml.includes('value="英文回答"') &&
+    personalEditHtml.includes('settings-personal__delete') &&
+    personalEditText.includes('将附加到：交互模式、工作模式、效率模式') &&
+    /<button[^>]*class="btn btn--primary"[^>]*>[\s\S]*?保存/.test(personalEditHtml)
+)
+const personalPreviewHtml = mod.renderPersonalEditorPreview()
+const personalPreviewText = decode(personalPreviewHtml)
+check(
+  'Markdown 渲染只切预览：正文渲染成富文本，编辑框与计数器不在',
+  personalPreviewHtml.includes('<strong>始终用英文回答</strong>') &&
+    !personalPreviewHtml.includes('settings-personal__content-input') &&
+    !personalPreviewHtml.includes('settings-personal__counter') &&
+    personalPreviewText.includes('返回编辑')
+)
+check(
+  '保存校验：正文为空 / 未选范围各有明确提示（与鸿蒙版 save() 口径一致）',
+  mod.personalInstructionSaveError('   ', ['interactive']) === '请先输入指令内容' &&
+    mod.personalInstructionSaveError('写点东西', []) === '请至少选择一个生效范围' &&
+    mod.personalInstructionSaveError(' 写点东西 ', ['work']) === ''
 )
 
 // --- 用量与成本页（独立页面：汇总 / 筛选 / 指标 / 两个服务商卡片 / 预算 / 说明） ---

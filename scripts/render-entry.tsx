@@ -38,6 +38,7 @@ import {
   IconDownload,
   IconInteractive,
   IconMic,
+  IconPersonalInstructions,
   IconSend,
   IconSettings,
   IconStopCircle,
@@ -66,6 +67,8 @@ import {
   providerCopy,
   searchEngineHint
 } from '@renderer/components/SettingsPage'
+import { PersonalInstructionsPanel } from '@renderer/components/PersonalInstructionsPanel'
+import agentsJson from '../resources/agents.json'
 import { UsagePage } from '@renderer/components/UsagePage'
 import {
   COMMAND_PERMISSIONS,
@@ -86,6 +89,8 @@ import { AssistantBody, marqueeText } from '@renderer/components/MessageView'
 import { EmptyState } from '@renderer/components/EmptyState'
 import { AgentGlyph } from '@renderer/components/AgentGlyph'
 import type {
+  AgentDto,
+  AppSettingsDto,
   CredentialStateDto,
   MessageDto,
   PickedAttachmentDto,
@@ -601,6 +606,143 @@ export function renderSettingsTier(): string {
   return renderToStaticMarkup(createElement(SettingsPage, { open: true, initialTab: 'tier' }))
 }
 
+/**
+ * 个性化指令的 SSR 夹具：聊天引擎直接取仓库里的 resources/agents.json
+ * （与主进程下发渲染层的是同一份），脚本里不再抄一份引擎 id / 名称。
+ */
+const PERSONAL_INSTRUCTION_ENGINES: AgentDto[] = (
+  agentsJson as { agents: Array<Omit<AgentDto, 'prompt'> & { promptFile: string }> }
+).agents.map((agent) => ({
+  id: agent.id,
+  name: agent.name,
+  description: agent.description,
+  shortDescription: agent.shortDescription,
+  icon: agent.icon,
+  category: agent.category,
+  prompt: ''
+}))
+
+/**
+ * 列表断言用的两条种子条目：
+ *   · 第一条填了名称、范围跨「交互 + 工作 + 效率模式」，用来钉范围摘要的稳定顺序；
+ *   · 第二条不填名称、范围只有专家模式，用来钉 displayName 取正文首行（跳过 Markdown 标题记号）。
+ */
+const PERSONAL_INSTRUCTION_SEED_ITEMS = [
+  {
+    id: 'pi-seed-en',
+    name: '英文回答',
+    content: '**始终用英文回答**，代码注释保持中文。\n\n- 术语保留原文\n- 先给结论',
+    scopes: ['guncat-3.0-flash', 'interactive', 'work'],
+    updatedAt: 1731000000000
+  },
+  {
+    id: 'pi-seed-style',
+    name: '',
+    content: '# 代码风格\n\n缩进用两个空格，提交信息用中文。',
+    scopes: ['guncat-3.0-pro'],
+    updatedAt: 1731000001000
+  }
+]
+
+const PERSONAL_INSTRUCTION_SEED_RAW = JSON.stringify(PERSONAL_INSTRUCTION_SEED_ITEMS)
+
+function personalInstructionSeedSettings(raw: string): AppSettingsDto {
+  return {
+    apiConfig: null,
+    apiProfiles: [],
+    currentApiProfileId: '',
+    multimodalConfig: { baseUrl: '', apiKey: '', model: '', preparseEnabled: false },
+    flags: {},
+    prefs: { [Constants.LS_KEY_PERSONAL_INSTRUCTIONS]: raw },
+    credentialState: { available: true, undecryptable: [] }
+  }
+}
+
+/**
+ * 把夹具种进 store 的**初始快照**再渲染，渲染后恢复，避免污染后续断言。
+ *
+ * 为什么不是 useStore.setState：zustand v5 在 SSR 里用 getInitialState() 当 server snapshot
+ * （保证水合一致），setState 对首帧渲染无效 —— 本文件 renderShell 上方的注释也记过这件事。
+ * 所以这里直接改初始快照，并在 finally 里逐字段还原；只影响本次 SSR。
+ */
+function renderWithStoreSeed(
+  seed: { settings?: AppSettingsDto; agents?: AgentDto[] },
+  render: () => string
+): string {
+  const initial = useStore.getInitialState()
+  const previousSettings = initial.settings
+  const previousAgents = initial.agents
+  if (seed.settings !== undefined) {
+    initial.settings = seed.settings
+  }
+  if (seed.agents !== undefined) {
+    initial.agents = seed.agents
+  }
+  try {
+    return render()
+  } finally {
+    initial.settings = previousSettings
+    initial.agents = previousAgents
+  }
+}
+
+/** 设置页「个性化指令」空态首帧（只传 initialTab，条目沿用 store 初始值 = 空） */
+export function renderSettingsPersonal(): string {
+  return renderToStaticMarkup(createElement(SettingsPage, { open: true, initialTab: 'personal' }))
+}
+
+/** 设置页「个性化指令」列表首帧：两条种子条目 + agents.json 的九个聊天引擎 */
+export function renderSettingsPersonalList(): string {
+  return renderWithStoreSeed(
+    {
+      settings: personalInstructionSeedSettings(PERSONAL_INSTRUCTION_SEED_RAW),
+      agents: PERSONAL_INSTRUCTION_ENGINES
+    },
+    () => renderToStaticMarkup(createElement(SettingsPage, { open: true, initialTab: 'personal' }))
+  )
+}
+
+/** 编辑视图首帧（新建）：默认勾选交互 + 工作，九个聊天引擎可见，按钮文案「添加」 */
+export function renderPersonalEditor(): string {
+  return renderWithStoreSeed({ agents: PERSONAL_INSTRUCTION_ENGINES }, () =>
+    renderToStaticMarkup(createElement(PersonalInstructionsPanel, { initialEditingId: '' }))
+  )
+}
+
+/** 编辑视图首帧（编辑已有条目）：标题、名称回填、删除入口、范围摘要按稳定顺序拼 */
+export function renderPersonalEditorExisting(): string {
+  return renderWithStoreSeed(
+    {
+      settings: personalInstructionSeedSettings(PERSONAL_INSTRUCTION_SEED_RAW),
+      agents: PERSONAL_INSTRUCTION_ENGINES
+    },
+    () =>
+      renderToStaticMarkup(
+        createElement(PersonalInstructionsPanel, { initialEditingId: 'pi-seed-en' })
+      )
+  )
+}
+
+/** 编辑视图首帧直接打开 Markdown 预览：只换展示，草稿与落盘原文不变 */
+export function renderPersonalEditorPreview(): string {
+  return renderWithStoreSeed(
+    {
+      settings: personalInstructionSeedSettings(PERSONAL_INSTRUCTION_SEED_RAW),
+      agents: PERSONAL_INSTRUCTION_ENGINES
+    },
+    () =>
+      renderToStaticMarkup(
+        createElement(PersonalInstructionsPanel, {
+          initialEditingId: 'pi-seed-en',
+          initialPreview: true
+        })
+      )
+  )
+}
+
+// 保存前校验是纯函数，SSR 断言直接调它（保证「正文为空 / 没选范围」两种失败口径不漂移）
+export { personalInstructionSaveError } from '@renderer/components/PersonalInstructionsPanel'
+
 /** 用量与成本页首帧（SSR 下 snapshot 尚未加载，热力图显示空态/零值） */
 export function renderUsagePage(): string {
   return renderToStaticMarkup(createElement(UsagePage, { open: true }))
@@ -876,7 +1018,8 @@ function renderIcons(): string {
       createElement(IconTrash, {}),
       createElement(IconSettings, {}),
       createElement(IconClose, {}),
-      createElement(IconBrain, {})
+      createElement(IconBrain, {}),
+      createElement(IconPersonalInstructions, {})
     )
   )
 }

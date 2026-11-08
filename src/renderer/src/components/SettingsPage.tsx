@@ -24,8 +24,10 @@ import {
   IconImage,
   IconInteractive,
   IconMic,
+  IconPersonalInstructions,
   IconSpeaker
 } from '../icons'
+import { PersonalInstructionsPanel } from './PersonalInstructionsPanel'
 
 /**
  * 接入方式的文案表。三条占位符/提示逐字对齐原版 SettingsPanel.ets 的
@@ -349,6 +351,7 @@ function readSettingsDraft(settings: AppSettingsDto | null): SettingsDraftValues
 type SettingsTabId =
   | 'model'
   | 'advanced'
+  | 'personal'
   | 'tier'
   | 'search'
   | 'multimodal'
@@ -383,6 +386,14 @@ const SETTINGS_NAV: Array<{ label: string; items: SettingsTab[] }> = [
         title: '高级模型参数',
         description: '调整采样参数，或为自定义服务商追加请求参数。',
         icon: <IconFilter size={16} />
+      },
+      {
+        // 位置对齐鸿蒙版「能力 → 个性化指令 + 能力调度」：在高级模型参数之后、能力调度之前
+        id: 'personal',
+        label: '个性化指令',
+        title: '个性化指令',
+        description: '维护按交互 / 工作模式或聊天引擎自动附加到系统提示词末尾的长期偏好。',
+        icon: <IconPersonalInstructions size={16} />
       },
       {
         id: 'tier',
@@ -575,6 +586,17 @@ export function SettingsPage({ open: openOverride, initialTab }: SettingsPagePro
   const saveFailedRef = useRef(false)
   const closingRef = useRef(false)
   const closePageRef = useRef<() => void>(() => {})
+  /**
+   * 「个性化指令」编辑视图的离开守卫。设置页要返回 / 切到别的分类时先问它：
+   * 面板有未保存修改就返回 false（并在面板就地弹出「继续编辑 / 放弃修改」），
+   * 避免整页关闭或切分类把草稿静默丢掉。
+   */
+  const personalLeaveGuardRef = useRef<(() => boolean) | null>(null)
+
+  function requestLeavePersonal(): boolean {
+    const guard = personalLeaveGuardRef.current
+    return guard === null ? true : guard()
+  }
 
   const form: SettingsDraftValues = {
     profileName,
@@ -741,6 +763,10 @@ export function SettingsPage({ open: openOverride, initialTab }: SettingsPagePro
     if (closingRef.current) {
       return
     }
+    // 个性化指令编辑中且有未保存修改时不关闭（面板会就地弹放弃确认）
+    if (!requestLeavePersonal()) {
+      return
+    }
     closingRef.current = true
     try {
       await flushPending()
@@ -888,7 +914,13 @@ export function SettingsPage({ open: openOverride, initialTab }: SettingsPagePro
                   className="settings-nav__item"
                   data-active={tab.id === activeTab}
                   aria-current={tab.id === activeTab ? 'page' : undefined}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => {
+                    // 离开「个性化指令」前先过守卫：未保存的编辑不静默丢
+                    if (tab.id !== activeTab && !requestLeavePersonal()) {
+                      return
+                    }
+                    setActiveTab(tab.id)
+                  }}
                 >
                   <span className="settings-nav__icon">{tab.icon}</span>
                   <span>{tab.label}</span>
@@ -1118,6 +1150,11 @@ export function SettingsPage({ open: openOverride, initialTab }: SettingsPagePro
                     </SettingsField>
                   </SettingsCard>
                 </>
+              ) : null}
+
+              {/* 个性化指令：列表 + 编辑视图都在本面板内，编辑时不跳独立路由页 */}
+              {activeTab === 'personal' ? (
+                <PersonalInstructionsPanel leaveGuard={personalLeaveGuardRef} />
               ) : null}
 
               {activeTab === 'tier' ? (

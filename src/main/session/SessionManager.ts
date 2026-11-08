@@ -40,6 +40,9 @@ import { ToolCallRecord } from '@core/model/ToolCallRecord'
 import { StreamCallbacks, AbortSignal } from '@core/common/Types'
 import { Constants } from '@core/common/Constants'
 import { InteractiveTiers } from '@core/common/InteractiveTiers'
+import { PersonalInstructionPrompt } from '@core/common/PersonalInstructionPrompt'
+import { PersonalInstruction } from '@core/model/PersonalInstruction'
+import { PersonalInstructionStore } from '@core/service/PersonalInstructionStore'
 import { LoopDecisions } from '@core/common/LoopDecisions'
 import { ContextBudget } from '@core/common/ContextBudget'
 import type { BudgetAnchor } from '@core/common/ContextBudget'
@@ -163,6 +166,11 @@ export class SessionManager {
   // 成熟提示词移植进来。桌面端没有 ViewModel, 主进程 SessionManager 是权威 —— 设置页落盘后由
   // saveString 同步到这里, 定时唤醒等内部 runWork 路径也因此能立即用上新档位。
   private interactiveTier: string = InteractiveTiers.DEFAULT_ID
+  // 个性化指令：用户在设置页维护的长期偏好，按生效范围自动拼进系统提示词末尾
+  // （拼装规则见 core/common/PersonalInstructionPrompt；持久化键 guncat_personal_instructions）。
+  // 主进程是唯一权威：渲染层保存后经 settings:saveString 落盘并同步到这里，
+  // 聊天模式 / 工作模式 / 交互模式三条请求路径都读这一份。
+  private personalInstructions: PersonalInstruction[] = []
 
   constructor(emit: Emit) {
     this.emit = emit
@@ -223,6 +231,9 @@ export class SessionManager {
     } catch {
       this.interactiveTier = InteractiveTiers.DEFAULT_ID
     }
+    // 个性化指令：只读一次（之后经 saveString 同步）。读失败按"没有个性化指令"处理，
+    // 不能因为一段偏好文本读不出来就阻断启动。
+    this.personalInstructions = await PersonalInstructionStore.load(ctx)
     await AgentLoader.loadInteractiveTierPrompts(ctx)
     try {
       this.conversations = await StorageManager.loadConversations(ctx)
@@ -617,6 +628,11 @@ export class SessionManager {
     if (key === Constants.LS_KEY_INTERACTIVE_TIER) {
       this.interactiveTier = InteractiveTiers.normalize(value)
     }
+    // 个性化指令：落盘后立即同步运行态，下一次请求就按新指令拼系统提示词。
+    // 解析失败按空列表处理（脏 JSON 只影响个性化指令，不会波及聊天本身）。
+    if (key === Constants.LS_KEY_PERSONAL_INSTRUCTIONS) {
+      this.personalInstructions = PersonalInstruction.parseList(value)
+    }
   }
 
   /** 字符串型偏好：朗读音色/语速、语音转写配置等（鸿蒙侧存在 Preferences，桌面端同构） */
@@ -637,6 +653,9 @@ export class SessionManager {
     // 交互模式「能力调度」档位（lite / efficiency / expert / ... 见 InteractiveTiers）。
     // 设置页保存后落盘，渲染层通过 prefs 读回当前档位；重启后由 bootstrap 读进运行态。
     Constants.LS_KEY_INTERACTIVE_TIER,
+    // 个性化指令（整体 JSON 数组）。渲染层设置页读写；重启后 bootstrap 读进运行态，
+    // 拼系统提示词时不再回读磁盘。
+    Constants.LS_KEY_PERSONAL_INSTRUCTIONS,
     // 表格提取记住的模型选择（原版 TableOcrPage 的 LS_KEY_TABLE_OCR_PROVIDER）
     Constants.LS_KEY_TABLE_OCR_PROVIDER,
     // 深度思考 / 联网搜索开关：渲染层的开关直接落盘，重启后要能读回来。
@@ -1325,6 +1344,9 @@ export class SessionManager {
     let currentHistory: Message[] = history
     let currentPrompt: string = prompt
     let round: number = 0
+    // 当前聊天引擎生效的个性化指令拼进系统提示词。只复制一份请求用智能体，
+    // 不改会话状态 / 共享引擎列表；引擎没有生效指令时直接沿用原对象。
+    const requestAgent: Agent | null = this.agentWithPersonalInstructions(agent)
 
     let failure: string = ''
     try {
@@ -1333,7 +1355,7 @@ export class SessionManager {
         round++
         const result = await ChatService.streamChat(
           config,
-          agent ?? null,
+          requestAgent,
           currentHistory,
           currentPrompt,
           thinkingEnabled,
@@ -1573,6 +1595,41 @@ export class SessionManager {
     return false
   }
 
+  // ===== 个性化指令（设置页维护；按生效范围拼进系统提示词末尾） =====
+
+  // 某条指令生效时，它在系统提示词末尾贡献的段落；无条目生效返回空串
+  private personalPromptSection(scope: string): string {
+    return PersonalInstructionPrompt.section(scope, this.personalInstructions)
+  }
+
+  // 工作 / 交互模式的系统提示词：原有提示词 + 本模式生效的个性化指令。
+  // 只在末尾追加，前缀逐字节不变 —— 用户不改指令时相邻轮次仍能命中模型侧 KV 缓存。
+  private modeSystemPrompt(mode: string): string {
+    const base: string = AgentLoopService.buildWorkSystemPromptFor(mode, this.interactiveTier)
+    const scope: string = mode === Constants.MODE_INTERACTIVE ?
+      PersonalInstructionPrompt.SCOPE_INTERACTIVE : PersonalInstructionPrompt.SCOPE_WORK
+    return PersonalInstructionPrompt.appendSection(base, this.personalPromptSection(scope))
+  }
+
+  // 聊天模式的请求智能体：复制一份并把该引擎生效的个性化指令拼进 systemPrompt。
+  // 不原地改 this.agents 里的对象 —— 那份是共享的引擎列表，写进去会在切换引擎 /
+  // 其它会话里串味，也不该被持久化成「智能体自带的提示词」。
+  private agentWithPersonalInstructions(agent: Agent | null | undefined): Agent | null {
+    if (agent === null || agent === undefined) {
+      return null
+    }
+    const section: string = this.personalPromptSection(agent.id)
+    if (section === '') {
+      return agent
+    }
+    const copy: Agent = Agent.of(agent.id, agent.name, agent.description, agent.category,
+      agent.promptFile, '')
+    copy.shortDescription = agent.shortDescription
+    copy.icon = agent.icon
+    copy.systemPrompt = PersonalInstructionPrompt.appendSection(agent.systemPrompt, section)
+    return copy
+  }
+
   // ===== 工作模式 / 交互模式：Agent Loop =====
 
   async runWork(request: WorkRunRequest): Promise<void> {
@@ -1632,8 +1689,9 @@ export class SessionManager {
     const prior: Message[] = conv.messages.slice(0, conv.messages.length - 1)
 
     const messages: LoopMessage[] = [
-      // 交互模式的系统提示词按当前「能力调度」档位组装（工作模式忽略该参数，固定同一份提示词）
-      LoopMessage.system(AgentLoopService.buildWorkSystemPromptFor(request.mode, this.interactiveTier)),
+      // 交互模式的系统提示词按当前「能力调度」档位组装（工作模式忽略该参数，固定同一份提示词）；
+      // 两种模式都在末尾追加本模式生效的个性化指令（modeSystemPrompt）。
+      LoopMessage.system(this.modeSystemPrompt(request.mode)),
       ...AgentLoopService.historyMessages(prior),
       LoopMessage.user(this.expandMentions(conv.id, taskText))
     ]
@@ -2085,7 +2143,9 @@ export class SessionManager {
           messages,
           oldEnd,
           ContextBudget.truncateSummary(summary.trim()),
-          AgentLoopService.buildWorkSystemPromptFor(mode, this.interactiveTier),
+          // 压缩后重建的系统提示词同样要带个性化指令：前缀重建会丢掉原来最后追加的那一段，
+          // 不补回来等于「压缩一次、个性化偏好就失效了」。
+          this.modeSystemPrompt(mode),
           LOOP_HEAD_FACTORY
         )
         // 就地替换（而不是把 messages 重新赋值）：messages 被 callbacks 与外层闭包共享，

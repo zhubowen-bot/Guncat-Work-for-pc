@@ -43,6 +43,9 @@ export { PromptBuilder } from '@core/common/PromptBuilder'
 // 交互模式能力调度：档位元数据与提示词契约是纯逻辑，直接对生产实现下断言
 export { InteractiveTiers } from '@core/common/InteractiveTiers'
 export { GuncatUiPrompt } from '@core/common/GuncatUiPrompt'
+// 个性化指令：数据模型（解析/显示名/范围）与提示词拼装（包裹/预算/追加）都是纯逻辑
+export { PersonalInstruction } from '@core/model/PersonalInstruction'
+export { PersonalInstructionPrompt } from '@core/common/PersonalInstructionPrompt'
 // 工作区项目指令（AGENTS.md 等）：发现/去重/裁剪/标签中和都是纯逻辑，直接对生产实现下断言
 export { WorkspaceInstructionsService } from '@core/service/WorkspaceInstructionsService'
 // 编辑前读取守卫：登记表与角色表都是纯逻辑，直接对生产实现下断言
@@ -2085,6 +2088,103 @@ check(
   session.interactiveTier === 'lite' && tierPrefsLite['guncat_interactive_tier'] === 'lite',
   String(session.interactiveTier)
 )
+
+// --- 个性化指令（设置页维护；按生效范围拼进系统提示词末尾） ---
+// 和交互模式档位同一条链路：渲染层 settings:saveString 落盘 → 主进程运行态同步 →
+// 下一次请求按「模式 / 聊天引擎」把对应范围的条目追加到系统提示词**末尾**。
+// 三条指令各只勾一个范围，正好用来验证「不会串味」与「前缀逐字节不变」。
+const piKey = mod.Constants.LS_KEY_PERSONAL_INSTRUCTIONS
+const piSeed = [
+  { id: 'ipc-pi-a', name: 'IPC 交互', content: '交互模式只用中文。', scopes: ['interactive'], updatedAt: Date.now() },
+  { id: 'ipc-pi-b', name: 'IPC 工作', content: '工作模式先给结论。', scopes: ['work'], updatedAt: Date.now() },
+  { id: 'ipc-pi-c', name: 'IPC 引擎', content: '引擎模式：代码块标注语言。', scopes: ['guncat-3.0-pro'], updatedAt: Date.now() }
+]
+await inv('settings:saveString', piKey, JSON.stringify(piSeed))
+const piPrefs = (await inv('settings:load')).prefs ?? {}
+let piPrefsBack = []
+try {
+  piPrefsBack = JSON.parse(piPrefs[piKey] ?? '[]')
+} catch {
+  piPrefsBack = []
+}
+check(
+  '个性化指令落盘（渲染层从 prefs 读回 3 条，内容不丢）',
+  Array.isArray(piPrefsBack) &&
+    piPrefsBack.length === 3 &&
+    piPrefsBack[1].id === 'ipc-pi-b' &&
+    piPrefsBack[2].content === '引擎模式：代码块标注语言。' &&
+    piPrefsBack[0].scopes.join(',') === 'interactive',
+  `prefs ${Array.isArray(piPrefsBack) ? piPrefsBack.length : '?'} 条`
+)
+check(
+  '主进程运行态随 saveString 同步（下一次请求立即生效，不必重启）',
+  session.personalInstructions.length === 3 &&
+    session.personalInstructions.map((p) => p.id).join(',') === 'ipc-pi-a,ipc-pi-b,ipc-pi-c',
+  session.personalInstructions.map((p) => p.id).join(',')
+)
+const piTag = mod.PersonalInstructionPrompt.TAG
+const piWorkBase = mod.AgentLoopService.buildWorkSystemPromptFor('work', session.interactiveTier)
+const piWorkPrompt = session.modeSystemPrompt('work')
+check(
+  '工作模式：系统提示词以原提示词开头（前缀逐字节不变）且只追加工作范围条目',
+  piWorkPrompt.startsWith(piWorkBase) &&
+    piWorkPrompt.slice(piWorkBase.length, piWorkBase.length + 2) === '\n\n' &&
+    piWorkPrompt.includes('<' + piTag + ' name="IPC 工作">') &&
+    piWorkPrompt.includes('工作模式先给结论。') &&
+    !piWorkPrompt.includes('交互模式只用中文。') &&
+    !piWorkPrompt.includes('引擎模式：代码块标注语言。'),
+  `原 ${piWorkBase.length} → 含指令 ${piWorkPrompt.length} 字符`
+)
+const piInteractiveBase = mod.AgentLoopService.buildWorkSystemPromptFor(
+  'interactive',
+  session.interactiveTier
+)
+const piInteractivePrompt = session.modeSystemPrompt('interactive')
+check(
+  '交互模式：只含交互范围条目（工作/引擎条目不会串进来，且段落接在原提示词后）',
+  piInteractivePrompt.startsWith(piInteractiveBase) &&
+    piInteractivePrompt.includes('交互模式只用中文。') &&
+    !piInteractivePrompt.includes('工作模式先给结论。') &&
+    !piInteractivePrompt.includes('引擎模式：代码块标注语言。')
+)
+const piEngine = session.agents.find((a) => a.id === 'guncat-3.0-pro')
+const piEnginePromptRaw = piEngine?.systemPrompt
+const piEngineWith = session.agentWithPersonalInstructions(piEngine)
+check(
+  '聊天引擎注入：命中引擎时返回复制件、原 prompt 前缀不变并追加该引擎条目',
+  piEngine !== undefined &&
+    piEngineWith !== null &&
+    piEngineWith !== piEngine &&
+    typeof piEnginePromptRaw === 'string' &&
+    piEngineWith.systemPrompt.startsWith(piEnginePromptRaw) &&
+    piEngineWith.systemPrompt.includes('引擎模式：代码块标注语言。') &&
+    piEngine.systemPrompt === piEnginePromptRaw &&
+    !piEngine.systemPrompt.includes('引擎模式：代码块标注语言。')
+)
+const piOtherEngine = session.agents.find((a) => a.id !== 'guncat-3.0-pro')
+check(
+  '未命中引擎直接返回原对象（不白复制，也不污染共享的引擎列表）',
+  piOtherEngine !== undefined &&
+    session.agentWithPersonalInstructions(piOtherEngine) === piOtherEngine
+)
+await inv('settings:saveString', piKey, '{ 这不是 JSON')
+check(
+  '脏 JSON 不抛错：运行态退回空列表，系统提示词前缀不变（偏好坏不波及聊天）',
+  session.personalInstructions.length === 0 &&
+    session.modeSystemPrompt('work') === piWorkBase &&
+    session.agentWithPersonalInstructions(piEngine) === piEngine
+)
+await inv('settings:saveString', piKey, '[]')
+const piClearedPrefs = (await inv('settings:load')).prefs ?? {}
+check(
+  '清空 [] 后系统提示词与原前缀逐字节相同（无附加段）',
+  session.personalInstructions.length === 0 &&
+    piClearedPrefs[piKey] === '[]' &&
+    session.modeSystemPrompt('work') === piWorkBase &&
+    session.modeSystemPrompt('interactive') === piInteractiveBase
+)
+// 收尾：把这个偏好键写回空串（settings:load 不再返回它），不影响后续小节
+await inv('settings:saveString', piKey, '')
 
 // --- 会话标题由 LLM 生成（原版 maybeGenerateTitle；端口此前 generateSessionTitle 零调用点） ---
 const titleBodies = []

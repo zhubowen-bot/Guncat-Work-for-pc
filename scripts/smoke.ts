@@ -33,6 +33,9 @@ import { PromptBuilder } from '../src/core/common/PromptBuilder'
 import { InteractiveTiers } from '../src/core/common/InteractiveTiers'
 import { InteractiveTierPrompt } from '../src/core/common/InteractiveTierPrompt'
 import { InteractiveTierPrompts } from '../src/core/common/InteractiveTierPrompts'
+import { PersonalInstruction } from '../src/core/model/PersonalInstruction'
+import { PersonalInstructionPrompt } from '../src/core/common/PersonalInstructionPrompt'
+import { PersonalInstructionStore } from '../src/core/service/PersonalInstructionStore'
 import { DataPipeline } from '../src/core/common/DataPipeline'
 import { runJs } from '../src/core/platform/native/libguncatjs'
 import { http as guncatHttp } from '../src/core/platform/kit/NetworkKit'
@@ -367,6 +370,264 @@ async function main(): Promise<void> {
   check(
     'RadarChart 已登记（多维对比可实际落地）',
     GuncatUiLibrary.def('RadarChart') !== null && componentSection.includes('RadarChart(')
+  )
+
+  // ===== 3c. 个性化指令 =====
+  // 设置页维护的长期偏好，按生效范围拼进系统提示词末尾。这一节钉住的是纯内核部分：
+  // 坏存档只丢条目（不抛错）、显示名/摘要、三种范围的过滤、包裹格式与 XML 属性转义，
+  // 以及最关键的「原提示词前缀逐字节不变」—— 它决定相邻轮次能否命中模型侧 KV 缓存。
+  section('3c. 个性化指令（解析 / 包裹 / 范围 / 预算 / 追加语义）')
+
+  // --- 解析：坏数据只丢条目，设置页不会因存档损坏打不开 ---
+  check(
+    '坏 JSON / 空串 / 非数组都按空列表处理（不抛错）',
+    PersonalInstruction.parseList('').length === 0 &&
+      PersonalInstruction.parseList('   ').length === 0 &&
+      PersonalInstruction.parseList('{oops').length === 0 &&
+      PersonalInstruction.parseList('{"id":"a","content":"x"}').length === 0 &&
+      PersonalInstruction.parseList('"just a string"').length === 0
+  )
+  const dirtyParsed = PersonalInstruction.parseList(JSON.stringify([
+    { id: '', content: '缺 id' },
+    { content: '缺 id 字段' },
+    { id: 'no-content', content: '' },
+    { id: 'blank-content', content: '   \n  ' },
+    { id: 'ok', content: '留下我' },
+    null,
+    42,
+    'x',
+    ['array-item']
+  ]))
+  check(
+    '缺 id / 空正文 / 非对象条目被逐条丢弃（只留合法的那一条）',
+    dirtyParsed.length === 1 && dirtyParsed[0].id === 'ok',
+    `${dirtyParsed.length} 条`
+  )
+  const scopeParsed = PersonalInstruction.parseList(JSON.stringify([
+    { id: 's1', content: '非数组 scopes 按空处理', scopes: 'work' },
+    { id: 's2', content: '数组里的脏值被过滤', scopes: [1, ' work ', '', 'work', 'interactive', null] }
+  ]))
+  check(
+    '非数组 scopes 按空处理；数组内非字符串与重复项被过滤（去空白后去重）',
+    scopeParsed.length === 2 &&
+      scopeParsed[0].scopes.length === 0 &&
+      scopeParsed[1].scopes.join(',') === 'work,interactive',
+    scopeParsed.map((p) => p.scopes.join('|')).join(' / ')
+  )
+  check(
+    '缺名称按空串处理；缺 updatedAt 补当前时间（列表排序不退化）',
+    scopeParsed[0].name === '' && scopeParsed[0].updatedAt > 0
+  )
+
+  // --- 建 / 往返 / 定位 ---
+  const createdPi = PersonalInstruction.create(
+    '  我的风格  ',
+    '  ## 正文\n- 用中文  ',
+    [' work ', 'work', '', 'interactive']
+  )
+  check(
+    'create 去首尾空白、名称/正文分别按 40 / 8000 字符封顶、范围去重去空',
+    createdPi.name === '我的风格' &&
+      createdPi.content === '## 正文\n- 用中文' &&
+      createdPi.scopes.join(',') === 'work,interactive' &&
+      PersonalInstruction.create('n'.repeat(80), 'c'.repeat(9000), []).name.length === 40 &&
+      PersonalInstruction.create('', 'c'.repeat(9000), []).content.length === 8000,
+    `${createdPi.name.length} / ${createdPi.content.length}`
+  )
+  const roundTrippedPi = PersonalInstruction.parseList(JSON.stringify([createdPi.toJson()]))
+  check(
+    'toJson → JSON 字符串 → parseList 往返一致（id / 名称 / 正文 / 范围 / 时间）',
+    roundTrippedPi.length === 1 &&
+      roundTrippedPi[0].id === createdPi.id &&
+      roundTrippedPi[0].name === createdPi.name &&
+      roundTrippedPi[0].content === createdPi.content &&
+      roundTrippedPi[0].scopes.join(',') === createdPi.scopes.join(',') &&
+      roundTrippedPi[0].updatedAt === createdPi.updatedAt
+  )
+  check(
+    'indexOfId 能定位、未命中返回 -1',
+    PersonalInstruction.indexOfId(roundTrippedPi, createdPi.id) === 0 &&
+      PersonalInstruction.indexOfId(roundTrippedPi, 'pi-not-there') === -1
+  )
+  check(
+    'sortScopesByOrder：模式在前、未登记的旧范围保留在末尾（不静默丢数据）',
+    PersonalInstruction.sortScopesByOrder(
+      ['old-engine', 'work', 'interactive'],
+      ['interactive', 'work']
+    ).join(',') === 'interactive,work,old-engine'
+  )
+
+  // --- 列表显示名 / 摘要 ---
+  check(
+    'displayName 优先用名称；无名称时取正文首行并去掉 Markdown 标题/列表记号',
+    PersonalInstruction.create('命名了', '正文', []).displayName() === '命名了' &&
+      PersonalInstruction.create('', '# 风格标题\n正文', []).displayName() === '风格标题' &&
+      PersonalInstruction.create('', '- 列表项\n正文', []).displayName() === '列表项'
+  )
+  const longTitlePi = PersonalInstruction.create('', '很长的一行标题'.repeat(10), [])
+  check(
+    'displayName 对超长首行截断到 24 字符（列表不被撑破）',
+    longTitlePi.displayName().length === 24,
+    `${longTitlePi.displayName().length} 字符`
+  )
+  check(
+    '无名称又没有正文时显示「未命名指令」（防御性兜底）',
+    new PersonalInstruction().displayName() === '未命名指令'
+  )
+  check(
+    'summary 把多行/连续空白压成一行，超长截到 80 字符',
+    PersonalInstruction.create('', '第一行\n\n第二行   第三行', []).summary() === '第一行 第二行 第三行' &&
+      PersonalInstruction.create('', 'x'.repeat(120), []).summary().length === 80
+  )
+
+  // --- 生效范围：三种 scope 各自只选中对应条目 ---
+  const piA = PersonalInstruction.create('A 交互', '交互模式只用中文。', ['interactive'])
+  const piB = PersonalInstruction.create('B 工作', '工作模式先给结论，再给依据。', ['work'])
+  const piC = PersonalInstruction.create('C 引擎', '代码块标注语言。', ['guncat-3.0-pro'])
+  const piStore = [piA, piB, piC]
+  const piIds = (items: PersonalInstruction[]): string => items.map((p) => p.id).join(',')
+  check(
+    '范围常量与预算契约稳定（interactive / work / 16000 / 标签名 / 标题）',
+    PersonalInstructionPrompt.SCOPE_INTERACTIVE === 'interactive' &&
+      PersonalInstructionPrompt.SCOPE_WORK === 'work' &&
+      PersonalInstructionPrompt.MAX_TOTAL_CHARS === 16000 &&
+      PersonalInstructionPrompt.TAG === 'personal-instruction' &&
+      PersonalInstructionPrompt.SECTION_TITLE !== '' &&
+      PersonalInstructionPrompt.TRUNCATED_NOTE !== ''
+  )
+  check('hasScope 按勾选范围精确匹配', piA.hasScope('interactive') && !piA.hasScope('work') && !piA.hasScope(''))
+  check(
+    'matches：空 scope / 空正文 / 未勾选都不生效',
+    !PersonalInstructionPrompt.matches(piA, '') &&
+      !PersonalInstructionPrompt.matches(PersonalInstruction.create('', '   ', ['work']), 'work') &&
+      !PersonalInstructionPrompt.matches(piA, 'work') &&
+      PersonalInstructionPrompt.matches(piA, 'interactive')
+  )
+  check(
+    '三种生效范围各自只选中对应条目（交互 / 工作 / 具体引擎），未知范围为空',
+    piIds(PersonalInstructionPrompt.effective(PersonalInstructionPrompt.SCOPE_INTERACTIVE, piStore)) === piA.id &&
+      piIds(PersonalInstructionPrompt.effective(PersonalInstructionPrompt.SCOPE_WORK, piStore)) === piB.id &&
+      piIds(PersonalInstructionPrompt.effective('guncat-3.0-pro', piStore)) === piC.id &&
+      PersonalInstructionPrompt.effective('unknown-engine', piStore).length === 0
+  )
+  check(
+    '未知 scope 组装出空段（调用方据此不追加任何字符）',
+    PersonalInstructionPrompt.section('unknown-engine', piStore) === ''
+  )
+
+  // --- 包裹格式：标签 / 名称属性 / 用户正文原样 ---
+  check(
+    '包裹格式：有名称进 name 属性、无名称只有标签，正文在中间',
+    PersonalInstructionPrompt.wrap(piB) ===
+      '<' + PersonalInstructionPrompt.TAG + ' name="B 工作">\n' +
+        piB.content + '\n</' + PersonalInstructionPrompt.TAG + '>' &&
+      PersonalInstructionPrompt.wrap(PersonalInstruction.create('', '纯正文', ['work'])) ===
+        '<' + PersonalInstructionPrompt.TAG + '>\n纯正文\n</' + PersonalInstructionPrompt.TAG + '>'
+  )
+  check(
+    'name 进 XML 属性时转义 & < > "（中文原样保留）',
+    PersonalInstructionPrompt.escapeAttribute('a&b<c>d"e中文') === 'a&amp;b&lt;c&gt;d&quot;e中文' &&
+      PersonalInstructionPrompt.wrap(PersonalInstruction.create('x"y', '正文', ['work']))
+        .includes('name="x&quot;y"')
+  )
+  const markdownPi = '## 我的风格\n\n- 用中文\n  - 缩进保留\n\n```ts\nconst a = 1\n```'
+  check(
+    '用户 Markdown 正文原样保留（不二次转义、不折叠缩进）',
+    PersonalInstructionPrompt.wrap(PersonalInstruction.create('', markdownPi, ['work']))
+      .includes(markdownPi) &&
+      PersonalInstructionPrompt.section('work', [PersonalInstruction.create('', markdownPi, ['work'])])
+        .includes(markdownPi)
+  )
+  check(
+    'fixedScopeLabel 给两个模式中文名，聊天引擎交给渲染层补',
+    PersonalInstructionPrompt.fixedScopeLabel('interactive') === '交互模式' &&
+      PersonalInstructionPrompt.fixedScopeLabel('work') === '工作模式' &&
+      PersonalInstructionPrompt.fixedScopeLabel('guncat-3.0-pro') === ''
+  )
+  const workSectionPi = PersonalInstructionPrompt.section('work', piStore)
+  check(
+    '段落自带标题、说明与成对标签（模型能读成独立的偏好段）',
+    workSectionPi.startsWith(
+      PersonalInstructionPrompt.SECTION_TITLE + '\n' + PersonalInstructionPrompt.SECTION_INTRO
+    ) &&
+      workSectionPi.includes('<' + PersonalInstructionPrompt.TAG + ' name="B 工作">') &&
+      workSectionPi.includes('</' + PersonalInstructionPrompt.TAG + '>')
+  )
+  check(
+    '多条按存储顺序拼接（用户添加顺序就是提示词里的顺序）',
+    (() => {
+      const second = PersonalInstruction.create('B2', '第二条工作指令。', ['work'])
+      const multi = PersonalInstructionPrompt.section('work', [piB, second])
+      return multi.indexOf(PersonalInstructionPrompt.wrap(piB)) <
+        multi.indexOf(PersonalInstructionPrompt.wrap(second))
+    })()
+  )
+
+  // --- 追加语义：前缀逐字节不变（KV 缓存前提） ---
+  const piBase = '你是测试助手。\n第二行：保持原样。  '
+  check(
+    'append：原提示词前缀逐字节不变，只在其后追加「换行 + 段落」',
+    PersonalInstructionPrompt.append(piBase, 'work', piStore) ===
+      piBase + '\n\n' + workSectionPi &&
+      PersonalInstructionPrompt.append(piBase, 'work', piStore)
+        .substring(0, piBase.length) === piBase
+  )
+  check(
+    '空 / 纯空白原提示词直接返回段落（聊天引擎提示词为空也能带上）',
+    PersonalInstructionPrompt.append('', 'work', piStore) === workSectionPi &&
+      PersonalInstructionPrompt.append('   \n', 'work', piStore) === workSectionPi &&
+      PersonalInstructionPrompt.appendSection('  ', workSectionPi) === workSectionPi
+  )
+  check(
+    '无生效条目时原样返回原提示词（一个字符都不加）',
+    PersonalInstructionPrompt.append(piBase, 'interactive', [piB]) === piBase &&
+      PersonalInstructionPrompt.append('', 'work', []) === '' &&
+      PersonalInstructionPrompt.appendSection(piBase, '') === piBase
+  )
+
+  // --- 总预算：16000 字符截断 + 省略标注 ---
+  const bigPiItems = [
+    PersonalInstruction.create('长1', 'a'.repeat(6000), ['work']),
+    PersonalInstruction.create('长2', 'b'.repeat(6000), ['work']),
+    PersonalInstruction.create('长3', 'c'.repeat(6000), ['work'])
+  ]
+  const bigPiSection = PersonalInstructionPrompt.section('work', bigPiItems)
+  check(
+    '总预算 16000：超出后截断内容并标注省略说明（少数长指令不能吃满上下文）',
+    bigPiSection.includes(PersonalInstructionPrompt.TRUNCATED_NOTE) &&
+      bigPiSection.length <=
+        PersonalInstructionPrompt.MAX_TOTAL_CHARS +
+          PersonalInstructionPrompt.SECTION_TITLE.length +
+          PersonalInstructionPrompt.SECTION_INTRO.length +
+          PersonalInstructionPrompt.TRUNCATED_NOTE.length + 64,
+    `${bigPiSection.length} 字符`
+  )
+  check(
+    '截断发生在预算边界上：前两条完整、第三条被切（不再有闭合标签）',
+    (bigPiSection.match(/<personal-instruction/g) ?? []).length === 3 &&
+      (bigPiSection.match(/<\/personal-instruction>/g) ?? []).length === 2
+  )
+
+  // --- 持久化往返：走真实偏好存储（临时数据目录，不污染其它偏好断言） ---
+  const storeSeedPi = [
+    PersonalInstruction.create('风格', '用中文回答。', ['interactive', 'work']),
+    PersonalInstruction.create('', '代码块标注语言。', ['guncat-3.0-pro'])
+  ]
+  await PersonalInstructionStore.save(ctx, storeSeedPi)
+  const storeLoadedPi = await PersonalInstructionStore.load(ctx)
+  check(
+    'PersonalInstructionStore 往返：save → load 字段一致（走真实偏好文件）',
+    storeLoadedPi.length === 2 &&
+      storeLoadedPi[0].name === '风格' &&
+      storeLoadedPi[1].content === '代码块标注语言。' &&
+      storeLoadedPi[0].scopes.join(',') === 'interactive,work' &&
+      storeLoadedPi[1].scopes.join(',') === 'guncat-3.0-pro',
+    `${storeLoadedPi.length} 条`
+  )
+  await PersonalInstructionStore.save(ctx, [])
+  check(
+    'PersonalInstructionStore 清空后读回空列表',
+    (await PersonalInstructionStore.load(ctx)).length === 0
   )
 
   // ===== 4. 技能库 =====

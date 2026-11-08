@@ -314,6 +314,22 @@ ArkTS 与 TS 在空值上语义不同（ArkTS 的 `Object` 接受 `null`），
 | 定时任务推进范围 | 只推进当前会话 | 推进所有工作/交互会话 | 桌面端后台多会话是常态 |
 | 界面块锁定 | `uiLocked` 三种口径 | 与之一致（阶段七已对齐） | —— |
 
+### 5.4 个性化指令：从鸿蒙版同步时的差异
+
+鸿蒙版 `f1da275c feat(settings): 新增个性化指令并按生效范围拼进系统提示词` 引入的
+`model/PersonalInstruction.ts` 与 `common/PersonalInstructionPrompt.ts` 在电脑版是**逐字移植**
+（纯数据模型 + 纯函数，不依赖任何平台 API），提示词段落文本、上限（单条 8000 字 / 总预算
+16000 字符）与追加语义（原前缀逐字节不变、只在末尾追加）两端完全一致。只有三处平台差异：
+
+| 项 | 鸿蒙版 | 电脑版 | 原因 |
+| --- | --- | --- | --- |
+| 设置入口形态 | 设置页内的列表 + 独立路由页 `pages/PersonalInstructionEditPage.ets` | 设置页「模型与能力 → 个性化指令」分类内的列表 + 同页编辑视图（`components/PersonalInstructionsPanel.tsx`） | 电脑端设置是整页浮层，没有 `pages/` 路由概念；编辑态用面板内子视图，返回/放弃/删除确认都改成页内两步确认 |
+| 持久化读写入口 | `ChatViewModel` 直接调 `PersonalInstructionStore`（Preferences） | 渲染层经 `settings:saveString` 落盘，主进程 `SessionManager.saveString` 钩子同步运行态；`PersonalInstructionStore` 只在 `bootstrap` 读取 | 主进程是业务状态唯一权威，渲染层没有 Preferences 访问权；与「能力调度」档位的落盘方式一致 |
+| 注入调用点 | `ChatViewModel.modeSystemPrompt` / `agentWithPersonalInstructions` | `SessionManager` 同名方法：工作/交互模式首轮、上下文压缩重建提示词、聊天引擎流式请求三处 | 桌面端没有 ViewModel，Agent Loop 与聊天循环都由主进程驱动；纯逻辑仍留在 core，主进程只做「取哪份提示词、传哪个 scope」 |
+
+`PersonalInstructionStore` 的 `context` 参数从 `common.UIAbilityContext` 改为电脑端统一的全局
+`Context` 别名 —— 与 `AgentLoader` / `StorageManager` 等已移植文件同一写法，行为不变。
+注入范围严格对齐：**不**注入子代理、标题生成、上下文摘要等内部辅助请求，也不改变工具面与权限。
 
 ---
 

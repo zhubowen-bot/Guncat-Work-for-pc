@@ -656,6 +656,20 @@ export function IconFilter(props: IconProps) {
   )
 }
 
+/** 个性化指令（文档 + 铅笔，形状对齐原版 sys.symbol.doc_plaintext_and_pencil） */
+export function IconPersonalInstructions(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M13.4 3.6H7.4a2 2 0 0 0-2 2v12.8a2 2 0 0 0 2 2h4.2" />
+      <path d="M13.4 3.6v4.2h4.2" />
+      <path d="M17.6 7.8v3.6" />
+      <path d="M8.6 9.2h3.2M8.6 12.4h3.6" />
+      <path d="M12.8 21l.6-3.2 6-6a1.8 1.8 0 0 1 2.6 2.6l-6 6-3.2.6Z" />
+      <path d="m13.4 17.8 2.6 2.6" />
+    </Svg>
+  )
+}
+
 export function IconSort(props: IconProps) {
   return (
     <Svg {...props}>
